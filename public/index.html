@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f6f5f1" />
+  <title>同声 · 实时字幕翻译</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span>同声</span></div>
+      <div class="top-actions"><button class="nav-button" id="new-listening" type="button">新建收听</button><button class="nav-button" id="history-listening" type="button">历史收听</button><button class="settings-trigger" id="settings-trigger" type="button" aria-label="打开设置" aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.86 1.86-.06-.06A1.7 1.7 0 0 0 16 18.4a1.7 1.7 0 0 0-1 1.56V20H9v-.04a1.7 1.7 0 0 0-1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.86-1.86.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1H3v-3h.04A1.7 1.7 0 0 0 4.6 10a1.7 1.7 0 0 0-.34-1.88L4.2 8.06 6.06 6.2l.06.06A1.7 1.7 0 0 0 8 6.6 1.7 1.7 0 0 0 9 5.04V5h6v.04A1.7 1.7 0 0 0 16 6.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 1.86 1.86-.06.06A1.7 1.7 0 0 0 19.4 10a1.7 1.7 0 0 0 1.56 1H21v3h-.04A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+      </button></div>
+    </header>
+
+    <main class="main" id="listening-view">
+      <div class="intro">
+        <div class="eyebrow"><span class="live-dot" id="live-dot"></span><span id="status">准备就绪</span></div>
+        <h1>听见，<em>即刻读懂。</em></h1>
+        <p class="intro-copy">收听麦克风或浏览器标签页，实时识别并翻译。</p>
+      </div>
+
+      <div class="input-bar">
+        <label class="language-field"><span>声音来源</span><select id="audio-input"><option value="microphone">麦克风</option><option value="tab">浏览器标签页</option></select></label>
+      </div>
+      <div class="language-bar" aria-label="语言设置">
+        <label class="language-field"><span>识别语言</span><select id="source-language"><option value="auto">自动识别</option><option value="zh">中文</option><option value="en" selected>英语</option><option value="ja">日语</option><option value="ko">韩语</option></select></label>
+        <span class="arrow" aria-hidden="true">→</span>
+        <label class="language-field"><span>翻译成</span><select id="target-language"><option value="Chinese">简体中文</option><option value="English">英语</option><option value="Japanese">日语</option><option value="Korean">韩语</option></select></label>
+      </div>
+
+      <section class="caption-stage" aria-label="实时字幕" aria-live="polite">
+        <div class="caption-head"><span>译文</span><span class="caption-badge" id="caption-badge">等待开始</span></div>
+        <p class="translation placeholder" id="translation">字幕会显示在这里</p>
+        <div class="original-wrap"><span class="original-label">原文</span><p class="original placeholder" id="original">开始聆听后，实时识别的文字会出现。</p></div>
+      </section>
+      <div class="pinned-caption" id="pinned-caption" hidden aria-hidden="true">
+        <div class="caption-head"><span>译文</span><span class="caption-badge" id="pinned-badge">等待开始</span></div>
+        <p class="pinned-translation placeholder" id="pinned-translation">字幕会显示在这里</p>
+      </div>
+
+      <div class="controls">
+        <div class="control-buttons"><button class="primary-button" id="toggle" type="button"><svg id="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5m-4 0h8"/></svg><svg id="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><rect x="3" y="4" width="18" height="15" rx="2"/><path d="M3 8h18m-13 8h8"/></svg><span id="toggle-label">开始聆听</span></button><button class="switch-button" id="switch-tab" type="button" hidden>更换标签页</button></div>
+        <p class="hint" id="hint">音频仅在聆听期间发送至阿里云</p>
+      </div>
+      <section class="secondary-panel" id="record-panel" hidden>
+        <div class="panel-heading"><h2 id="record-title">本次收听</h2><span id="processing-status"></span></div>
+        <div class="panel-actions"><button class="switch-button" id="retry-processing" type="button" hidden>继续处理</button></div>
+        <details class="knowledge-panel" open><summary>对话知识 <span id="knowledge-count">0</span></summary><div id="knowledge-list" class="knowledge-list"></div></details>
+        <section class="runs-panel"><h3>收听片段</h3><div id="runs-list"></div></section>
+        <section class="transcript-panel"><h3>原文与译文</h3><div id="transcript-list"></div><button class="switch-button load-more" id="load-more" type="button" hidden>加载更多句子</button></section>
+      </section>
+    </main>
+    <main class="main history-view" id="history-view" hidden>
+      <div class="panel-heading"><div><div class="eyebrow">已保存的对话</div><h1>历史收听</h1></div><button class="switch-button" id="back-to-listening" type="button">返回收听</button></div>
+      <p class="history-error" id="history-error" role="alert" hidden></p>
+      <div id="history-list" class="history-list"></div><button class="switch-button load-more" id="history-more" type="button" hidden>加载更多</button>
+    </main>
+    <footer class="footer"><span>Qwen Audio 3.0 · Qwen MT</span><span>为正在发生的对话而作</span></footer>
+  </div>
+
+  <div class="modal-backdrop" id="settings-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="modal-top"><div><div class="modal-kicker">连接设置</div><h2 id="settings-title">连接千问AI平台</h2></div><button class="close-button" id="close-settings" type="button" aria-label="关闭设置">×</button></div>
+      <p class="modal-copy">首次使用请填写千问AI平台的通用 API Key。信息只保存在当前浏览器中，不会写入项目文件。</p>
+      <form id="settings-form">
+        <label class="form-label" for="api-key">API Key</label>
+        <div class="key-field"><input id="api-key" name="api-key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" required /><button id="show-key" type="button" aria-label="显示 API Key">显示</button></div>
+        <p class="form-note">请使用千问AI平台的按量计费通用 Key；Token Plan 专属 Key 使用不同的地址。</p>
+        <button class="test-button" id="test-connection" type="button">测试连接</button>
+        <div class="test-result" id="test-result" role="status" aria-live="polite" hidden>
+          <p class="test-summary" id="test-summary"></p>
+          <p id="test-recognition"></p>
+          <p id="test-translation"></p>
+          <p id="test-knowledge"></p>
+        </div>
+        <p class="test-note">测试会启动一次无音频识别任务，并发送短文本测试翻译与知识抽取；模型请求可能产生少量费用。</p>
+        <button class="save-button" type="submit">保存并继续</button>
+      </form>
+      <a class="key-link" href="https://platform.qianwenai.com/docs/api-reference/preparation/api-key" target="_blank" rel="noopener noreferrer">如何获取 API Key <span aria-hidden="true">↗</span></a>
+    </div>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
