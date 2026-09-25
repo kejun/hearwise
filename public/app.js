@@ -16,7 +16,8 @@ const els = {
   historyError: $('history-error'), back: $('back-to-listening'),
   recordPanel: $('record-panel'), recordTitle: $('record-title'), processingStatus: $('processing-status'),
   retryProcessing: $('retry-processing'), knowledgeList: $('knowledge-list'), knowledgeCount: $('knowledge-count'),
-  transcriptList: $('transcript-list'), runsList: $('runs-list'), loadMore: $('load-more')
+  transcriptList: $('transcript-list'), runsList: $('runs-list'), loadMore: $('load-more'),
+  sizeSlider: $('translation-size')
 };
 
 const saved = {
@@ -25,6 +26,19 @@ const saved = {
 localStorage.removeItem('tongsheng:key');
 localStorage.removeItem('tongsheng:region');
 els.apiKey.value = saved.key;
+
+// 译文字号滑块：范围 30-70，默认 50 居中，持久化到 localStorage
+const SIZE_KEY = 'tongsheng:translation-size';
+function applyTranslationSize(value) {
+  const size = Math.min(70, Math.max(30, Math.round(Number(value)) || 50));
+  els.sizeSlider.value = String(size);
+  document.documentElement.style.setProperty('--translation-size', String(size));
+}
+applyTranslationSize(localStorage.getItem(SIZE_KEY));
+els.sizeSlider.addEventListener('input', () => {
+  applyTranslationSize(els.sizeSlider.value);
+  localStorage.setItem(SIZE_KEY, els.sizeSlider.value);
+});
 
 let phase = 'idle';
 let socket;
