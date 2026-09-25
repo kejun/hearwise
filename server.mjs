@@ -38,9 +38,13 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 function sameOrigin(req) {
-  try { return !req.headers.origin || (new URL(req.headers.origin).host === req.headers.host &&
-    new URL(req.headers.origin).protocol === (req.socket.encrypted ? 'https:' : 'http:')); }
-  catch { return false; }
+  try {
+    if (!req.headers.origin) return true;
+    const origin = new URL(req.headers.origin);
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const protocol = forwardedProto ? `${forwardedProto}:` : (req.socket.encrypted ? 'https:' : 'http:');
+    return origin.host === req.headers.host && origin.protocol === protocol;
+  } catch { return false; }
 }
 async function readJson(req) {
   let body = '';
