@@ -12,3 +12,23 @@
 .runs-panel{background:#fff;border:1px solid #e5e7df;border-radius:17px;padding:23px 27px;margin-top:18px}.runs-panel h3{margin:0 0 10px;font-size:18px}.run-item{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-top:1px solid #edf0eb;padding:13px 0;color:#758277;font-size:13px}.run-item strong{color:#334139;font-size:14px}@media(max-width:700px){.runs-panel{padding:17px}.run-item{display:block}.run-item span{display:block;margin-top:5px}}
 
 @media(max-width:700px){.pinned-caption{top:8px;width:calc(100% - 36px);padding:12px 16px}.pinned-translation{font-size:20px;margin-top:9px}}
+
+/* UI v2: language settings moved into settings modal; audio source moved into controls row */
+.caption-stage{margin-top:36px}
+.modal-section+.modal-section{border-top:1px solid #e9ece6;margin-top:24px;padding-top:20px}
+.section-title{font-size:15px;font-weight:700;color:#26342d;margin:0 0 14px;letter-spacing:.01em}
+.modal .language-bar{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:14px;margin:0}
+.modal .language-field{display:block;font-size:12px;min-width:0}
+.modal .language-field span{display:block;margin-bottom:7px}
+.modal .language-field select{width:100%;min-width:0;font-size:13px;padding:11px 30px 11px 11px;background-position:right 10px center}
+.modal .arrow{justify-self:center;margin-bottom:9px;font-size:19px}
+.modal-section .modal-copy{margin:0 0 20px}
+.control-buttons .source-field select{min-width:150px}
+@media(max-width:700px){
+.caption-stage{margin-top:26px}
+.control-buttons{gap:10px}
+.control-buttons .source-field{display:flex;align-items:center;gap:8px;font-size:13px}
+.control-buttons .source-field span{display:inline;margin-bottom:0}
+.control-buttons .source-field select{width:auto;min-width:0;font-size:13px;padding:10px 30px 10px 11px;background-position:right 10px center}
+.modal .language-bar{gap:10px}
+}

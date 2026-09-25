@@ -106,7 +106,9 @@ els.audioInput.addEventListener('change', () => { clearError(); setPhase(phase);
 function openSettings(continueAfterSave = false) {
   startAfterSave = continueAfterSave;
   els.modal.hidden = false;
-  els.apiKey.focus();
+  els.modal.scrollTop = 0;
+  if (els.apiKey.value) els.closeSettings.focus();
+  else els.apiKey.focus();
 }
 
 function resetConnectionTest() {
