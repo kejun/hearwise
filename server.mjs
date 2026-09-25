@@ -191,13 +191,15 @@ function pumpExtraction() {
       for (const input of splitFocusSegments(baseInput)) {
         if (!store.hasListening(job.listening_id)) break;
         input.existing_candidates = store.jobInput(job).existing_candidates;
-        let items;
+        let parsed;
         for (let attempt = 0; attempt < 2; attempt++) {
-          try { items = await extractKnowledge(keys.get(job.listening_id), input, mtEndpoint); break; }
+          try { parsed = await extractKnowledge(keys.get(job.listening_id), input, mtEndpoint); break; }
           catch (caught) { error = caught; if (attempt === 0) continue; throw caught; }
         }
         if (!store.hasListening(job.listening_id)) break;
-        const changed = store.applyKnowledge(job.listening_id, items);
+        if (parsed.rejected.length) console.info('knowledge_rejected', job.id, `${parsed.rejected.length}/${parsed.rejected.length + parsed.items.length}`,
+          parsed.rejected.map(r => `${r.name}（${r.reason}）`).join('；').slice(0, 400));
+        const changed = store.applyKnowledge(job.listening_id, parsed.items);
         for (const item of changed) broadcast(job.listening_id, { type: 'knowledge-upserted', item });
       }
       store.markJob(job.id, 'complete');

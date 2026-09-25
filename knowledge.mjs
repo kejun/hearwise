@@ -4,8 +4,69 @@ const promptDocument = readFileSync(new URL('./docs/knowledge-extraction-prompt.
 export const SYSTEM_PROMPT = promptDocument.match(/## System Message：固定提示词\s*```text\n([\s\S]*?)\n```/)?.[1];
 if (!SYSTEM_PROMPT) throw new Error('知识抽取提示词缺失');
 
-const isString = (value, max, allowEmpty = false) => typeof value === 'string' && value.length <= max && (allowEmpty || value.trim().length > 0);
 const fail = message => { throw new Error(`知识结果无效：${message}`); };
+const clip = (value, max) => value.trim().slice(0, max);
+
+// 模型转写引用时常"顺手美化"（弯引号、破折号、空白、大小写），
+// 先精确匹配，再按变体宽松匹配，命中后取原文逐字子串，保证证据可追溯。
+const QUOTE_VARIANTS = { '"': '[\u0022\u201C\u201D\u201E]', "'": "[\u0027\u2018\u2019\u201B]", '\u2014': '[\u2014\u2013-]', '\u2013': '[\u2014\u2013-]', '\u2026': '[\u2026.]' };
+export function findVerbatim(text, quote) {
+  if (typeof quote !== 'string') return null;
+  const q = quote.trim();
+  if (!q || q.length > 300) return null;
+  if (text.includes(q)) return q;
+  let pattern = '';
+  for (const ch of q) {
+    if (QUOTE_VARIANTS[ch]) pattern += QUOTE_VARIANTS[ch];
+    else if (/\s/.test(ch)) { if (!pattern.endsWith('\\s+')) pattern += '\\s+'; }
+    else pattern += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  try {
+    const match = text.match(new RegExp(pattern)) || text.match(new RegExp(pattern, 'i'));
+    return match ? match[0] : null;
+  } catch { return null; }
+}
+
+// 单条独立校验与挽救：可修复的缺陷就地修复，修不了的丢弃该条并记录原因，不拖累同批其他条目。
+function sanitizeItem(item, focus, candidates, sourceText) {
+  if (!item || !['person','term','event','other'].includes(item.type) ||
+    !['clear','needs_review'].includes(item.certainty) || !['create','link','correct'].includes(item.decision) ||
+    typeof item.canonical_name !== 'string' || !item.canonical_name.trim() ||
+    typeof item.dialogue_summary !== 'string' || !item.dialogue_summary.trim()) fail('字段');
+  let decision = item.decision;
+  let existingItemId = decision === 'create' ? null : item.existing_item_id;
+  let correctionReason = decision === 'correct' ? item.correction_reason : null;
+  const candidate = typeof existingItemId === 'string' ? candidates.get(existingItemId) : null;
+  // link/correct 目标条目无效时退回 create；applyKnowledge 仍会按名称与别名做确定性去重
+  if (decision !== 'create' && (!candidate || candidate.type !== item.type || existingItemId.length > 100)) {
+    decision = 'create'; existingItemId = null; correctionReason = null;
+  }
+  // 纠正原因缺失或不合规时降级为 link，不整条丢弃
+  if (decision === 'correct' && !(typeof correctionReason === 'string' && correctionReason.trim() && correctionReason.length <= 300)) {
+    decision = 'link'; correctionReason = null;
+  }
+  const existingAliases = candidate?.aliases || [];
+  const aliases = [];
+  if (Array.isArray(item.aliases)) for (const alias of item.aliases.slice(0, 12)) {
+    if (typeof alias !== 'string' || !alias.trim() || alias.length > 120) continue;
+    const name = alias.trim();
+    if (aliases.includes(name)) continue;
+    // 无原文依据的别名直接丢弃，不再拒绝整条
+    if (sourceText.some(text => findVerbatim(text, name)) || existingAliases.includes(name)) aliases.push(name);
+  }
+  const evidence = [];
+  if (Array.isArray(item.evidence)) for (const entry of item.evidence.slice(0, 12)) {
+    const text = focus.get(entry?.segment_id);
+    const quote = text ? findVerbatim(text, entry?.quote) : null;
+    if (quote) evidence.push({ segment_id: entry.segment_id, quote, text });
+  }
+  if (!evidence.length) fail('原文证据');
+  return { type: item.type, canonical_name: clip(item.canonical_name, 120), aliases,
+    dialogue_summary: clip(item.dialogue_summary, 500),
+    background_note: typeof item.background_note === 'string' && item.background_note.trim() ? clip(item.background_note, 500) : null,
+    certainty: item.certainty, decision, existing_item_id: existingItemId,
+    correction_reason: typeof correctionReason === 'string' && correctionReason.trim() ? clip(correctionReason, 300) : null, evidence };
+}
 
 export function parseKnowledge(raw, input) {
   if (typeof raw !== 'string' || raw.length > 30000) fail('响应过长');
@@ -15,30 +76,14 @@ export function parseKnowledge(raw, input) {
   if (!data || !Array.isArray(data.items) || data.items.length > 12) fail('条目数量');
   const focus = new Map(input.focus_segments.map(s => [s.id, s.text]));
   const candidates = new Map(input.existing_candidates.map(c => [c.id, c]));
-  return data.items.map(item => {
-    if (!item || !['person','term','event','other'].includes(item.type) ||
-      !isString(item.canonical_name, 120) || !isString(item.dialogue_summary, 500) ||
-      !(item.background_note === null || isString(item.background_note, 500)) ||
-      !['clear','needs_review'].includes(item.certainty) || !['create','link','correct'].includes(item.decision) ||
-      !Array.isArray(item.aliases) || item.aliases.length > 12 || item.aliases.some(a => !isString(a, 120)) ||
-      !Array.isArray(item.evidence) || !item.evidence.length || item.evidence.length > 12) fail('字段');
-    const sourceText = [...input.focus_segments, ...(input.context_segments || [])].map(s => s.text);
-    const existingAliases = candidates.get(item.existing_item_id)?.aliases || [];
-    if (item.aliases.some(alias => !sourceText.some(text => text.includes(alias)) && !existingAliases.includes(alias))) fail('别名缺少原文依据');
-    if (item.decision === 'create' && item.existing_item_id !== null) fail('新条目 ID');
-    if (item.decision !== 'create' && (!isString(item.existing_item_id, 100) || candidates.get(item.existing_item_id)?.type !== item.type)) fail('旧条目 ID');
-    if (item.decision === 'correct' && !isString(item.correction_reason, 300)) fail('纠正原因');
-    if (item.decision !== 'correct' && item.correction_reason !== null) fail('纠正原因');
-    const evidence = item.evidence.map(e => {
-      const text = focus.get(e?.segment_id);
-      if (!text || !isString(e.quote, 300) || !text.includes(e.quote)) fail('原文证据');
-      return { segment_id: e.segment_id, quote: e.quote, text };
-    });
-    return { type: item.type, canonical_name: item.canonical_name.trim(), aliases: item.aliases.map(a => a.trim()),
-      dialogue_summary: item.dialogue_summary.trim(), background_note: item.background_note?.trim() || null,
-      certainty: item.certainty, decision: item.decision, existing_item_id: item.existing_item_id,
-      correction_reason: item.correction_reason, evidence };
+  const sourceText = [...input.focus_segments, ...(input.context_segments || [])].map(s => s.text);
+  const items = [], rejected = [];
+  data.items.forEach((item, index) => {
+    const label = String(typeof item?.canonical_name === 'string' && item.canonical_name.trim() ? item.canonical_name.trim() : `条目${index + 1}`).slice(0, 60);
+    try { items.push(sanitizeItem(item, focus, candidates, sourceText)); }
+    catch (error) { rejected.push({ index, name: label, reason: String(error?.message || error) }); }
   });
+  return { items, rejected };
 }
 
 export function splitFocusSegments(input, maxChars = 2500) {

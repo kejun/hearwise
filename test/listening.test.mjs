@@ -51,20 +51,22 @@ test('知识只接受当前句子的原文证据并保留背景来源', () => {
     const item = { type: 'term', canonical_name: 'Kubernetes', aliases: [], dialogue_summary: '对话提到 Kubernetes。',
       background_note: '容器编排平台。', certainty: 'clear', decision: 'create', existing_item_id: null,
       correction_reason: null, evidence: [{ segment_id: segment.id, quote: 'Kubernetes' }] };
-    assert.throws(() => parseKnowledge(JSON.stringify({ items: [{ ...item, evidence: [{ segment_id: 'wrong', quote: 'Kubernetes' }] }] }), input), /原文证据/);
-    const parsed = parseKnowledge('```json\n' + JSON.stringify({ items: [item] }) + '\n```', input);
+    const badEvidence = parseKnowledge(JSON.stringify({ items: [{ ...item, evidence: [{ segment_id: 'wrong', quote: 'Kubernetes' }] }] }), input);
+    assert.equal(badEvidence.items.length, 0);
+    assert.match(badEvidence.rejected[0].reason, /原文证据/);
+    const { items: parsed } = parseKnowledge('```json\n' + JSON.stringify({ items: [item] }) + '\n```', input);
     const [created] = store.applyKnowledge(run.listeningId, parsed);
     assert.equal(created.background_note, '容器编排平台。');
     assert.equal(created.mentions[0].segment_id, segment.id);
     assert.equal(store.detail(run.listeningId).segments[0].original_text, 'I mean Kubernetes.');
     const another = store.addSegment(run.listeningId, run.runId, { id: 's2', text: 'Another Kubernetes project is unrelated.' }).segment;
-    const separate = parseKnowledge(JSON.stringify({ items: [{ ...item,
+    const { items: separate } = parseKnowledge(JSON.stringify({ items: [{ ...item,
       evidence: [{ segment_id: another.id, quote: 'Kubernetes' }], dialogue_summary: '对话提到另一个同名项目。', certainty: 'needs_review' }] }),
       { focus_segments: [{ id: another.id, text: another.original_text }], context_segments: [], existing_candidates: [] });
     store.applyKnowledge(run.listeningId, separate);
     assert.equal(store.knowledge(run.listeningId).length, 2);
     const correctionSegment = store.addSegment(run.listeningId, run.runId, { id: 's3', text: 'I mean Kubernetes Platform.' }).segment;
-    const correction = parseKnowledge(JSON.stringify({ items: [{ ...item, canonical_name: 'Kubernetes Platform',
+    const { items: correction } = parseKnowledge(JSON.stringify({ items: [{ ...item, canonical_name: 'Kubernetes Platform',
       decision: 'correct', existing_item_id: created.id, correction_reason: '对话明确说 I mean',
       evidence: [{ segment_id: correctionSegment.id, quote: 'Kubernetes Platform' }] }] }),
       { focus_segments: [{ id: correctionSegment.id, text: correctionSegment.original_text }], context_segments: [],
@@ -99,6 +101,29 @@ test('删除已结束的收听记录并级联清除关联数据', () => {
     }
     assert.ok(store.detail(other.listeningId));
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('宽松解析引用为原文子串，单条无效不拖累整批', () => {
+  const input = { focus_segments: [{ id: 's1', text: 'We deploy “Kubernetes” on AWS  last weak.' }], context_segments: [], existing_candidates: [] };
+  const base = { type: 'term', canonical_name: 'Kubernetes', aliases: [], dialogue_summary: '提到部署 Kubernetes。',
+    background_note: null, certainty: 'clear', decision: 'create', existing_item_id: null, correction_reason: null };
+  const { items, rejected } = parseKnowledge(JSON.stringify({ items: [
+    { ...base, aliases: ['K8s', 'kubernetes'], evidence: [{ segment_id: 's1', quote: '"Kubernetes" on AWS' }, { segment_id: 's1', quote: 'LAST  WEAK' }] },
+    { ...base, canonical_name: 'AWS', evidence: [{ segment_id: 's1', quote: 'Amazon Web Services' }] },
+    { ...base, canonical_name: 'deploy plan', decision: 'link', existing_item_id: 'missing-id', evidence: [{ segment_id: 's1', quote: 'We deploy' }] }
+  ] }), input);
+  assert.equal(items.length, 2);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].name, 'AWS');
+  assert.match(rejected[0].reason, /原文证据/);
+  // 直引号命中原文弯引号、大小写与多余空白宽松匹配，均解析为原文逐字子串
+  assert.equal(items[0].evidence[0].quote, '“Kubernetes” on AWS');
+  assert.equal(items[0].evidence[1].quote, 'last weak');
+  // 无原文依据的别名丢弃，原文中存在的别名保留
+  assert.deepEqual(items[0].aliases, ['kubernetes']);
+  // link 目标无效时降级为 create，不整条拒绝
+  assert.equal(items[1].decision, 'create');
+  assert.equal(items[1].existing_item_id, null);
 });
 
 test('积压的相邻知识批次合并且不遗漏原文', () => {

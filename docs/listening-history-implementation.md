@@ -80,10 +80,10 @@ flowchart LR
 
 - 抽取只消费已完成的原文句子，不等待译文。将相邻最终句子组成小批次，附带少量前文和当前收听记录的相关知识候选；间隔触发、停止收听和达到批次大小时都可提交。初始触发值建议为 3 句或约 10 秒，作为可调整参数，不作为产品时延承诺。
 - 使用现有 `https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions`，模型设为 `qwen3.8-flash`，并以 `enable_thinking: false` 关闭思考模式。固定 System Message 与动态 User Message、JSON 对象格式和字段约束见[知识抽取提示词 v1](knowledge-extraction-prompt.md)。输入包含片段 ID；输出要求提供原文子串和片段 ID，使模型结论可追溯。
-- 服务端剥离可能出现的 Markdown 代码围栏，再解析并校验 JSON。拒绝不存在的证据 ID、过长字段和不在当前收听记录中的知识 ID。模型输出不直接作为 SQL 或 HTML 使用。
+- 服务端剥离可能出现的 Markdown 代码围栏，再解析并校验 JSON。单条目独立挽救：证据 ID 不存在的条目丢弃并记日志，过长字段截断，不在当前收听记录中的知识 ID 拒绝关联并降级为新建。模型输出不直接作为 SQL 或 HTML 使用。
 - 先按类型、规范化名称和别名做确定性匹配；再把少量可能重复的旧条目交给模型判断是否同一对象。只有证据足够明确时自动合并或纠正名称；不确定时保留独立条目并标记「待确认」。纠正记录写入 `knowledge_revisions`，原文与译文不变。
 - 把对话中能直接找到的描述写入 `dialogue_summary`，把模型补充的常识写入 `background_note`。通用背景来自模型已有知识，不能当作已外部核实的事实；界面明确标注「背景补充」。
-- 同一收听记录的抽取任务按 `sequence_no` 顺序执行，避免并发任务互相覆盖去重结果；它与翻译请求并行。批次大小需留出提示词、前文和旧条目的空间，低于官方对纯文本单条消息的 9,000 Token 上限。[Qwen-Doc-Turbo 官方说明](https://platform.qianwenai.com/docs/developer-guides/text-generation/document-understanding)
+- 同一收听记录的抽取任务按 `sequence_no` 顺序执行，避免并发任务互相覆盖去重结果；它与翻译请求并行。批次大小需留出提示词、前文和旧条目的空间，控制单批输入体积。[千问文本生成官方文档](https://platform.qianwenai.com/docs/developer-guides/text-generation)
 
 ### 任务恢复与 API Key
 

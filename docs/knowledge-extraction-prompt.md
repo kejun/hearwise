@@ -14,7 +14,7 @@
 只记录四类对象：person（明确提到的人）、term（专业术语或有解释价值的概念）、event（明确提到的具体行动、决定、事故或里程碑）、other（组织、产品、项目、地点等专有对象）。不要抽取泛称、寒暄、单纯代词、没有特定对象的普通词，也不要为凑数量制造条目。每批最多返回 12 项；没有足够信息时返回空 items。
 
 证据规则：
-1. 每个条目必须至少有一处来自 focus_segments 的原文证据。evidence.quote 必须是对应 segment.text 中连续出现的原样片段；evidence.segment_id 必须属于 focus_segments。context_segments 只能帮助理解，不单独产生新条目。
+1. 每个条目必须至少有一处来自 focus_segments 的原文证据。evidence.quote 必须是对应 segment.text 中连续出现的原样片段；逐字符复制原文，保留其中的拼写错误、大小写和标点，不要改写、修正、缩略或拼接，无法精确复制时宁可不提供该条证据。evidence.segment_id 必须属于 focus_segments。context_segments 只能帮助理解，不单独产生新条目。
 2. dialogue_summary 只概括对话实际说了什么；保留“计划、猜测、否定、已完成”等语气，不把计划写成事实，不推算未给出的绝对日期，不猜测说话人的身份或代词所指。
 3. canonical_name 优先采用对话里清楚说出的名称或官方常见写法。只有出现明确的自我纠正，或多处上下文共同支持时，才修正疑似 ASR 误写；否则保留原形并把 certainty 设为 needs_review。不能仅凭背景知识把生僻人名、公司名或缩写改成更熟悉的名称。
 4. aliases 仅写对话中确实出现且可确定指向同一对象的别称、缩写或误写；不要凭空扩展。错误转写保留在证据中，只有明确纠正后才可作为误写别名。
@@ -100,7 +100,7 @@
 
 ## 服务端校验与落库
 
-1. 解析返回的 JSON；如有代码围栏，先剥离。校验顶层、枚举、字段长度、条目数量、ID 是否属于本次输入，以及 `evidence.quote` 是否为原文子串。校验失败时整批不落库并重试一次；仍失败则标记抽取任务失败。
+1. 解析返回的 JSON；如有代码围栏，先剥离。顶层结构无效（不是 JSON、items 不是数组、超过 12 条、响应过长）时整批重试一次；仍失败则标记抽取任务失败。单条目独立校验与挽救，不再一票否决整批：超长字符串截断；`link`/`correct` 的目标条目无效时降级为 `create`（存储层仍按名称与别名做确定性去重）；`correction_reason` 缺失时降级为 `link`；无原文依据的别名丢弃。`evidence.quote` 先精确匹配，再按标点变体、空白弹性与大小写不敏感匹配解析为原文逐字子串；所有证据都无法解析的条目丢弃并记入日志，不影响同批其他条目。
 2. `decision=correct` 只视为模型建议。服务端要求 `existing_item_id` 有效、类型相容、证据包含明确纠正，再在事务中写 `knowledge_revisions`；不满足时降级为待确认，不自动改名。`decision=link` 也需结合规范化名称、别名与已有证据做二次判断；新输出的 null 或空数组不能抹掉旧条目已有的有效信息。
 3. `dialogue_summary` 与 `background_note` 分列存储，界面把后者标为「背景补充」。`certainty=needs_review` 显示「待确认」。原文与译文表不接受抽取模型的更新。
 4. 控制前文与候选数量，为输出保留空间。`qwen3.8-flash` 调用时必须带 `enable_thinking: false` 关闭思考模式，降低抽取延迟；不要假设支持严格 JSON Schema 请求参数，先按纯文本示例调用，再以服务端校验保证协议。[结构化输出支持模型](https://platform.qianwenai.com/docs/developer-guides/text-generation/structured-output)
