@@ -105,6 +105,7 @@ els.audioInput.addEventListener('change', () => { clearError(); setPhase(phase);
 
 function openSettings(continueAfterSave = false) {
   startAfterSave = continueAfterSave;
+  if (!els.apiKey.value) activateTab(0);
   els.modal.hidden = false;
   els.modal.scrollTop = 0;
   if (els.apiKey.value) els.closeSettings.focus();
@@ -134,6 +135,32 @@ els.settingsTrigger.addEventListener('click', () => openSettings());
 els.closeSettings.addEventListener('click', closeSettings);
 els.modal.addEventListener('click', event => { if (event.target === els.modal) closeSettings(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !els.modal.hidden) closeSettings(); });
+
+// Settings tabs: connection (default) / language
+const settingsTabs = [
+  { button: $('tab-connection-button'), panel: $('tab-connection') },
+  { button: $('tab-language-button'), panel: $('tab-language') }
+];
+function activateTab(index, focusButton = false) {
+  settingsTabs.forEach((tab, i) => {
+    const active = i === index;
+    tab.button.classList.toggle('active', active);
+    tab.button.setAttribute('aria-selected', String(active));
+    tab.button.tabIndex = active ? 0 : -1;
+    tab.panel.hidden = !active;
+  });
+  if (focusButton) settingsTabs[index].button.focus();
+}
+settingsTabs.forEach((tab, index) => {
+  tab.button.addEventListener('click', () => activateTab(index));
+  tab.button.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    event.preventDefault();
+    const next = (index + (event.key === 'ArrowRight' ? 1 : settingsTabs.length - 1)) % settingsTabs.length;
+    activateTab(next, true);
+  });
+});
+activateTab(0);
 els.showKey.addEventListener('click', () => {
   const shown = els.apiKey.type === 'text';
   els.apiKey.type = shown ? 'password' : 'text';

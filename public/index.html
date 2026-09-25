@@ -12,7 +12,7 @@
     <header class="topbar">
       <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span>同声</span></div>
       <div class="top-actions"><button class="nav-button" id="new-listening" type="button">新建收听</button><button class="nav-button" id="history-listening" type="button">历史收听</button><button class="settings-trigger" id="settings-trigger" type="button" aria-label="打开设置" aria-haspopup="dialog">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.86 1.86-.06-.06A1.7 1.7 0 0 0 16 18.4a1.7 1.7 0 0 0-1 1.56V20H9v-.04a1.7 1.7 0 0 0-1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.86-1.86.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1H3v-3h.04A1.7 1.7 0 0 0 4.6 10a1.7 1.7 0 0 0-.34-1.88L4.2 8.06 6.06 6.2l.06.06A1.7 1.7 0 0 0 8 6.6 1.7 1.7 0 0 0 9 5.04V5h6v.04A1.7 1.7 0 0 0 16 6.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 1.86 1.86-.06.06A1.7 1.7 0 0 0 19.4 10a1.7 1.7 0 0 0 1.56 1H21v3h-.04A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>
       </button></div>
     </header>
 
@@ -50,22 +50,17 @@
       <p class="history-error" id="history-error" role="alert" hidden></p>
       <div id="history-list" class="history-list"></div><button class="switch-button load-more" id="history-more" type="button" hidden>加载更多</button>
     </main>
-    <footer class="footer"><span>Qwen Audio 3.0 · Qwen MT</span><span>为正在发生的对话而作</span></footer>
+    <footer class="footer"><span>HearWise v0.1.0</span><a class="footer-link" href="https://github.com/kejun/hearwise" target="_blank" rel="noopener noreferrer" aria-label="GitHub 仓库" title="github.com/kejun/hearwise"><svg viewBox="0 0 16 16" width="19" height="19" fill="currentColor" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg></a></footer>
   </div>
 
   <div class="modal-backdrop" id="settings-modal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <div class="modal-top"><div><div class="modal-kicker">设置</div><h2 id="settings-title">语言与连接</h2></div><button class="close-button" id="close-settings" type="button" aria-label="关闭设置">×</button></div>
-      <section class="modal-section">
-        <h3 class="section-title">语言设置</h3>
-        <div class="language-bar" aria-label="语言设置">
-          <label class="language-field"><span>识别语言</span><select id="source-language"><option value="auto">自动识别</option><option value="zh">中文</option><option value="en" selected>英语</option><option value="ja">日语</option><option value="ko">韩语</option></select></label>
-          <span class="arrow" aria-hidden="true">→</span>
-          <label class="language-field"><span>翻译成</span><select id="target-language"><option value="Chinese">简体中文</option><option value="English">英语</option><option value="Japanese">日语</option><option value="Korean">韩语</option></select></label>
-        </div>
-      </section>
-      <section class="modal-section">
-        <h3 class="section-title">连接设置 · 千问AI平台</h3>
+        <div class="modal-top"><div><div class="modal-kicker">设置</div><h2 id="settings-title">连接与语言</h2></div><button class="close-button" id="close-settings" type="button" aria-label="关闭设置">×</button></div>
+      <div class="tab-bar" role="tablist" aria-label="设置分类">
+        <button class="tab-button active" id="tab-connection-button" type="button" role="tab" aria-selected="true" aria-controls="tab-connection">连接设置</button>
+        <button class="tab-button" id="tab-language-button" type="button" role="tab" aria-selected="false" aria-controls="tab-language">语言设置</button>
+      </div>
+      <section class="tab-panel" id="tab-connection" role="tabpanel" aria-labelledby="tab-connection-button">
       <p class="modal-copy">首次使用请填写千问AI平台的通用 API Key。信息只保存在当前浏览器中，不会写入项目文件。</p>
       <form id="settings-form">
         <label class="form-label" for="api-key">API Key</label>
@@ -82,6 +77,14 @@
         <button class="save-button" type="submit">保存并继续</button>
       </form>
       <a class="key-link" href="https://platform.qianwenai.com/docs/api-reference/preparation/api-key" target="_blank" rel="noopener noreferrer">如何获取 API Key <span aria-hidden="true">↗</span></a>
+      </section>
+      <section class="tab-panel" id="tab-language" role="tabpanel" aria-labelledby="tab-language-button" hidden>
+        <div class="language-bar" aria-label="语言设置">
+          <label class="language-field"><span>识别语言</span><select id="source-language"><option value="auto">自动识别</option><option value="zh">中文</option><option value="en" selected>英语</option><option value="ja">日语</option><option value="ko">韩语</option></select></label>
+          <span class="arrow" aria-hidden="true">→</span>
+          <label class="language-field"><span>翻译成</span><select id="target-language"><option value="Chinese">简体中文</option><option value="English">英语</option><option value="Japanese">日语</option><option value="Korean">韩语</option></select></label>
+        </div>
+        <p class="modal-copy tab-hint">语言设置仅在聆听未开始时可修改；开始聆听后会自动锁定。</p>
       </section>
     </div>
   </div>
