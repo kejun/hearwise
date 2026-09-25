@@ -1,6 +1,6 @@
 # 实时对话知识抽取提示词 v1
 
-> 适用模型：`qwen-doc-turbo`。输入为最终 ASR 句子，不使用临时字幕。本文是应用正在使用的提示词与输出协议。
+> 适用模型：`qwen3.8-flash`，调用时以 `enable_thinking: false` 关闭思考模式。输入为最终 ASR 句子，不使用临时字幕。本文是应用正在使用的提示词与输出协议。
 
 ## 设计目标
 
@@ -103,7 +103,7 @@
 1. 解析返回的 JSON；如有代码围栏，先剥离。校验顶层、枚举、字段长度、条目数量、ID 是否属于本次输入，以及 `evidence.quote` 是否为原文子串。校验失败时整批不落库并重试一次；仍失败则标记抽取任务失败。
 2. `decision=correct` 只视为模型建议。服务端要求 `existing_item_id` 有效、类型相容、证据包含明确纠正，再在事务中写 `knowledge_revisions`；不满足时降级为待确认，不自动改名。`decision=link` 也需结合规范化名称、别名与已有证据做二次判断；新输出的 null 或空数组不能抹掉旧条目已有的有效信息。
 3. `dialogue_summary` 与 `background_note` 分列存储，界面把后者标为「背景补充」。`certainty=needs_review` 显示「待确认」。原文与译文表不接受抽取模型的更新。
-4. 纯文本请求的全部消息都应留在模型的 9,000 Token 输入限制内；控制前文与候选数量，保留输出空间。不要假设 `qwen-doc-turbo` 支持严格 JSON Schema 请求参数；先按官方纯文本示例调用，再以服务端校验保证协议。[Qwen-Doc-Turbo 官方说明](https://platform.qianwenai.com/docs/developer-guides/text-generation/document-understanding)、[结构化输出支持模型](https://platform.qianwenai.com/docs/developer-guides/text-generation/structured-output)
+4. 控制前文与候选数量，为输出保留空间。`qwen3.8-flash` 调用时必须带 `enable_thinking: false` 关闭思考模式，降低抽取延迟；不要假设支持严格 JSON Schema 请求参数，先按纯文本示例调用，再以服务端校验保证协议。[结构化输出支持模型](https://platform.qianwenai.com/docs/developer-guides/text-generation/structured-output)
 
 ## 上线前的针对性样例
 

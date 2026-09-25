@@ -55,10 +55,12 @@ export function splitFocusSegments(input, maxChars = 2500) {
   return groups.map(focus_segments => ({ ...input, focus_segments }));
 }
 
+export const KNOWLEDGE_MODEL = 'qwen3.8-flash';
+
 export async function extractKnowledge(key, input, endpoint) {
   const response = await fetch(endpoint, {
     method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'qwen-doc-turbo', messages: [
+    body: JSON.stringify({ model: KNOWLEDGE_MODEL, enable_thinking: false, messages: [
       { role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(input) }
     ] }), signal: AbortSignal.timeout(30000)
   });

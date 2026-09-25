@@ -123,7 +123,7 @@ test('WebSocket 最终句持久化、翻译抽取、停止后重试和继续收�
   const modelServer = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
-    if (body.model === 'qwen-mt-flash' && failTranslationCount-- > 0 || body.model === 'qwen-doc-turbo' && failKnowledgeCount-- > 0) {
+    if (body.model === 'qwen-mt-flash' && failTranslationCount-- > 0 || body.model === 'qwen3.8-flash' && failKnowledgeCount-- > 0) {
       res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'temporary failure' } })); return;
     }
     let content;
