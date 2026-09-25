@@ -52,3 +52,9 @@
 .size-control .a-small{font-size:11px}
 .size-control .a-big{font-size:16px}
 .size-control input[type=range]{width:108px;margin:0;accent-color:#315f4d;cursor:pointer}
+
+/* 原文与译文下载下拉 */
+.transcript-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
+.transcript-head h3{margin:0}
+.download-select{appearance:none;-webkit-appearance:none;border:1px solid #d7dcd2;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%234b5b52' stroke-width='2'%3E%3Cpath d='m3 5 4 4 4-4'/%3E%3C/svg%3E") no-repeat right 10px center;border-radius:9px;padding:7px 30px 7px 12px;font-size:13px;font-weight:600;color:#315f4d;cursor:pointer;flex-shrink:0}
+.download-select:hover{background-color:#f3f6f2}

@@ -141,6 +141,14 @@ export class ListeningStore {
       FROM segments WHERE listening_id=?`).get(id);
     return { listening, runs, segments, latestSegment, segmentCount, knowledge, jobs, processing, page, pageSize };
   }
+  exportText(id, kind) {
+    const listening = this.db.prepare('SELECT title FROM listenings WHERE id=?').get(id);
+    if (!listening) return null;
+    const sql = kind === 'translation'
+      ? "SELECT translation_text AS text FROM segments WHERE listening_id=? AND translation_text IS NOT NULL AND translation_text<>'' ORDER BY sequence_no"
+      : 'SELECT original_text AS text FROM segments WHERE listening_id=? ORDER BY sequence_no';
+    return { title: listening.title, text: this.db.prepare(sql).all(id).map(row => row.text).join('\n') };
+  }
   knowledge(id) {
     const items = this.db.prepare('SELECT * FROM knowledge_items WHERE listening_id=? ORDER BY created_at, id').all(id);
     const aliases = this.db.prepare('SELECT a.* FROM knowledge_aliases a JOIN knowledge_items k ON k.id=a.item_id WHERE k.listening_id=?').all(id);

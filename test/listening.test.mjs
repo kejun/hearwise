@@ -242,6 +242,16 @@ test('WebSocket 最终句持久化、翻译抽取、停止后重试和继续收�
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'test-key' }) });
   assert.equal(retry.status, 202);
   await waitFor(async () => { const current = await read(); return current.segments[1].translation_state === 'complete' && current.jobs.at(-1).state === 'complete'; });
+  const originalExport = await fetch(`${base}/api/listenings/${first.ready.listeningId}/export?kind=original`);
+  assert.equal(originalExport.status, 200);
+  assert.ok(originalExport.headers.get('content-type').startsWith('text/plain'));
+  assert.ok(originalExport.headers.get('content-disposition').startsWith('attachment;'));
+  assert.ok(originalExport.headers.get('content-disposition').includes("filename*=UTF-8''"));
+  assert.equal(await originalExport.text(), 'Maya speaks.\nMaya returns.');
+  const translationExport = await fetch(`${base}/api/listenings/${first.ready.listeningId}/export?kind=translation`);
+  assert.equal(await translationExport.text(), '已翻译：Maya speaks.\n已翻译：Maya returns.');
+  assert.equal((await fetch(`${base}/api/listenings/${first.ready.listeningId}/export?kind=both`)).status, 400);
+  assert.equal((await fetch(`${base}/api/listenings/00000000-0000-0000-0000-000000000000/export?kind=original`)).status, 404);
   detail = await read();
   assert.equal(detail.knowledge.length, 1);
   assert.equal(detail.knowledge[0].mentions.length, 2);

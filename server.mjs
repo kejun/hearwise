@@ -248,7 +248,7 @@ const server = http.createServer(async (req, res) => {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     return sendJson(res, 200, store.list(page));
   }
-  const match = /^\/api\/listenings\/([0-9a-f-]{36})(?:\/(retry))?$/.exec(url.pathname);
+  const match = /^\/api\/listenings\/([0-9a-f-]{36})(?:\/(retry|export))?$/.exec(url.pathname);
   if (match && req.method === 'GET' && !match[2]) {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     const detail = store.detail(match[1], page);
@@ -279,6 +279,19 @@ const server = http.createServer(async (req, res) => {
       store.retry(match[1]); resumeProcessing(match[1], key.trim());
       return sendJson(res, 202, { ok: true });
     } catch { return sendJson(res, 400, { error: '请求无效' }); }
+  }
+  if (match && match[2] === 'export' && req.method === 'GET') {
+    const kind = url.searchParams.get('kind');
+    if (kind !== 'original' && kind !== 'translation') return sendJson(res, 400, { error: '下载参数无效，仅支持原文或译文' });
+    const result = store.exportText(match[1], kind);
+    if (!result) return sendJson(res, 404, { error: '收听记录不存在' });
+    if (!result.text.trim()) return sendJson(res, 409, { error: kind === 'original' ? '尚无原文可下载' : '尚无完成翻译的句子可下载' });
+    const label = kind === 'original' ? '原文' : '译文';
+    const safeTitle = result.title.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || '收听记录';
+    const filename = `${safeTitle}-${label}.txt`;
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store',
+      'Content-Disposition': `attachment; filename="transcript-${kind}.txt"; filename*=UTF-8''${encodeURIComponent(filename)}` });
+    return res.end(result.text);
   }
   if (req.method !== 'GET' || !types[url.pathname]) return sendJson(res, 404, { error: '未找到页面' });
   try {

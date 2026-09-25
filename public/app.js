@@ -16,7 +16,7 @@ const els = {
   historyError: $('history-error'), back: $('back-to-listening'),
   recordPanel: $('record-panel'), recordTitle: $('record-title'), processingStatus: $('processing-status'),
   retryProcessing: $('retry-processing'), knowledgeList: $('knowledge-list'), knowledgeCount: $('knowledge-count'),
-  transcriptList: $('transcript-list'), runsList: $('runs-list'), loadMore: $('load-more'),
+  transcriptList: $('transcript-list'), runsList: $('runs-list'), loadMore: $('load-more'), downloadSelect: $('download-select'),
   sizeSlider: $('translation-size')
 };
 
@@ -513,6 +513,32 @@ els.historyListening.addEventListener('click', () => showHistory().catch(error =
 els.back.addEventListener('click', showListening);
 els.historyMore.addEventListener('click', () => loadHistory().catch(error => showError(error.message)));
 els.loadMore.addEventListener('click', () => fetchDetail(detailPage + 1, true).catch(error => showError(error.message)));
+els.downloadSelect.addEventListener('change', () => {
+  const kind = els.downloadSelect.value;
+  els.downloadSelect.value = '';
+  if (kind) downloadTranscript(kind);
+});
+async function downloadTranscript(kind) {
+  if (!listeningId) return;
+  try {
+    const response = await fetch(`/api/listenings/${listeningId}/export?kind=${kind}`);
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || '下载失败，请稍后重试');
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const marker = "filename*=UTF-8''";
+    const start = disposition.indexOf(marker);
+    const fallback = `${detail?.listening.title || '收听记录'}-${kind === 'original' ? '原文' : '译文'}.txt`;
+    const name = start >= 0 ? decodeURIComponent(disposition.slice(start + marker.length).split(';')[0]) : fallback;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = name;
+    document.body.append(link); link.click(); link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) { showError(error.message || '下载失败，请稍后重试'); }
+}
 els.retryProcessing.addEventListener('click', async () => {
   if (!saved.key) { retryAfterSave = true; openSettings(); return; }
   els.retryProcessing.disabled = true;

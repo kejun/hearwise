@@ -96,6 +96,7 @@ ASR 最终原文一经写入就不依赖后续模型成功。模型任务状态�
 | `GET /api/listenings` | 分页列出历史收听摘要。 |
 | `GET /api/listenings/:id` | 返回收听信息、片段和知识概览；句子通过分页参数逐页获取。 |
 | `POST /api/listenings/:id/retry` | 在浏览器提供 Key 后，重试该记录中失败或中断的翻译与抽取任务。 |
+| `GET /api/listenings/:id/export?kind=original\|translation` | 把该记录全部句子的原文或已完成译文按顺序合并为 txt 附件下载，不受句子分页限制。 |
 | WebSocket `start` | 携带新建／继续所需的 ID 和语言设置。 |
 | WebSocket `listening-ready` | 回传已创建的收听 ID、片段 ID。 |
 | WebSocket `segment-final`、`translation-updated`、`knowledge-upserted` | 推送各阶段独立完成的结果；每个事件携带稳定 ID，前端按 ID 更新。 |

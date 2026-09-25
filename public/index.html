@@ -42,7 +42,7 @@
         <div class="panel-actions"><button class="switch-button" id="retry-processing" type="button" hidden>继续处理</button></div>
         <details class="knowledge-panel" open><summary>对话知识 <span id="knowledge-count">0</span></summary><div id="knowledge-list" class="knowledge-list"></div></details>
         <section class="runs-panel"><h3>收听片段</h3><div id="runs-list"></div></section>
-        <section class="transcript-panel"><h3>原文与译文</h3><div id="transcript-list"></div><button class="switch-button load-more" id="load-more" type="button" hidden>加载更多句子</button></section>
+        <section class="transcript-panel"><div class="transcript-head"><h3>原文与译文</h3><select class="download-select" id="download-select" aria-label="下载原文或译文"><option value="" selected>下载…</option><option value="original">下载原文</option><option value="translation">下载译文</option></select></div><div id="transcript-list"></div><button class="switch-button load-more" id="load-more" type="button" hidden>加载更多句子</button></section>
       </section>
     </main>
     <main class="main history-view" id="history-view" hidden>
