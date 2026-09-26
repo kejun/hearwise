@@ -77,11 +77,21 @@ let connectionGeneration = 0; // 每次连接递增；旧连接的事件/定时�
 let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
 
+// 限高字幕框内更新文本：仅当更新前已贴近底部才跟随贴底，用户上滚回看时不拽回
+function updateText(el, text) {
+  const stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.textContent = text;
+  if (stick) el.scrollTop = el.scrollHeight;
+}
+
 function syncPinnedCaption() {
+  // pinned 的滚动容器是 .pinned-caption（限高 40dvh）：更新前贴近底部才贴底跟随
+  const stick = els.pinnedCaption.scrollHeight - els.pinnedCaption.scrollTop - els.pinnedCaption.clientHeight < 40;
   els.pinnedTranslation.textContent = els.translation.textContent;
   els.pinnedTranslation.classList.toggle('placeholder', els.translation.classList.contains('placeholder'));
   els.pinnedTranslation.classList.toggle('provisional', els.translation.classList.contains('provisional'));
   els.pinnedBadge.textContent = els.badge.textContent;
+  if (stick) els.pinnedCaption.scrollTop = els.pinnedCaption.scrollHeight;
 }
 
 function updatePinnedCaption() {
@@ -288,7 +298,7 @@ function scheduleTranslation(text, final) {
       if (response.status === 429) { els.badge.textContent = '最终译文优先处理中'; return; }
       if (!response.ok) throw new Error(result.error || '翻译失败');
       if (version !== translationVersion) return;
-      els.translation.textContent = result.text.trim() || input;
+      updateText(els.translation, result.text.trim() || input);
       els.translation.classList.remove('placeholder');
       els.translation.classList.add('provisional'); // 临时译文视觉标记，final 到达时移除
       provisionalFor = { sentenceId: String(currentSentenceId) };
@@ -307,11 +317,11 @@ function receiveSentence(message) {
     currentSentenceId = message.id;
     currentSegmentId = null;
     provisionalFor = null;
-    els.translation.textContent = '正在翻译…';
+    updateText(els.translation, '正在翻译…');
     els.translation.classList.add('placeholder');
     els.translation.classList.remove('provisional');
   }
-  els.original.textContent = message.text;
+  updateText(els.original, message.text);
   els.original.classList.remove('placeholder');
   if (message.text.trim().length >= 5) scheduleTranslation(message.text, false);
 }
@@ -320,24 +330,24 @@ function displayFinal(segment) {
   clearTranslationWork();
   currentSentenceId = segment.asr_sentence_id;
   currentSegmentId = segment.id;
-  els.original.textContent = segment.original_text;
+  updateText(els.original, segment.original_text);
   els.original.classList.remove('placeholder');
   if (segment.translation_text) { // final 译文到达：无缝替换临时译文
     provisionalFor = null;
-    els.translation.textContent = segment.translation_text;
+    updateText(els.translation, segment.translation_text);
     els.translation.classList.remove('placeholder');
     els.translation.classList.remove('provisional');
     els.badge.textContent = '已完成';
   } else if (segment.translation_state === 'failed') {
     provisionalFor = null;
-    els.translation.textContent = '翻译失败，可点击继续处理';
+    updateText(els.translation, '翻译失败，可点击继续处理');
     els.translation.classList.add('placeholder');
     els.translation.classList.remove('provisional');
     els.badge.textContent = '翻译失败';
   } else if (provisionalFor && provisionalFor.sentenceId === String(segment.asr_sentence_id)) {
     els.badge.textContent = '翻译中'; // 保留同句临时译文，避免闪回占位
   } else {
-    els.translation.textContent = '正在翻译…';
+    updateText(els.translation, '正在翻译…');
     els.translation.classList.add('placeholder');
     els.translation.classList.remove('provisional');
     els.badge.textContent = '翻译中';

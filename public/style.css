@@ -63,3 +63,7 @@
 .translation.provisional,.pinned-translation.provisional{color:#000}
 .mode-field{display:block;margin-top:18px}
 .mode-field select{width:100%;min-width:0;font-size:13px;padding:11px 30px 11px 11px;background-position:right 10px center}
+.translation{max-height:4.05em;overflow-y:auto;scrollbar-width:none}
+.translation::-webkit-scrollbar{display:none}
+.original{max-height:3.2em;overflow-y:auto;scrollbar-width:none}
+.original::-webkit-scrollbar{display:none}
