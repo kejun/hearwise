@@ -248,7 +248,7 @@ const server = http.createServer(async (req, res) => {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     return sendJson(res, 200, store.list(page));
   }
-  const match = /^\/api\/listenings\/([0-9a-f-]{36})(?:\/(retry|export))?$/.exec(url.pathname);
+  const match = /^\/api\/listenings\/([0-9a-f-]{36})(?:\/(retry|export|segments))?$/.exec(url.pathname);
   if (match && req.method === 'GET' && !match[2]) {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     const detail = store.detail(match[1], page);
@@ -292,6 +292,41 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store',
       'Content-Disposition': `attachment; filename="transcript-${kind}.txt"; filename*=UTF-8''${encodeURIComponent(filename)}` });
     return res.end(result.text);
+  }
+  if (match && match[2] === 'segments' && req.method === 'GET') {
+    const uuidPattern = /^[0-9a-f-]{36}$/;
+    const p = url.searchParams;
+    const intParam = name => { const raw = p.get(name); if (raw == null) return null; const value = Number(raw); return Number.isInteger(value) ? value : NaN; };
+    const query = {};
+    const runId = p.get('runId');
+    if (runId != null) {
+      if (!uuidPattern.test(runId)) return sendJson(res, 400, { error: 'runId 无效' });
+      query.runId = runId;
+    }
+    const idsRaw = p.get('ids');
+    const latest = intParam('latest');
+    const after = intParam('afterSequence');
+    const before = intParam('beforeSequence');
+    const limit = intParam('limit') ?? 50;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) return sendJson(res, 400, { error: 'limit 需为 1-200 的整数' });
+    if (idsRaw != null) {
+      const ids = idsRaw.split(',').map(id => id.trim()).filter(Boolean);
+      if (!ids.length || ids.length > 50 || ids.some(id => !uuidPattern.test(id))) return sendJson(res, 400, { error: 'ids 需为 1-50 个 UUID，用英文逗号分隔' });
+      query.ids = [...new Set(ids)];
+    } else if (latest != null) {
+      if (!Number.isInteger(latest) || latest < 1 || latest > 200) return sendJson(res, 400, { error: 'latest 需为 1-200 的整数' });
+      query.latest = latest;
+    } else if (after != null) {
+      if (!Number.isInteger(after) || after < 0) return sendJson(res, 400, { error: 'afterSequence 需为非负整数' });
+      query.afterSequence = after; query.limit = limit;
+    } else if (before != null) {
+      if (!Number.isInteger(before) || before < 1) return sendJson(res, 400, { error: 'beforeSequence 需为正整数' });
+      query.beforeSequence = before; query.limit = limit;
+    } else query.latest = 50;
+    const result = store.segmentsQuery(match[1], query);
+    if (result == null) return sendJson(res, 404, { error: '收听记录不存在' });
+    if (result === 'missing-run') return sendJson(res, 404, { error: '收听片段不存在' });
+    return sendJson(res, 200, result);
   }
   if (req.method !== 'GET' || !types[url.pathname]) return sendJson(res, 404, { error: '未找到页面' });
   try {

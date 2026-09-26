@@ -141,6 +141,28 @@ export class ListeningStore {
       FROM segments WHERE listening_id=?`).get(id);
     return { listening, runs, segments, latestSegment, segmentCount, knowledge, jobs, processing, page, pageSize };
   }
+  segmentsQuery(listeningId, { runId = null, latest = null, afterSequence = null, beforeSequence = null, ids = null, limit = 50 } = {}) {
+    if (!this.hasListening(listeningId)) return null;
+    if (runId && !this.db.prepare('SELECT 1 FROM listening_runs WHERE id=? AND listening_id=?').get(runId, listeningId)) return 'missing-run';
+    const scopeColumn = runId ? 'run_id' : 'listening_id';
+    const scopeValue = runId || listeningId;
+    const total = this.db.prepare(`SELECT COUNT(*) AS n FROM segments WHERE ${scopeColumn}=?`).get(scopeValue).n;
+    const pending = this.db.prepare(`SELECT COUNT(*) AS n FROM segments WHERE ${scopeColumn}=? AND translation_state!='complete'`).get(scopeValue).n;
+    let items;
+    if (ids) {
+      const marks = ids.map(() => '?').join(',');
+      items = this.db.prepare(`SELECT * FROM segments WHERE ${scopeColumn}=? AND id IN (${marks}) ORDER BY sequence_no`).all(scopeValue, ...ids);
+    } else if (latest != null) {
+      items = this.db.prepare(`SELECT * FROM (SELECT * FROM segments WHERE ${scopeColumn}=? ORDER BY sequence_no DESC LIMIT ?) ORDER BY sequence_no`).all(scopeValue, latest);
+    } else if (afterSequence != null) {
+      items = this.db.prepare(`SELECT * FROM segments WHERE ${scopeColumn}=? AND sequence_no>? ORDER BY sequence_no LIMIT ?`).all(scopeValue, afterSequence, limit);
+    } else if (beforeSequence != null) {
+      items = this.db.prepare(`SELECT * FROM (SELECT * FROM segments WHERE ${scopeColumn}=? AND sequence_no<? ORDER BY sequence_no DESC LIMIT ?) ORDER BY sequence_no`).all(scopeValue, beforeSequence, limit);
+    } else {
+      items = this.db.prepare(`SELECT * FROM segments WHERE ${scopeColumn}=? ORDER BY sequence_no LIMIT ?`).all(scopeValue, limit);
+    }
+    return { items, total, pending };
+  }
   exportText(id, kind) {
     const listening = this.db.prepare('SELECT title FROM listenings WHERE id=?').get(id);
     if (!listening) return null;
