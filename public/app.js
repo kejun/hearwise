@@ -275,7 +275,8 @@ function scheduleTranslation(text, final) {
     lastTranslationAt = Date.now();
     const controller = new AbortController();
     translationRequest = controller;
-    els.badge.textContent = '翻译中';
+    // 已显示临时译文时后台静默刷新，角标保持"临时译文"不闪动；仅占位态才提示"翻译中"
+    if (els.translation.classList.contains('placeholder')) els.badge.textContent = '翻译中';
     try {
       const response = await fetch('/api/translate', {
         method: 'POST',
@@ -302,7 +303,7 @@ function scheduleTranslation(text, final) {
 
 function receiveSentence(message) {
   if (typeof message.text !== 'string' || !message.text.trim()) return;
-  if (message.id !== currentSentenceId) { // 新句开始：焦点立即跟随说话人，原文先行
+  if (message.id !== currentSentenceId) { // 新句开始：原文先行，译文待翻译
     currentSentenceId = message.id;
     currentSegmentId = null;
     provisionalFor = null;
