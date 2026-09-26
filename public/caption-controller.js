@@ -17,7 +17,8 @@ export function entryFromSegment(row) {
   return {
     listeningId: row.listening_id, runId: row.run_id, segmentId: row.id,
     sequence: row.sequence_no, source: row.original_text, target: row.translated_text ?? null,
-    translationState: row.translation_state ?? 'pending', sourceEndMs: row.end_ms ?? null
+    translationState: row.translation_state ?? 'pending', sourceEndMs: row.end_ms ?? null,
+    asrSentenceId: row.asr_sentence_id != null ? String(row.asr_sentence_id) : null
   };
 }
 
@@ -145,6 +146,7 @@ export function createCaptionController(options = {}) {
       mode = 'FOLLOW'; focusSequence = null; focusStartedAt = null; reorderStartedAt = null;
       cancelWake(); onChange();
     },
+    getRows(runId) { return runId == null || (run && run.runId === runId) ? currentRows().slice() : rows(runId).slice(); },
     onFinal(entry, generation) {
       if (!timelines.has(entry.runId)) return { ignored: true }; // 未跟踪的 run：不属于本视图
       const list = rows(entry.runId);
@@ -162,7 +164,7 @@ export function createCaptionController(options = {}) {
         sourceEndMs: entry.sourceEndMs ?? null, everFocused: false, bypassed: false };
       insertSorted(list, item);
       trim(list);
-      if (draft && draft.sentenceId != null && draft.sentenceId === entry.segmentId) draft = null;
+      if (draft && draft.sentenceId != null && (draft.sentenceId === entry.segmentId || draft.sentenceId === entry.asrSentenceId)) draft = null;
       if (isCurrentRun(entry.runId) && generation === run.generation) scheduleTick();
       else onChange();
       return { item };
@@ -228,6 +230,7 @@ export function createCaptionController(options = {}) {
         runId: run?.runId ?? null, generation: run?.generation ?? null,
         focus, focusStartedAt,
         recent: list.slice(-params.visibleRecentItems),
+        items: list,
         draft, counts: { newer, bypassed, total: list.length,
           pending: list.filter(it => it.translationState === 'pending').length },
         hint

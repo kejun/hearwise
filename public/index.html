@@ -24,9 +24,15 @@
       </div>
 
       <section class="caption-stage" aria-label="实时字幕" aria-live="polite">
-        <div class="caption-head"><span>译文</span><label class="size-control"><span class="a-small" aria-hidden="true">A</span><input id="translation-size" type="range" min="30" max="70" step="1" value="50" aria-label="译文字号" /><span class="a-big" aria-hidden="true">A</span></label><span class="caption-badge" id="caption-badge">等待开始</span></div>
+        <div class="caption-head"><span>译文</span><label class="size-control"><span class="a-small" aria-hidden="true">A</span><input id="translation-size" type="range" min="30" max="70" step="1" value="50" aria-label="译文字号" /><span class="a-big" aria-hidden="true">A</span></label><span class="caption-head-right"><button class="follow-toggle" id="pause-follow" type="button" hidden>暂停跟随</button><span class="caption-badge" id="caption-badge">等待开始</span></span></div>
         <p class="translation placeholder" id="translation">字幕会显示在这里</p>
+        <button class="expand-focus" id="expand-focus" type="button" hidden>阅读全文</button>
+        <p class="caption-hint" id="caption-hint" role="status" hidden></p>
         <div class="original-wrap"><span class="original-label">原文</span><p class="original placeholder" id="original">开始聆听后，实时识别的文字会出现。</p></div>
+        <p class="draft-line" id="draft-line" hidden><span class="draft-label">识别中</span><span class="draft-text" id="draft-text"></span></p>
+        <div class="caption-timeline" id="caption-timeline" hidden aria-label="最近句子"></div>
+        <button class="resume-follow" id="resume-follow" type="button" hidden>回到最新</button>
+        <p class="bypass-note" id="bypass-note" hidden></p>
       </section>
       <div class="pinned-caption" id="pinned-caption" hidden aria-hidden="true">
         <div class="caption-head"><span>译文</span><span class="caption-badge" id="pinned-badge">等待开始</span></div>
@@ -84,7 +90,8 @@
           <span class="arrow" aria-hidden="true">→</span>
           <label class="language-field"><span>翻译成</span><select id="target-language"><option value="Chinese">简体中文</option><option value="English">英语</option><option value="Japanese">日语</option><option value="Korean">韩语</option></select></label>
         </div>
-        <p class="modal-copy tab-hint">语言设置仅在聆听未开始时可修改；开始聆听后会自动锁定。</p>
+        <label class="language-field mode-field"><span>字幕模式</span><select id="caption-mode"><option value="realtime">实时字幕（焦点跟随，可回看）</option><option value="classic">经典模式（单句临时翻译）</option></select></label>
+        <p class="modal-copy tab-hint">语言与字幕模式仅在聆听未开始时可修改；开始聆听后会自动锁定，字幕模式在下次开始聆听时生效。</p>
       </section>
     </div>
   </div>
