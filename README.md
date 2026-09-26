@@ -19,12 +19,23 @@ npm run dev
 
 ## 接口说明
 
-- 实时识别使用阿里云 WebSocket 的 `run-task → 音频流 → finish-task` 流程。浏览器经 AudioWorklet 采集单声道 PCM，并转为 16 kHz / 16 bit。标签页模式使用浏览器的 `getDisplayMedia` 获取音轨；浏览器授权时会同时提供画面轨道，但应用只处理并发送音频。若浏览器只返回画面而没有音轨，页面会提示重新选择带音频的标签页。
-- 翻译使用 Qwen-MT 的 OpenAI 兼容接口。识别中的句子约每 1.8 秒更新一次译文，句子结束后立即发起最终翻译，因此译文可能比原文稍晚。
+- 实时识别使用阿里云 WebSocket 的 `run-task → 音频流 → finish-task` 流程。浏览器经 AudioWorklet 采集单声道 PCM，并转为 16 kHz / 16 bit。停止聆听时前端会向 Worklet 发送 `flush` 指令，把不满一包的尾样本发出并等待 `flushed` 回执（最多 400ms），尽量不丢句尾音频。标签页模式使用浏览器的 `getDisplayMedia` 获取音轨；浏览器授权时会同时提供画面轨道，但应用只处理并发送音频。若浏览器只返回画面而没有音轨，页面会提示重新选择带音频的标签页。
+- 翻译使用 Qwen-MT 的 OpenAI 兼容接口。实时字幕模式下，识别中的句子只在草稿区显示原文、不做临时翻译；句子结束后立即发起最终翻译，译文可能比原文稍晚，焦点区会自动补齐。经典模式则对识别中的句子约每 1.8 秒更新一次临时译文。
 - 翻译 HTTP Base URL 是 `https://maas.qianwenaiapi.com/compatible-mode/v1`；实时识别需使用对应的 WebSocket 地址 `wss://maas.qianwenaiapi.com/api-ws/v1/inference`。两者不能使用同一个协议 URL。
 - 阿里云会按模型用量计费；停止聆听后会结束识别任务。
 
 相关文档：[千问AI平台 OpenAI 兼容接口](https://platform.qianwenai.com/docs/api-reference/toolkitframework/openai-compatible/overview)、[实时语音识别](https://platform.qianwenai.com/docs/developer-guides/speech/asr-realtime)、[客户端事件](https://platform.qianwenai.com/docs/api-reference/speech-recognition/fun-asr-realtime/client-events)。
+
+## 实时字幕模式
+
+默认为「实时字幕」模式（设置 → 语言设置中可切换，下次开始聆听生效，也可切回「经典模式」）：
+
+- **焦点区**：始终显示当前最新一句的大字译文；译文未就绪时显示原文和「翻译中」，就绪后原地补齐，不被后续句子清空。
+- **草稿区**：识别中的 partial 文本以弱化样式显示在原文下方（约 120ms 合并刷新），final 到达后自动清除。
+- **时间线**：焦点区下方列出最近句子；向上滚动、点击句子或点「暂停跟随」进入回看（REVIEW），焦点不再自动切换；点「回到最新」恢复跟随。翻译落后较多时，落后的句子会被旁路并提示「部分内容未逐条展示，可在时间线回看」。
+- **停止后补齐**：停止聆听后仍在处理的译文会定点刷新（按 ID 批量查询），不依赖整页轮询。
+
+经典模式保留旧行为：识别中的句子做临时翻译，单句大字显示，无时间线。
 
 ## 收听历史
 
