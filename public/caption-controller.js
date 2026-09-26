@@ -16,7 +16,7 @@ const TRIM_BEHIND_FOCUS = 10;
 export function entryFromSegment(row) {
   return {
     listeningId: row.listening_id, runId: row.run_id, segmentId: row.id,
-    sequence: row.sequence_no, source: row.original_text, target: row.translated_text ?? null,
+    sequence: row.sequence_no, source: row.original_text, target: row.translation_text ?? null,
     translationState: row.translation_state ?? 'pending', sourceEndMs: row.end_ms ?? null,
     asrSentenceId: row.asr_sentence_id != null ? String(row.asr_sentence_id) : null
   };

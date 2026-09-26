@@ -148,3 +148,20 @@ test('GET /api/listenings/:id/segments 参数校验与实时补齐查询', async
   assert.equal((await get('?beforeSequence=0')).status, 400);
   assert.equal((await fetch(`${base}/api/listenings/${'0'.repeat(8)}-0000-0000-0000-000000000000/segments`)).status, 404);
 });
+
+test('契约：真实 DB 行经 entryFromSegment 后译文非空（防止列名漂移）', async () => {
+  const { entryFromSegment } = await import('../public/caption-controller.js');
+  const dir = mkdtempSync(path.join(tmpdir(), 'asr-contract-'));
+  const store = new ListeningStore(path.join(dir, 'data.sqlite'));
+  try {
+    const run = store.createRun(null, settings, '契约');
+    const { segment } = store.addSegment(run.listeningId, run.runId, { id: 'c1', text: 'Hello world.', endMs: 900 });
+    store.setTranslation(segment.id, '你好，世界。', false);
+    const row = store.segmentsQuery(run.listeningId, { runId: run.runId, latest: 10 }).items[0];
+    const entry = entryFromSegment(row);
+    assert.equal(entry.target, '你好，世界。');
+    assert.equal(entry.translationState, 'complete');
+    assert.equal(entry.source, 'Hello world.');
+    assert.equal(entry.asrSentenceId, 'c1');
+  } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
+});

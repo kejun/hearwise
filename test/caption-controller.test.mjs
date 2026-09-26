@@ -231,7 +231,7 @@ test('草稿区独立：partial 只进 draft，对应 final 到达后清空', ()
 
 test('entryFromSegment 归一化数据库行', () => {
   const entry = entryFromSegment({ listening_id: 'l', run_id: 'r', id: 's', sequence_no: 3,
-    original_text: 'hi', translated_text: '你好', translation_state: 'complete', end_ms: 1200, asr_sentence_id: 7 });
+    original_text: 'hi', translation_text: '你好', translation_state: 'complete', end_ms: 1200, asr_sentence_id: 7 });
   assert.deepEqual(entry, { listeningId: 'l', runId: 'r', segmentId: 's', sequence: 3,
     source: 'hi', target: '你好', translationState: 'complete', sourceEndMs: 1200, asrSentenceId: '7' });
 });
