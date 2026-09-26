@@ -25,9 +25,11 @@ const els = {
   resumeFollow: $('resume-follow'), bypassNote: $('bypass-note'), captionMode: $('caption-mode')
 };
 
+// 出于安全考虑，API Key 不再持久化到 localStorage（避免被 XSS/恶意脚本读取），仅保存在内存中，每次会话需重新输入
 const saved = {
-  key: localStorage.getItem('tongsheng:qianwen-key') || ''
+  key: ''
 };
+localStorage.removeItem('tongsheng:qianwen-key');
 localStorage.removeItem('tongsheng:key');
 localStorage.removeItem('tongsheng:region');
 els.apiKey.value = saved.key;
@@ -277,7 +279,6 @@ els.settingsForm.addEventListener('submit', event => {
   event.preventDefault();
   saved.key = els.apiKey.value.trim();
   if (!saved.key) return;
-  localStorage.setItem('tongsheng:qianwen-key', saved.key);
   const shouldStart = startAfterSave;
   const shouldRetry = retryAfterSave;
   closeSettings();
