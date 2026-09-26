@@ -85,7 +85,7 @@ test('ASR 断句参数按 run 下发、被拒时显式回退、事件携带 runI
   assert.match(ready.runId, /^[0-9a-f-]{36}$/);
   const params = runTaskPayloads.at(-1);
   assert.equal(params.semantic_punctuation_enabled, false);
-  assert.equal(params.max_sentence_silence, 900);
+  assert.equal(params.max_sentence_silence, 1500);
   assert.equal(params.multi_threshold_mode_enabled, true);
   realtime.ws.send(Buffer.from([0, 0]));
   await waitFor(() => realtime.events.some(e => e.type === 'segment-final'));
