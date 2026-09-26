@@ -26,8 +26,9 @@ const els = {
 };
 
 const saved = {
-  key: localStorage.getItem('tongsheng:qianwen-key') || ''
+  key: ''
 };
+localStorage.removeItem('tongsheng:qianwen-key');
 localStorage.removeItem('tongsheng:key');
 localStorage.removeItem('tongsheng:region');
 els.apiKey.value = saved.key;
@@ -277,7 +278,6 @@ els.settingsForm.addEventListener('submit', event => {
   event.preventDefault();
   saved.key = els.apiKey.value.trim();
   if (!saved.key) return;
-  localStorage.setItem('tongsheng:qianwen-key', saved.key);
   const shouldStart = startAfterSave;
   const shouldRetry = retryAfterSave;
   closeSettings();
