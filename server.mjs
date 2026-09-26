@@ -16,7 +16,7 @@ const model = 'qwen-audio-3.0-asr-flash-streaming';
 const asrEndpoint = process.env.ASR_ENDPOINT || 'wss://maas.qianwenaiapi.com/api-ws/v1/inference';
 const mtEndpoint = process.env.MT_ENDPOINT || 'https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions';
 const types = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8',
-  '/audio-processor.js': 'text/javascript; charset=utf-8', '/caption-controller.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8' };
+  '/audio-processor.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8' };
 const targets = ['Chinese', 'English', 'Japanese', 'Korean'];
 const sources = ['auto', 'zh', 'en', 'ja', 'ko'];
 const audioSources = ['microphone', 'tab'];

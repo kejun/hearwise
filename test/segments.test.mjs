@@ -149,8 +149,7 @@ test('GET /api/listenings/:id/segments 参数校验与实时补齐查询', async
   assert.equal((await fetch(`${base}/api/listenings/${'0'.repeat(8)}-0000-0000-0000-000000000000/segments`)).status, 404);
 });
 
-test('契约：真实 DB 行经 entryFromSegment 后译文非空（防止列名漂移）', async () => {
-  const { entryFromSegment } = await import('../public/caption-controller.js');
+test('契约：真实 DB 行含前端 displayFinal 直接消费的字段（防止列名漂移）', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'asr-contract-'));
   const store = new ListeningStore(path.join(dir, 'data.sqlite'));
   try {
@@ -158,10 +157,11 @@ test('契约：真实 DB 行经 entryFromSegment 后译文非空（防止列名�
     const { segment } = store.addSegment(run.listeningId, run.runId, { id: 'c1', text: 'Hello world.', endMs: 900 });
     store.setTranslation(segment.id, '你好，世界。', false);
     const row = store.segmentsQuery(run.listeningId, { runId: run.runId, latest: 10 }).items[0];
-    const entry = entryFromSegment(row);
-    assert.equal(entry.target, '你好，世界。');
-    assert.equal(entry.translationState, 'complete');
-    assert.equal(entry.source, 'Hello world.');
-    assert.equal(entry.asrSentenceId, 'c1');
+    // app.js displayFinal() 直接读取这些 snake_case 字段；缺任一即字幕渲染会出错
+    assert.equal(row.translation_text, '你好，世界。');
+    assert.equal(row.translation_state, 'complete');
+    assert.equal(row.original_text, 'Hello world.');
+    assert.equal(row.asr_sentence_id, 'c1');
+    assert.equal(row.id, segment.id);
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });

@@ -97,14 +97,14 @@ ASR 最终原文一经写入就不依赖后续模型成功。模型任务状态�
 | `GET /api/listenings/:id` | 返回收听信息、片段和知识概览；句子通过分页参数逐页获取。 |
 | `POST /api/listenings/:id/retry` | 在浏览器提供 Key 后，重试该记录中失败或中断的翻译与抽取任务。 |
 | `GET /api/listenings/:id/export?kind=original\|translation` | 把该记录全部句子的原文或已完成译文按顺序合并为 txt 附件下载，不受句子分页限制。 |
-| `GET /api/listenings/:id/segments` | 范围查询最终句：`runId` 限定片段（服务端校验归属）、`latest=N`（1-200）、`afterSequence=N`+`limit`、`beforeSequence=N`+`limit`（limit 1-200，默认 50）、`ids=`（1-50 个 UUID）。返回按 `sequence_no` 升序的 `items`、范围内 `total` 与 `pending` 数，用于实时时间线恢复与停止后定点补齐。 |
+| `GET /api/listenings/:id/segments` | 范围查询最终句：`runId` 限定片段（服务端校验归属）、`latest=N`（1-200）、`afterSequence=N`+`limit`、`beforeSequence=N`+`limit`（limit 1-200，默认 50）、`ids=`（1-50 个 UUID）。返回按 `sequence_no` 升序的 `items`、范围内 `total` 与 `pending` 数，用于停止后定点补齐当前句译文与「收听历史」分页。 |
 | WebSocket `start` | 携带新建／继续所需的 ID 和语言设置；`captionMode` 取 `realtime`（默认，向 ASR 下发低延迟断句参数，被拒时显式回退旧参数重连一次）或 `classic`（不带断句参数）。 |
 | WebSocket `listening-ready` | 回传已创建的收听 ID、片段 ID 与本次生效的 `captionMode`。 |
 | WebSocket `segment-final`、`translation-updated`、`knowledge-upserted` | 推送各阶段独立完成的结果；每个事件携带稳定 ID，前端按 ID 更新。`sentence`、`segment-final`、`translation-updated` 均带 `runId`，供前端丢弃过期连接的迟到事件。 |
 
 翻译调度（`translation-queue.mjs`）：实时最终句与后台补齐共享总并发 2。活跃 run 最近 2 个待译最终句优先并按源序启动，其余最终句与历史重试按 FIFO；连续派发 3 个实时任务后，若最老后台任务已等待 ≥10 秒，下一槽位让给它防饥饿。内存任务清单上限 500，超限丢弃最老后台任务（SQLite pending 状态与「继续处理」可完整恢复）。旧的临时翻译接口 `/api/translate` 并入同一额度，忙时返回 429。
 
-前端焦点调度（`public/caption-controller.js`，纯逻辑模块，时钟注入可测）：维护 FOLLOW/REVIEW 两种模式。FOLLOW 下焦点推进到「译文已完成」的最新行；焦点行译文未就绪时等待 250ms 缺口宽限（吸收事件乱序），超时则先行推进并显示「翻译中」，译文到达后原地补齐。翻译落后 ≥3 句时旁路中间句（标记 bypassed，提示可回看）。REVIEW 由用户上滚时间线、点击句子或「暂停跟随」触发，焦点冻结；「回到最新」跳回 FOLLOW 并重置 newer 计数。行内存上限 500，DOM 只渲染最近 50 条（keyed patch + 滚动锚点，不整体重建）。所有事件按 `(listeningId, runId, segmentId)` 三元组归属，连接级 generation 防止旧 timer/迟到事件污染新会话；停止后由 `pollRunPending` 按 `ids` 批量补齐 pending/failed 行。partial 草稿仅进弱化草稿区（120ms 合并刷新），final 到达即清除；实时模式不再发起临时翻译。
+前端字幕渲染（`public/app.js`，无独立控制器模块）：单句大字幕，焦点始终跟随最新一句。说话时 partial 原文实时上屏，约每 1.2 秒经 `/api/translate` 更新一次临时译文（加 `.provisional` 类、角标显示「临时译文」）；句子结束（`segment-final`）由服务端排队最终翻译，final 到达前保留同句临时译文（角标转「翻译中」），`translation-updated` 到达后原地替换为最终译文（角标「已完成」），全程不清空、不闪烁、不被后续句子打断。译文文字统一纯黑，临时/最终仅由角标文案区分。连接级 `connectionGeneration` 防止旧 timer/迟到事件污染新会话；停止后若当前句译文仍 `pending`，由 `pollCurrentSegment` 按 `ids` 定点轮询自动补齐，无需手动刷新。完整句子历史在「收听历史」页查看，不再维护实时时间线或回看（REVIEW）模式。
 
 收听页增加「新建收听」「历史收听」入口和可收起的知识区域，大字幕区域保持主要位置。历史页显示所有片段与知识，提供「继续收听」；若有失败或中断的模型任务，提供「继续处理」。收听进行中通过 WebSocket 更新；停止后若仍有后台任务，可短时轮询详情接口直到任务完成，以免 ASR WebSocket 关闭后遗漏知识更新。新增写入接口需要校验同源请求；若未来开放到局域网或公网，必须先补身份验证和历史数据隔离。
 

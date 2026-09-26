@@ -1,5 +1,3 @@
-import { createCaptionController, entryFromSegment } from './caption-controller.js';
-
 const $ = id => document.getElementById(id);
 const els = {
   toggle: $('toggle'), toggleLabel: $('toggle-label'), micIcon: $('mic-icon'), tabIcon: $('tab-icon'),
@@ -19,10 +17,7 @@ const els = {
   recordPanel: $('record-panel'), recordTitle: $('record-title'), processingStatus: $('processing-status'),
   retryProcessing: $('retry-processing'), knowledgeList: $('knowledge-list'), knowledgeCount: $('knowledge-count'),
   transcriptList: $('transcript-list'), runsList: $('runs-list'), loadMore: $('load-more'), downloadSelect: $('download-select'),
-  sizeSlider: $('translation-size'),
-  pauseFollow: $('pause-follow'), expandFocus: $('expand-focus'), captionHint: $('caption-hint'),
-  draftLine: $('draft-line'), draftText: $('draft-text'), captionTimeline: $('caption-timeline'),
-  resumeFollow: $('resume-follow'), bypassNote: $('bypass-note'), captionMode: $('caption-mode')
+  sizeSlider: $('translation-size'), captionMode: $('caption-mode')
 };
 
 const saved = {
@@ -70,7 +65,7 @@ let retryAfterSave = false;
 const liveSegments = new Map();
 const liveKnowledge = new Map();
 
-// —— 实时字幕模式（issue #1）：焦点调度器 + generation 防跨会话污染 ——
+// —— 字幕模式：UI 统一为"单句大字幕跟随说话人"；captionMode 只决定服务端 ASR 断句参数 ——
 const CAPTION_MODE_KEY = 'tongsheng:caption-mode';
 let captionMode = localStorage.getItem(CAPTION_MODE_KEY) === 'classic' ? 'classic' : 'realtime';
 els.captionMode.value = captionMode;
@@ -78,42 +73,14 @@ els.captionMode.addEventListener('change', () => {
   captionMode = els.captionMode.value === 'classic' ? 'classic' : 'realtime';
   localStorage.setItem(CAPTION_MODE_KEY, captionMode);
 });
-const isRealtime = () => captionMode === 'realtime';
-let connectionGeneration = 0;
+let connectionGeneration = 0; // 每次连接递增；旧连接的事件/定时器不得污染新会话
 let activeRunId = null;
-let focusExpanded = false;
-let renderQueued = false;
-const controller = createCaptionController({
-  onChange: () => queueRender(),
-  onFocus: () => { focusExpanded = false; }
-});
-function queueRender() {
-  if (renderQueued) return;
-  renderQueued = true;
-  requestAnimationFrame(() => { renderQueued = false; renderCaption(); });
-}
-// partial 草稿：100–150ms 合并刷新，只保留最新草稿
-let draftPending = null, draftTimer = null, lastDraftAt = 0;
-function pushDraft(id, text) {
-  draftPending = { sentenceId: String(id), text };
-  const wait = Math.max(0, 120 - (performance.now() - lastDraftAt));
-  if (!wait) flushDraft();
-  else if (!draftTimer) draftTimer = setTimeout(flushDraft, wait);
-}
-function flushDraft() {
-  clearTimeout(draftTimer); draftTimer = null;
-  if (!draftPending) return;
-  lastDraftAt = performance.now();
-  controller.onDraft(draftPending); draftPending = null;
-}
-function cancelDraft() {
-  clearTimeout(draftTimer); draftTimer = null; draftPending = null;
-  controller.clearDraft();
-}
+let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
 
 function syncPinnedCaption() {
   els.pinnedTranslation.textContent = els.translation.textContent;
   els.pinnedTranslation.classList.toggle('placeholder', els.translation.classList.contains('placeholder'));
+  els.pinnedTranslation.classList.toggle('provisional', els.translation.classList.contains('provisional'));
   els.pinnedBadge.textContent = els.badge.textContent;
 }
 
@@ -299,7 +266,7 @@ function scheduleTranslation(text, final) {
   pendingText = text;
   if (final) clearTranslationWork();
   else if (translationTimer) return;
-  const delay = final ? 0 : Math.max(0, lastTranslationAt + 1800 - Date.now());
+  const delay = final ? 0 : Math.max(0, lastTranslationAt + 1200 - Date.now());
   translationTimer = setTimeout(async () => {
     translationTimer = null;
     translationRequest?.abort();
@@ -322,7 +289,9 @@ function scheduleTranslation(text, final) {
       if (version !== translationVersion) return;
       els.translation.textContent = result.text.trim() || input;
       els.translation.classList.remove('placeholder');
-      els.badge.textContent = phase === 'listening' ? '实时更新' : '已完成';
+      els.translation.classList.add('provisional'); // 临时译文视觉标记，final 到达时移除
+      provisionalFor = { sentenceId: String(currentSentenceId) };
+      els.badge.textContent = '临时译文';
     } catch (error) {
       if (error.name === 'AbortError' || version !== translationVersion) return;
       els.badge.textContent = '翻译失败';
@@ -333,12 +302,13 @@ function scheduleTranslation(text, final) {
 
 function receiveSentence(message) {
   if (typeof message.text !== 'string' || !message.text.trim()) return;
-  if (isRealtime()) { pushDraft(message.id, message.text); return; } // partial 仅进弱化草稿区，不触发临时翻译
-  if (message.id !== currentSentenceId) {
+  if (message.id !== currentSentenceId) { // 新句开始：焦点立即跟随说话人，原文先行
     currentSentenceId = message.id;
     currentSegmentId = null;
+    provisionalFor = null;
     els.translation.textContent = '正在翻译…';
     els.translation.classList.add('placeholder');
+    els.translation.classList.remove('provisional');
   }
   els.original.textContent = message.text;
   els.original.classList.remove('placeholder');
@@ -351,131 +321,47 @@ function displayFinal(segment) {
   currentSegmentId = segment.id;
   els.original.textContent = segment.original_text;
   els.original.classList.remove('placeholder');
-  els.translation.textContent = segment.translation_text || (segment.translation_state === 'failed' ? '翻译失败，可点击继续处理' : '正在翻译…');
-  els.translation.classList.toggle('placeholder', !segment.translation_text);
-  els.badge.textContent = segment.translation_state === 'failed' ? '翻译失败' : segment.translation_text ? '已完成' : '翻译中';
+  if (segment.translation_text) { // final 译文到达：无缝替换临时译文
+    provisionalFor = null;
+    els.translation.textContent = segment.translation_text;
+    els.translation.classList.remove('placeholder');
+    els.translation.classList.remove('provisional');
+    els.badge.textContent = '已完成';
+  } else if (segment.translation_state === 'failed') {
+    provisionalFor = null;
+    els.translation.textContent = '翻译失败，可点击继续处理';
+    els.translation.classList.add('placeholder');
+    els.translation.classList.remove('provisional');
+    els.badge.textContent = '翻译失败';
+  } else if (provisionalFor && provisionalFor.sentenceId === String(segment.asr_sentence_id)) {
+    els.badge.textContent = '翻译中'; // 保留同句临时译文，避免闪回占位
+  } else {
+    els.translation.textContent = '正在翻译…';
+    els.translation.classList.add('placeholder');
+    els.translation.classList.remove('provisional');
+    els.badge.textContent = '翻译中';
+  }
 }
 
-// —— 实时字幕视图渲染：焦点区/草稿区/时间线/REVIEW 控件（keyed DOM patch，不整体重建） ——
-const timelineNodes = new Map();
-const HINT_TEXT = { 'translating': '翻译中…', 'slow-translation': '译文处理较慢，稍后会自动补齐', 'waiting-next': '等待下一句…' };
-function showRealtimeUI(on) {
-  els.captionTimeline.hidden = !on;
-  els.pauseFollow.hidden = !on;
-  if (!on) {
-    els.draftLine.hidden = true; els.resumeFollow.hidden = true; els.bypassNote.hidden = true;
-    els.captionHint.hidden = true; els.expandFocus.hidden = true;
-    els.captionStage.classList.remove('review');
-  }
-}
-function renderCaption() {
-  if (!isRealtime()) return;
-  const state = controller.getState();
-  const f = state.focus;
-  if (f) {
-    els.original.textContent = f.source;
-    els.original.classList.remove('placeholder');
-    if (f.translationState === 'complete') {
-      els.translation.textContent = f.target;
-      els.translation.classList.remove('placeholder');
-    } else {
-      els.translation.textContent = f.translationState === 'failed' ? '翻译失败，可点击继续处理' : '正在翻译…';
-      els.translation.classList.add('placeholder');
-    }
-    const long = f.translationState === 'complete' && (f.target || '').length > 120;
-    els.expandFocus.hidden = !long || focusExpanded;
-    els.translation.classList.toggle('clamped', long && !focusExpanded);
-    els.badge.textContent = f.translationState === 'complete' ? (phase === 'listening' ? '实时更新' : '已完成')
-      : f.translationState === 'failed' ? '翻译失败' : '翻译中';
-  }
-  if (state.hint && (phase === 'listening' || f)) { els.captionHint.textContent = HINT_TEXT[state.hint] || ''; els.captionHint.hidden = false; }
-  else els.captionHint.hidden = true;
-  if (state.draft?.text) { els.draftText.textContent = state.draft.text; els.draftLine.hidden = false; }
-  else els.draftLine.hidden = true;
-  const review = state.mode === 'REVIEW';
-  els.captionStage.classList.toggle('review', review);
-  els.pauseFollow.textContent = review ? '回到最新' : '暂停跟随';
-  els.resumeFollow.hidden = !review;
-  if (review) els.resumeFollow.textContent = state.counts.newer > 0 ? `有 ${state.counts.newer} 条更新 · 回到最新` : '回到最新';
-  els.bypassNote.hidden = !(state.counts.bypassed > 0);
-  if (state.counts.bypassed > 0) els.bypassNote.textContent = `部分内容（${state.counts.bypassed} 句）未逐条展示，可在时间线回看`;
-  renderTimeline(state);
-}
-function renderTimeline(state) {
-  const c = els.captionTimeline;
-  if (c.hidden) return;
-  const items = state.items.slice(-50); // DOM 有界：最多渲染最近 50 条
-  const seen = new Set(items.map(it => it.segmentId));
-  for (const [id, node] of timelineNodes) if (!seen.has(id)) { node.remove(); timelineNodes.delete(id); }
-  const anchor = c.scrollHeight - c.scrollTop; // 滚动锚点：上方卡片增高不造成阅读跳位
-  let prev = null;
-  for (const it of items) {
-    let node = timelineNodes.get(it.segmentId);
-    if (!node) {
-      node = el('article', 'tl-row');
-      node.append(el('p', 'tl-target'), el('p', 'tl-source'));
-      node.addEventListener('click', () => {
-        if (controller.mode === 'FOLLOW') enterReviewUI();
-        node.classList.toggle('expanded');
-      });
-      timelineNodes.set(it.segmentId, node);
-    }
-    const [target, source] = node.children;
-    const targetText = it.translationState === 'complete' ? it.target
-      : it.translationState === 'failed' ? '翻译失败' : '等待翻译…';
-    if (target.textContent !== targetText) target.textContent = targetText;
-    if (source.textContent !== it.source) source.textContent = it.source;
-    node.classList.toggle('focused', state.focus?.segmentId === it.segmentId);
-    node.classList.toggle('pending', it.translationState !== 'complete');
-    node.classList.toggle('bypassed', !!it.bypassed);
-    if (node.previousElementSibling !== prev) { if (prev) prev.after(node); else c.prepend(node); }
-    prev = node;
-  }
-  if (state.mode === 'FOLLOW') c.scrollTop = c.scrollHeight;
-  else c.scrollTop = c.scrollHeight - anchor;
-}
-function enterReviewUI() {
-  controller.enterReview();
-  renderCaption();
-}
-function resumeFollowUI() {
-  controller.backToLatest();
-  renderCaption();
-}
-els.pauseFollow.addEventListener('click', () => controller.mode === 'REVIEW' ? resumeFollowUI() : enterReviewUI());
-els.resumeFollow.addEventListener('click', resumeFollowUI);
-els.expandFocus.addEventListener('click', () => {
-  focusExpanded = true;
-  if (controller.mode === 'FOLLOW') controller.enterReview(); // 展开全文属于 REVIEW，防止阅读时被切走
-  renderCaption();
-});
-// 用户向上滚动/触摸时间线 → 进入 REVIEW（程序滚动不触发：FOLLOW 下始终贴底）
-const checkUserScrollUp = () => {
-  if (!isRealtime() || controller.mode !== 'FOLLOW') return;
-  const c = els.captionTimeline;
-  if (!c.hidden && c.scrollHeight - c.scrollTop - c.clientHeight > 24) enterReviewUI();
-};
-els.captionTimeline.addEventListener('wheel', () => requestAnimationFrame(checkUserScrollUp), { passive: true });
-els.captionTimeline.addEventListener('touchmove', () => requestAnimationFrame(checkUserScrollUp), { passive: true });
-
-// 停止后补齐：按 ids 批量刷新 pending/failed 行（不依赖第一页轮询）
-let pendingPollTimer = null;
-function pollRunPending(gen) {
-  clearInterval(pendingPollTimer);
-  if (!isRealtime() || !listeningId || !activeRunId) return;
+// 停止后补齐：当前显示句的 final 译文到达时自动更新焦点字幕（无需点击）
+let segmentPollTimer = null;
+function pollCurrentSegment(gen) {
+  clearInterval(segmentPollTimer);
+  if (!listeningId || !currentSegmentId || !activeRunId) return;
+  const segId = currentSegmentId;
   let rounds = 0;
-  pendingPollTimer = setInterval(async () => {
-    if (gen !== connectionGeneration || ++rounds > 100) { clearInterval(pendingPollTimer); return; }
-    const rows = controller.getRows(activeRunId).filter(it => it.translationState !== 'complete');
-    if (!rows.length) { clearInterval(pendingPollTimer); return; }
+  segmentPollTimer = setInterval(async () => {
+    if (gen !== connectionGeneration || ++rounds > 90) { clearInterval(segmentPollTimer); return; }
     try {
-      const ids = rows.slice(0, 50).map(it => it.segmentId).join(',');
-      const response = await fetch(`/api/listenings/${listeningId}/segments?runId=${encodeURIComponent(activeRunId)}&ids=${encodeURIComponent(ids)}`);
+      const response = await fetch(`/api/listenings/${listeningId}/segments?runId=${encodeURIComponent(activeRunId)}&ids=${segId}`);
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || '补齐查询失败');
-      for (const row of result.items || []) controller.onTranslation(entryFromSegment(row), gen);
-    } catch { /* 下一轮重试；服务端 pending 状态是最终依据 */ }
-  }, 3000);
+      if (!response.ok) return;
+      const row = (result.items || [])[0];
+      if (!row || row.translation_state === 'pending') return; // 等下一轮
+      clearInterval(segmentPollTimer);
+      if (gen === connectionGeneration && currentSegmentId === segId) displayFinal(row);
+    } catch { /* 下一轮重试 */ }
+  }, 2000);
 }
 
 function formatTime(value) {
@@ -651,18 +537,16 @@ async function selectListening(id) {
 }
 function resetListening() {
   clearInterval(pollingTimer);
-  clearInterval(pendingPollTimer);
+  clearInterval(segmentPollTimer);
   listeningId = null; detail = null; detailPage = 0; currentSentenceId = null; currentSegmentId = null;
-  activeRunId = null;
+  activeRunId = null; provisionalFor = null;
   liveSegments.clear(); liveKnowledge.clear();
   clearTranslationWork();
-  cancelDraft();
-  timelineNodes.clear(); els.captionTimeline.replaceChildren();
-  showRealtimeUI(false);
   els.recordPanel.hidden = true;
   els.original.textContent = '开始聆听后，实时识别的文字会出现。';
   els.translation.textContent = '字幕会显示在这里';
   els.original.classList.add('placeholder'); els.translation.classList.add('placeholder');
+  els.translation.classList.remove('provisional');
   els.source.value = 'en'; els.target.value = 'Chinese'; els.audioInput.value = 'microphone';
   clearError(); setPhase('idle');
 }
@@ -807,12 +691,6 @@ async function start() {
     if (phase !== 'connecting') return;
     setPhase('connecting', '正在连接千问AI平台…');
     const gen = ++connectionGeneration; // 所有回调绑定 generation，旧 timer/事件不得污染新会话
-    if (isRealtime()) {
-      focusExpanded = false;
-      timelineNodes.clear(); els.captionTimeline.replaceChildren();
-      els.translation.textContent = '字幕会显示在这里'; els.translation.classList.add('placeholder');
-      els.original.textContent = '开始聆听后，实时识别的文字会出现。'; els.original.classList.add('placeholder');
-    }
     const connection = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
     socket = connection;
     connection.addEventListener('open', () => connection.send(JSON.stringify({ type: 'start', key: saved.key, source: els.source.value, targetLang: els.target.value, audioSource: els.audioInput.value, listeningId, captionMode })));
@@ -820,21 +698,14 @@ async function start() {
       const message = JSON.parse(event.data);
       if (message.type === 'listening-ready') {
         listeningId = message.listeningId;
-        if (isRealtime() && gen === connectionGeneration) {
-          activeRunId = message.runId;
-          controller.startRun({ listeningId: message.listeningId, runId: message.runId, generation: gen });
-          showRealtimeUI(true);
-        }
+        if (gen === connectionGeneration) activeRunId = message.runId;
         setPhase('listening');
         fetchDetail().catch(error => showError(error.message));
       }
       if (message.type === 'sentence' && gen === connectionGeneration) receiveSentence(message);
       if (message.type === 'segment-final') {
         liveSegments.set(message.segment.id, message.segment);
-        if (isRealtime()) {
-          if (gen === connectionGeneration && draftPending?.sentenceId === String(message.segment.asr_sentence_id)) { draftPending = null; }
-          controller.onFinal(entryFromSegment(message.segment), gen); // 旧 run 只补历史，由控制器按三元组归属
-        } else if (gen === connectionGeneration) displayFinal(message.segment);
+        if (gen === connectionGeneration) displayFinal(message.segment);
         if (detail) {
           if (!detail.segments.some(s => s.id === message.segment.id)) detail.segments.push(message.segment);
           detail.segmentCount = Math.max(detail.segmentCount, message.segment.sequence_no);
@@ -843,8 +714,7 @@ async function start() {
       }
       if (message.type === 'translation-updated') {
         liveSegments.set(message.segment.id, message.segment);
-        if (isRealtime()) controller.onTranslation(entryFromSegment(message.segment), gen);
-        else if (gen === connectionGeneration && message.segment.id === currentSegmentId) displayFinal(message.segment);
+        if (gen === connectionGeneration && message.segment.id === currentSegmentId) displayFinal(message.segment);
         if (detail) {
           const index = detail.segments.findIndex(s => s.id === message.segment.id);
           if (index >= 0) detail.segments[index] = message.segment;
@@ -874,8 +744,8 @@ async function start() {
       }
       setPhase('idle');
       startPolling();
-      if (isRealtime() && gen === connectionGeneration) { cancelDraft(); pollRunPending(gen); renderCaption(); }
-      if (!els.translation.classList.contains('placeholder')) els.badge.textContent = '已完成';
+      if (gen === connectionGeneration) pollCurrentSegment(gen); // 当前句译文未到位时自动补齐，不需要点击
+      if (!els.translation.classList.contains('placeholder') && !els.translation.classList.contains('provisional')) els.badge.textContent = '已完成';
     });
   } catch (error) {
     await releaseAudio();
@@ -916,7 +786,6 @@ async function switchTab() {
 async function stop() {
   if (phase !== 'listening') return;
   setPhase('stopping');
-  cancelDraft();
   // 尾包 flush 确认：有限等待（400ms），超时记录丢尾风险而不是永远卡住
   if (processor && socket?.readyState === WebSocket.OPEN) {
     const workletPort = processor.port;
