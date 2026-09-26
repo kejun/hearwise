@@ -98,9 +98,11 @@ ASR 最终原文一经写入就不依赖后续模型成功。模型任务状态�
 | `POST /api/listenings/:id/retry` | 在浏览器提供 Key 后，重试该记录中失败或中断的翻译与抽取任务。 |
 | `GET /api/listenings/:id/export?kind=original\|translation` | 把该记录全部句子的原文或已完成译文按顺序合并为 txt 附件下载，不受句子分页限制。 |
 | `GET /api/listenings/:id/segments` | 范围查询最终句：`runId` 限定片段（服务端校验归属）、`latest=N`（1-200）、`afterSequence=N`+`limit`、`beforeSequence=N`+`limit`（limit 1-200，默认 50）、`ids=`（1-50 个 UUID）。返回按 `sequence_no` 升序的 `items`、范围内 `total` 与 `pending` 数，用于实时时间线恢复与停止后定点补齐。 |
-| WebSocket `start` | 携带新建／继续所需的 ID 和语言设置。 |
-| WebSocket `listening-ready` | 回传已创建的收听 ID、片段 ID。 |
-| WebSocket `segment-final`、`translation-updated`、`knowledge-upserted` | 推送各阶段独立完成的结果；每个事件携带稳定 ID，前端按 ID 更新。 |
+| WebSocket `start` | 携带新建／继续所需的 ID 和语言设置；`captionMode` 取 `realtime`（默认，向 ASR 下发低延迟断句参数，被拒时显式回退旧参数重连一次）或 `classic`（不带断句参数）。 |
+| WebSocket `listening-ready` | 回传已创建的收听 ID、片段 ID 与本次生效的 `captionMode`。 |
+| WebSocket `segment-final`、`translation-updated`、`knowledge-upserted` | 推送各阶段独立完成的结果；每个事件携带稳定 ID，前端按 ID 更新。`sentence`、`segment-final`、`translation-updated` 均带 `runId`，供前端丢弃过期连接的迟到事件。 |
+
+翻译调度（`translation-queue.mjs`）：实时最终句与后台补齐共享总并发 2。活跃 run 最近 2 个待译最终句优先并按源序启动，其余最终句与历史重试按 FIFO；连续派发 3 个实时任务后，若最老后台任务已等待 ≥10 秒，下一槽位让给它防饥饿。内存任务清单上限 500，超限丢弃最老后台任务（SQLite pending 状态与「继续处理」可完整恢复）。旧的临时翻译接口 `/api/translate` 并入同一额度，忙时返回 429。
 
 收听页增加「新建收听」「历史收听」入口和可收起的知识区域，大字幕区域保持主要位置。历史页显示所有片段与知识，提供「继续收听」；若有失败或中断的模型任务，提供「继续处理」。收听进行中通过 WebSocket 更新；停止后若仍有后台任务，可短时轮询详情接口直到任务完成，以免 ASR WebSocket 关闭后遗漏知识更新。新增写入接口需要校验同源请求；若未来开放到局域网或公网，必须先补身份验证和历史数据隔离。
 

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from './storage.mjs';
 import { extractKnowledge, splitFocusSegments } from './knowledge.mjs';
+import { createTranslationScheduler } from './translation-queue.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -19,11 +20,12 @@ const types = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; ch
 const targets = ['Chinese', 'English', 'Japanese', 'Korean'];
 const sources = ['auto', 'zh', 'en', 'ja', 'ko'];
 const audioSources = ['microphone', 'tab'];
+const captionModes = ['realtime', 'classic'];
+const asrSentenceSilenceMs = Math.min(2000, Math.max(200, Number(process.env.ASR_SENTENCE_SILENCE_MS || 900)));
 const keys = new Map();
 const listeners = new Map();
 const extractionTimers = new Map();
-const translationQueue = [];
-const translationQueued = new Set();
+const translations = createTranslationScheduler();
 let translating = 0;
 let interimTranslating = 0;
 let extracting = false;
@@ -123,20 +125,19 @@ function checkRecognition(key) {
 
 function maybeReleaseKey(id) {
   if (!id || listeners.get(id)?.size || extractionTimers.has(id) || extractingId === id ||
-      activeTranslations.get(id) || translationQueue.some(t => t.listeningId === id) || store.nextJob(id)) return;
+      activeTranslations.get(id) || translations.hasListening(id) || store.nextJob(id)) return;
   keys.delete(id);
 }
-function queueTranslation(segment, listeningId, target) {
-  if (segment.translation_state === 'complete' || translationQueued.has(segment.id)) return;
-  translationQueued.add(segment.id);
-  translationQueue.push({ segment, listeningId, target, enqueuedAt: Date.now() });
-  pumpTranslations();
+function queueTranslation(segment, listeningId, target, kind = 'background') {
+  if (segment.translation_state === 'complete') return;
+  if (translations.enqueue({ segment, listeningId, target, kind })) pumpTranslations();
 }
 function pumpTranslations() {
-  while (translating < 2 && translationQueue.length) {
-    const task = translationQueue.shift();
+  while (translating < translations.concurrency) {
+    const task = translations.next();
+    if (!task) break;
     const key = keys.get(task.listeningId);
-    if (!key) { translationQueued.delete(task.segment.id); continue; }
+    if (!key) continue;
     translating++;
     activeTranslations.set(task.listeningId, (activeTranslations.get(task.listeningId) || 0) + 1);
     (async () => {
@@ -144,13 +145,13 @@ function pumpTranslations() {
       try {
         const text = await translate(key, task.segment.original_text, task.target);
         updated = store.setTranslation(task.segment.id, text, false);
-        console.info('final_translation_ms', Date.now() - task.enqueuedAt);
+        console.info('final_translation_ms', Date.now() - task.enqueuedAt, task.kind);
       } catch (error) {
         updated = store.setTranslation(task.segment.id, null, true);
         logModelError('translation', error);
       } finally {
-        if (updated) broadcast(task.listeningId, { type: 'translation-updated', segment: updated });
-        translating--; translationQueued.delete(task.segment.id);
+        if (updated) broadcast(task.listeningId, { type: 'translation-updated', runId: updated.run_id, segment: updated });
+        translating--;
         activeTranslations.set(task.listeningId, activeTranslations.get(task.listeningId) - 1);
         if (!activeTranslations.get(task.listeningId)) activeTranslations.delete(task.listeningId);
         pumpTranslations(); pumpExtraction(); maybeReleaseKey(task.listeningId);
@@ -179,7 +180,7 @@ function pumpExtraction() {
   let job;
   for (const id of keys.keys()) { job = store.nextJob(id); if (job) break; }
   if (!job) return;
-  if ((translationQueue.length || translating || interimTranslating) && Date.now() - Date.parse(job.created_at) < extractionWaitMs) {
+  if ((translations.length || translating || interimTranslating) && Date.now() - Date.parse(job.created_at) < extractionWaitMs) {
     if (!extractionDeferred) extractionDeferred = setTimeout(() => { extractionDeferred = null; pumpExtraction(); }, 1000); return;
   }
   extracting = true; extractingId = job.listening_id;
@@ -238,7 +239,7 @@ const server = http.createServer(async (req, res) => {
       const { key, text, target = 'Chinese' } = await readJson(req);
       if (typeof key !== 'string' || !key.trim() || typeof text !== 'string' || !text.trim() || text.length > 3000 || !targets.includes(target))
         return sendJson(res, 400, { error: '翻译参数无效' });
-      if (translationQueue.length) return sendJson(res, 429, { error: '最终译文优先处理' });
+      if (translations.length || translating + interimTranslating >= translations.concurrency) return sendJson(res, 429, { error: '最终译文优先处理' });
       interimTranslating++;
       try { return sendJson(res, 200, { text: await translate(key.trim(), text.trim(), target) }); }
       finally { interimTranslating--; pumpExtraction(); }
@@ -261,11 +262,7 @@ const server = http.createServer(async (req, res) => {
       if (result === 'active') return sendJson(res, 409, { error: '请先停止这条收听，再删除记录' });
       clearTimeout(extractionTimers.get(match[1]));
       extractionTimers.delete(match[1]);
-      for (let i = translationQueue.length - 1; i >= 0; i--) {
-        if (translationQueue[i].listeningId !== match[1]) continue;
-        translationQueued.delete(translationQueue[i].segment.id);
-        translationQueue.splice(i, 1);
-      }
+      translations.remove(match[1]);
       keys.delete(match[1]);
       pumpExtraction();
       return sendJson(res, 200, { ok: true });
@@ -361,61 +358,83 @@ wss.on('connection', client => {
       return;
     }
     if (message.type !== 'start' || upstream) return;
-    const { source = 'en', targetLang = 'Chinese', audioSource = 'microphone' } = message;
+    const { source = 'en', targetLang = 'Chinese', audioSource = 'microphone', captionMode = 'realtime' } = message;
     if (typeof message.key !== 'string' || !message.key.trim() || !sources.includes(source) || !targets.includes(targetLang) ||
-        !audioSources.includes(audioSource) || (message.listeningId != null && !/^[0-9a-f-]{36}$/.test(message.listeningId))) {
+        !audioSources.includes(audioSource) || !captionModes.includes(captionMode) ||
+        (message.listeningId != null && !/^[0-9a-f-]{36}$/.test(message.listeningId))) {
       fail('请检查 API Key 和收听设置'); return;
     }
     key = message.key.trim(); listeningId = message.listeningId || null;
-    settings = { source, targetLang, audioSource };
-    taskId = randomUUID();
-    upstream = new WebSocket(asrEndpoint, { headers: { Authorization: `Bearer ${key}` }, handshakeTimeout: 12000 });
-    upstream.on('open', () => {
-      const parameters = { format: 'pcm', sample_rate: 16000, heartbeat: true };
-      if (source !== 'auto') parameters.language_hints = [source];
-      upstream.send(JSON.stringify({ header: { action: 'run-task', task_id: taskId, streaming: 'duplex' },
-        payload: { task_group: 'audio', task: 'asr', function: 'recognition', model, parameters, input: {} } }));
-    });
-    upstream.on('message', raw => {
-      let event; try { event = JSON.parse(raw.toString()); } catch { return; }
-      const kind = event.header?.event;
-      if (kind === 'task-started' && !started) {
-        if (client.readyState !== WebSocket.OPEN || stopping) { upstream.close(); return; }
-        try {
-          const title = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date());
-          run = store.createRun(listeningId, settings, title); listeningId = run.listeningId;
-          subscribe(listeningId, client); resumeProcessing(listeningId, key);
-          started = true; send({ type: 'listening-ready', ...run });
-        } catch (error) { fail(errorMessage(error)); }
-      }
-      if (kind === 'result-generated' && started) {
-        const sentence = event.payload?.output?.sentence;
-        if (!sentence || sentence.heartbeat || typeof sentence.text !== 'string' || !sentence.text.trim()) return;
-        if (!sentence.sentence_end) { send({ type: 'sentence', id: sentence.sentence_id, text: sentence.text, final: false }); return; }
-        if (sentence.sentence_id == null) return;
-        try {
-          const { segment, inserted } = store.addSegment(listeningId, run.runId, {
-            id: sentence.sentence_id, text: sentence.text, beginMs: sentence.begin_time, endMs: sentence.end_time
-          });
-          if (inserted) {
-            send({ type: 'segment-final', segment });
-            queueTranslation(segment, listeningId, targetLang);
-            scheduleExtraction(listeningId);
+    settings = { source, targetLang, audioSource, captionMode };
+    let segmentationFallback = false;
+    const openUpstream = withSegmentation => {
+      const ws = new WebSocket(asrEndpoint, { headers: { Authorization: `Bearer ${key}` }, handshakeTimeout: 12000 });
+      upstream = ws;
+      ws.on('open', () => {
+        const parameters = { format: 'pcm', sample_rate: 16000, heartbeat: true };
+        if (source !== 'auto') parameters.language_hints = [source];
+        if (withSegmentation) {
+          parameters.semantic_punctuation_enabled = false;
+          parameters.max_sentence_silence = asrSentenceSilenceMs;
+          parameters.multi_threshold_mode_enabled = true;
+        }
+        taskId = randomUUID();
+        ws.send(JSON.stringify({ header: { action: 'run-task', task_id: taskId, streaming: 'duplex' },
+          payload: { task_group: 'audio', task: 'asr', function: 'recognition', model, parameters, input: {} } }));
+      });
+      ws.on('message', raw => {
+        if (ws !== upstream) return;
+        let event; try { event = JSON.parse(raw.toString()); } catch { return; }
+        const kind = event.header?.event;
+        if (kind === 'task-started' && !started) {
+          if (client.readyState !== WebSocket.OPEN || stopping) { ws.close(); return; }
+          try {
+            const title = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date());
+            run = store.createRun(listeningId, settings, title); listeningId = run.listeningId;
+            subscribe(listeningId, client); resumeProcessing(listeningId, key);
+            started = true; send({ type: 'listening-ready', ...run, captionMode });
+          } catch (error) { fail(errorMessage(error)); }
+        }
+        if (kind === 'result-generated' && started) {
+          const sentence = event.payload?.output?.sentence;
+          if (!sentence || sentence.heartbeat || typeof sentence.text !== 'string' || !sentence.text.trim()) return;
+          if (!sentence.sentence_end) { send({ type: 'sentence', runId: run.runId, id: sentence.sentence_id, text: sentence.text, final: false }); return; }
+          if (sentence.sentence_id == null) return;
+          try {
+            const { segment, inserted } = store.addSegment(listeningId, run.runId, {
+              id: sentence.sentence_id, text: sentence.text, beginMs: sentence.begin_time, endMs: sentence.end_time
+            });
+            if (inserted) {
+              send({ type: 'segment-final', runId: run.runId, segment });
+              queueTranslation(segment, listeningId, targetLang, 'realtime');
+              scheduleExtraction(listeningId);
+            }
+          } catch (error) { fail(`保存原文失败：${errorMessage(error)}`); }
+        }
+        if (kind === 'task-failed') {
+          const reason = event.payload?.message || event.header?.error_message || '识别任务失败';
+          if (!started && withSegmentation && !segmentationFallback && !stopping) {
+            segmentationFallback = true;
+            console.warn('asr_param_fallback', String(reason).slice(0, 200));
+            ws.close(); openUpstream(false);
+            return;
           }
-        } catch (error) { fail(`保存原文失败：${errorMessage(error)}`); }
-      }
-      if (kind === 'task-failed') fail(event.payload?.message || event.header?.error_message || '识别任务失败');
-      if (kind === 'task-finished') {
-        finished = true; store.finishRun(run?.runId); scheduleExtraction(listeningId, true);
-        send({ type: 'finished' }); upstream.close(); client.close();
-      }
-    });
-    upstream.on('unexpected-response', (_request, response) => fail(`识别服务连接失败 (${response.statusCode})，请检查 API Key`));
-    upstream.on('error', error => fail(errorMessage(error)));
-    upstream.on('close', () => {
-      if (!stopping && client.readyState === WebSocket.OPEN) send({ type: 'error', message: '识别连接已断开，请重试' });
-      if (client.readyState === WebSocket.OPEN) client.close();
-    });
+          fail(reason);
+        }
+        if (kind === 'task-finished') {
+          finished = true; store.finishRun(run?.runId); scheduleExtraction(listeningId, true);
+          send({ type: 'finished' }); ws.close(); client.close();
+        }
+      });
+      ws.on('unexpected-response', (_request, response) => { if (ws === upstream) fail(`识别服务连接失败 (${response.statusCode})，请检查 API Key`); });
+      ws.on('error', error => { if (ws === upstream) fail(errorMessage(error)); });
+      ws.on('close', () => {
+        if (ws !== upstream) return;
+        if (!stopping && client.readyState === WebSocket.OPEN) send({ type: 'error', message: '识别连接已断开，请重试' });
+        if (client.readyState === WebSocket.OPEN) client.close();
+      });
+    };
+    openUpstream(captionMode === 'realtime');
   });
   client.on('close', () => {
     unsubscribe(listeningId, client);
