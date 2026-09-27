@@ -74,7 +74,7 @@
 .knowledge-panel[open]>summary::before,.transcript-panel[open]>summary::before,details.knowledge-item[open]>summary::before{transform:rotate(90deg)}
 /* transcript 面板 details 化：summary 沿用 head 布局 */
 .transcript-panel summary.transcript-head{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer}
-.transcript-panel summary.transcript-head h3{margin:0;font-size:19px}
+.transcript-panel summary.transcript-head h3{margin:0 auto 0 0;font-size:19px}/* margin-right:auto：标题与箭头靠左，下载下拉靠右（否则 space-between 把 h3 挤到中间） */
 /* 知识条目默认收起：padding 从卡片移到 summary 与内容 */
 details.knowledge-item{padding:0}
 details.knowledge-item>summary{cursor:pointer;padding:15px 17px}
