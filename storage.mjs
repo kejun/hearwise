@@ -105,7 +105,7 @@ export class ListeningStore {
     return segment;
   }
   pendingTranslations(listeningId) {
-    return this.db.prepare("SELECT s.*, r.target_lang FROM segments s JOIN listening_runs r ON r.id=s.run_id WHERE s.listening_id=? AND s.translation_state!='complete' ORDER BY s.sequence_no").all(listeningId);
+    return this.db.prepare("SELECT s.*, r.source_lang, r.target_lang FROM segments s JOIN listening_runs r ON r.id=s.run_id WHERE s.listening_id=? AND s.translation_state!='complete' ORDER BY s.sequence_no").all(listeningId);
   }
   list(page = 1, pageSize = 20) {
     const total = this.db.prepare('SELECT COUNT(*) AS n FROM listenings').get().n;

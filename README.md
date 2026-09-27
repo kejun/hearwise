@@ -21,6 +21,7 @@ npm run dev
 
 - 实时识别使用阿里云 WebSocket 的 `run-task → 音频流 → finish-task` 流程。浏览器经 AudioWorklet 采集单声道 PCM，并转为 16 kHz / 16 bit。停止聆听时前端会向 Worklet 发送 `flush` 指令，把不满一包的尾样本发出并等待 `flushed` 回执（最多 400ms），尽量不丢句尾音频。标签页模式使用浏览器的 `getDisplayMedia` 获取音轨；浏览器授权时会同时提供画面轨道，但应用只处理并发送音频。若浏览器只返回画面而没有音轨，页面会提示重新选择带音频的标签页。
 - 翻译使用 Qwen-MT 的 OpenAI 兼容接口。识别中的句子约每 1.2 秒更新一次临时译文（浅色 + 「临时译文」角标）；句子结束后立即发起最终翻译，final 到达时无缝替换临时译文，中间不清空、不闪烁。
+- 识别语言与译文语言相同（如中文 → 简体中文）时不调用翻译模型：识别原文直接作为译文显示与落库（角标「无需翻译」）；「自动识别」无法判定语言，仍会走翻译。
 - 翻译 HTTP Base URL 是 `https://maas.qianwenaiapi.com/compatible-mode/v1`；实时识别需使用对应的 WebSocket 地址 `wss://maas.qianwenaiapi.com/api-ws/v1/inference`。两者不能使用同一个协议 URL。
 - 阿里云会按模型用量计费；停止聆听后会结束识别任务。
 

@@ -19,6 +19,9 @@ const types = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; ch
   '/audio-processor.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8' };
 const targets = ['Chinese', 'English', 'Japanese', 'Korean'];
 const sources = ['auto', 'zh', 'en', 'ja', 'ko'];
+// 识别语言与译文语言相同（如中文→简体中文）时不调用翻译模型，原文直通作为最终译文；auto 无法判定，永远走翻译
+const sameLanguageTargets = { zh: 'Chinese', en: 'English', ja: 'Japanese', ko: 'Korean' };
+const isSameLanguage = (source, target) => sameLanguageTargets[source] === target;
 const audioSources = ['microphone', 'tab'];
 const captionModes = ['realtime', 'classic'];
 const asrSentenceSilenceMs = Math.min(6000, Math.max(200, Number(process.env.ASR_SENTENCE_SILENCE_MS || 2500)));
@@ -215,7 +218,14 @@ function pumpExtraction() {
 }
 function resumeProcessing(id, key) {
   keys.set(id, key);
-  for (const row of store.pendingTranslations(id)) queueTranslation(row, id, row.target_lang);
+  for (const row of store.pendingTranslations(id)) {
+    if (isSameLanguage(row.source_lang, row.target_lang)) { // 同语言待译句：本地以原文补全，不调翻译模型
+      const updated = store.setTranslation(row.id, row.original_text, false);
+      if (updated) broadcast(id, { type: 'translation-updated', runId: updated.run_id, segment: updated });
+      continue;
+    }
+    queueTranslation(row, id, row.target_lang);
+  }
   scheduleExtraction(id, true);
   pumpExtraction();
   maybeReleaseKey(id);
@@ -236,9 +246,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && url.pathname === '/api/translate') {
     try {
-      const { key, text, target = 'Chinese' } = await readJson(req);
-      if (typeof key !== 'string' || !key.trim() || typeof text !== 'string' || !text.trim() || text.length > 3000 || !targets.includes(target))
+      const { key, text, target = 'Chinese', source = 'auto' } = await readJson(req);
+      if (typeof key !== 'string' || !key.trim() || typeof text !== 'string' || !text.trim() || text.length > 3000 || !targets.includes(target) || !sources.includes(source))
         return sendJson(res, 400, { error: '翻译参数无效' });
+      if (isSameLanguage(source, target)) return sendJson(res, 200, { text: text.trim() }); // 同语言：直接回显原文，不调用翻译模型
       if (translations.length || translating + interimTranslating >= translations.concurrency) return sendJson(res, 429, { error: '最终译文优先处理' });
       interimTranslating++;
       try { return sendJson(res, 200, { text: await translate(key.trim(), text.trim(), target) }); }
@@ -405,8 +416,10 @@ wss.on('connection', client => {
               id: sentence.sentence_id, text: sentence.text, beginMs: sentence.begin_time, endMs: sentence.end_time
             });
             if (inserted) {
-              send({ type: 'segment-final', runId: run.runId, segment });
-              queueTranslation(segment, listeningId, targetLang, 'realtime');
+              const passthrough = isSameLanguage(source, targetLang); // 同语言：原文直通写入为最终译文，不进翻译队列
+              const finalSegment = passthrough ? store.setTranslation(segment.id, segment.original_text, false) : segment;
+              send({ type: 'segment-final', runId: run.runId, segment: finalSegment });
+              if (!passthrough) queueTranslation(segment, listeningId, targetLang, 'realtime');
               scheduleExtraction(listeningId);
             }
           } catch (error) { fail(`保存原文失败：${errorMessage(error)}`); }

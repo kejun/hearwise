@@ -264,3 +264,73 @@ test('WebSocket 最终句持久化、翻译抽取、停止后重试和继续收�
   assert.equal((await (await fetch(`${base}/api/listenings`)).json()).total, 0);
   assert.equal((await fetch(`${base}/api/listenings/${first.ready.listeningId}`, { method: 'DELETE' })).status, 404);
 });
+
+test('同语言收听不调用翻译模型，原文直通为最终译文', async t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'asr-same-lang-'));
+  let mtCount = 0;
+  const modelServer = http.createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    if (body.model === 'qwen-mt-flash') mtCount++;
+    const content = body.model === 'qwen-mt-flash' ? 'TRANSLATED:' + body.messages[0].content : JSON.stringify({ items: [] });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content } }] }));
+  });
+  const modelPort = await listen(modelServer);
+  const asrServer = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise(resolve => asrServer.on('listening', resolve));
+  asrServer.on('connection', ws => {
+    let taskId;
+    ws.on('message', (raw, isBinary) => {
+      if (isBinary) {
+        const sentence = { sentence_id: 'zh-1', text: '今天讨论数据库设计。', sentence_end: true };
+        ws.send(JSON.stringify({ header: { event: 'result-generated' }, payload: { output: { sentence } } }));
+        return;
+      }
+      const message = JSON.parse(raw.toString());
+      if (message.header?.action === 'run-task') { taskId = message.header.task_id; ws.send(JSON.stringify({ header: { event: 'task-started' } })); }
+      if (message.header?.action === 'finish-task') ws.send(JSON.stringify({ header: { event: 'task-finished', task_id: taskId } }));
+    });
+  });
+  const port = 37000 + Math.floor(Math.random() * 1000);
+  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve('.'), env: { ...process.env, PORT: String(port),
+    LISTENING_DB: path.join(dir, 'history.sqlite'), ASR_ENDPOINT: `ws://127.0.0.1:${asrServer.address().port}`,
+    MT_ENDPOINT: `http://127.0.0.1:${modelPort}/chat/completions` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stderr.on('data', d => process.stderr.write('[server] ' + d));
+  child.stdout.on('data', d => process.stderr.write('[server] ' + d));
+  t.after(async () => {
+    child.kill(); await new Promise(resolve => child.once('exit', resolve));
+    await new Promise(resolve => asrServer.close(resolve));
+    await new Promise(resolve => modelServer.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${port}`;
+  await waitFor(async () => { try { return (await fetch(base)).ok; } catch { return false; } });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  const events = [];
+  ws.on('message', raw => events.push(JSON.parse(raw.toString())));
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  ws.send(JSON.stringify({ type: 'start', key: 'test-key', source: 'zh', targetLang: 'Chinese', audioSource: 'microphone' }));
+  await waitFor(() => events.some(e => e.type === 'listening-ready'));
+  ws.send(Buffer.from([0, 0]));
+  await waitFor(() => events.some(e => e.type === 'segment-final'));
+  const final = events.find(e => e.type === 'segment-final');
+  assert.equal(final.segment.original_text, '今天讨论数据库设计。');
+  assert.equal(final.segment.translation_text, '今天讨论数据库设计。'); // segment-final 已直接携带最终译文
+  assert.equal(final.segment.translation_state, 'complete');
+  assert.equal(mtCount, 0);
+  assert.ok(!events.some(e => e.type === 'translation-updated')); // 未进翻译队列
+  // /api/translate 同语言防御：直接回显原文，不调用模型
+  const echo = await fetch(`${base}/api/translate`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'test-key', text: '今天讨论数据库设计。', target: 'Chinese', source: 'zh' }) });
+  assert.equal(echo.status, 200);
+  assert.equal((await echo.json()).text, '今天讨论数据库设计。');
+  assert.equal(mtCount, 0);
+  // 不同语言仍正常调用翻译模型
+  const different = await fetch(`${base}/api/translate`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'test-key', text: '今天讨论数据库设计。', target: 'English', source: 'zh' }) });
+  assert.equal((await different.json()).text, 'TRANSLATED:今天讨论数据库设计。');
+  assert.equal(mtCount, 1);
+  ws.send(JSON.stringify({ type: 'stop' }));
+  await new Promise(resolve => ws.once('close', resolve));
+});

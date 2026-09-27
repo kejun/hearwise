@@ -281,8 +281,12 @@ function clearTranslationWork() {
   translationVersion++;
 }
 
+// 识别语言=译文语言：不请求翻译，译文区直接显示识别原文（auto 无法判定，仍走翻译）
+const sameLanguageTargets = { zh: 'Chinese', en: 'English', ja: 'Japanese', ko: 'Korean' };
+const isPassthrough = () => sameLanguageTargets[els.source.value] === els.target.value;
+
 function scheduleTranslation(text, final) {
-  if (!text.trim()) return;
+  if (!text.trim() || isPassthrough()) return;
   pendingText = text;
   if (final) clearTranslationWork();
   else if (translationTimer) return;
@@ -301,7 +305,7 @@ function scheduleTranslation(text, final) {
       const response = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: saved.key, text: input, target: els.target.value }),
+        body: JSON.stringify({ key: saved.key, text: input, target: els.target.value, source: els.source.value }),
         signal: controller.signal
       });
       const result = await response.json();
@@ -323,17 +327,22 @@ function scheduleTranslation(text, final) {
 
 function receiveSentence(message) {
   if (typeof message.text !== 'string' || !message.text.trim()) return;
+  const passthrough = isPassthrough(); // 同语言：原文直接镜像到译文区，不显示"正在翻译"占位
   if (message.id !== currentSentenceId) { // 新句开始：原文先行，译文待翻译
     currentSentenceId = message.id;
     currentSegmentId = null;
     provisionalFor = null;
-    updateText(els.translation, '正在翻译…');
-    els.translation.classList.add('placeholder');
+    if (!passthrough) updateText(els.translation, '正在翻译…');
+    els.translation.classList.toggle('placeholder', !passthrough);
     els.translation.classList.remove('provisional');
   }
   updateText(els.original, message.text);
   els.original.classList.remove('placeholder');
-  if (message.text.trim().length >= 5) scheduleTranslation(message.text, false);
+  if (passthrough) {
+    updateText(els.translation, message.text);
+    els.translation.classList.remove('placeholder');
+    els.badge.textContent = '无需翻译';
+  } else if (message.text.trim().length >= 5) scheduleTranslation(message.text, false);
 }
 
 function displayFinal(segment) {
@@ -347,7 +356,7 @@ function displayFinal(segment) {
     updateText(els.translation, segment.translation_text);
     els.translation.classList.remove('placeholder');
     els.translation.classList.remove('provisional');
-    els.badge.textContent = '已完成';
+    els.badge.textContent = isPassthrough() ? '无需翻译' : '已完成';
   } else if (segment.translation_state === 'failed') {
     provisionalFor = null;
     updateText(els.translation, '翻译失败，可点击继续处理');
@@ -788,7 +797,7 @@ async function start() {
       setPhase('idle');
       startPolling();
       if (gen === connectionGeneration) pollCurrentSegment(gen); // 当前句译文未到位时自动补齐，不需要点击
-      if (!els.translation.classList.contains('placeholder') && !els.translation.classList.contains('provisional')) els.badge.textContent = '已完成';
+      if (!els.translation.classList.contains('placeholder') && !els.translation.classList.contains('provisional')) els.badge.textContent = isPassthrough() ? '无需翻译' : '已完成';
     });
   } catch (error) {
     await releaseAudio();
