@@ -17,6 +17,7 @@ const els = {
   recordPanel: $('record-panel'), recordTitle: $('record-title'), processingStatus: $('processing-status'),
   retryProcessing: $('retry-processing'), knowledgeList: $('knowledge-list'), knowledgeCount: $('knowledge-count'),
   transcriptList: $('transcript-list'), runsList: $('runs-list'), loadMore: $('load-more'), downloadSelect: $('download-select'),
+  knowledgeToggleAll: $('knowledge-toggle-all'), backToTop: $('back-to-top'),
   sizeSlider: $('translation-size'), captionMode: $('caption-mode')
 };
 
@@ -104,6 +105,15 @@ window.addEventListener('scroll', updatePinnedCaption, { passive: true });
 window.addEventListener('resize', updatePinnedCaption);
 syncPinnedCaption();
 updatePinnedCaption();
+
+// 返回顶部浮标：滚动超过两屏才显示（z-index 低于设置弹窗）
+function updateBackToTop() {
+  els.backToTop.hidden = window.scrollY <= window.innerHeight * 2;
+}
+els.backToTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+window.addEventListener('scroll', updateBackToTop, { passive: true });
+window.addEventListener('resize', updateBackToTop);
+updateBackToTop();
 
 function setPhase(next, message) {
   phase = next;
@@ -414,12 +424,17 @@ function renderTranscript() {
 }
 function renderKnowledge() {
   els.knowledgeCount.textContent = String(detail?.knowledge.length || 0);
+  // 全量重建会丢展开状态：重建前记录 open 条目，重建后恢复（实时 knowledge-upserted 会频繁触发重建）
+  const openIds = new Set();
+  for (const card of els.knowledgeList.querySelectorAll('details.knowledge-item')) if (card.open) openIds.add(card.dataset.kid);
   els.knowledgeList.replaceChildren();
-  if (!detail?.knowledge.length) { els.knowledgeList.append(el('p', 'empty-note', '尚无知识条目，最终原文出现后会持续整理。')); return; }
+  if (!detail?.knowledge.length) { els.knowledgeList.append(el('p', 'empty-note', '尚无知识条目，最终原文出现后会持续整理。')); syncKnowledgeToggleAll(); return; }
   const names = { person: '人物', term: '术语', event: '事件', other: '其他' };
   for (const item of detail.knowledge) {
-    const card = el('article', 'knowledge-item');
-    const heading = el('div', 'knowledge-heading');
+    const card = el('details', 'knowledge-item');
+    card.dataset.kid = String(item.id ?? item.canonical_name);
+    card.open = openIds.has(card.dataset.kid); // 默认收起；重建后恢复原有展开状态
+    const heading = el('summary', 'knowledge-heading');
     heading.append(el('strong', '', item.canonical_name), el('span', 'knowledge-type', names[item.type] || item.type));
     if (item.certainty === 'needs_review') heading.append(el('span', 'needs-review', '待确认'));
     card.append(heading);
@@ -440,7 +455,22 @@ function renderKnowledge() {
     }
     card.append(evidence); els.knowledgeList.append(card);
   }
+  syncKnowledgeToggleAll();
 }
+// 知识条目「全部展开/收起」：按钮在 summary 内，点击不得触发面板自身折叠
+function syncKnowledgeToggleAll() {
+  const cards = els.knowledgeList.querySelectorAll('details.knowledge-item');
+  els.knowledgeToggleAll.hidden = !cards.length;
+  if (cards.length) els.knowledgeToggleAll.textContent = [...cards].some(card => !card.open) ? '全部展开' : '全部收起';
+}
+els.knowledgeToggleAll.addEventListener('click', event => {
+  event.stopPropagation(); event.preventDefault();
+  const cards = els.knowledgeList.querySelectorAll('details.knowledge-item');
+  const shouldOpen = [...cards].some(card => !card.open); // 有收起的→全部展开；否则全部收起
+  for (const card of cards) card.open = shouldOpen;
+  syncKnowledgeToggleAll();
+});
+
 function renderProcessing() {
   if (!detail) return;
   const failedTranslations = Math.max(detail.processing?.failedTranslations || 0, detail.segments.filter(s => s.translation_state === 'failed').length);
@@ -583,6 +613,8 @@ els.historyListening.addEventListener('click', () => showHistory().catch(error =
 els.back.addEventListener('click', showListening);
 els.historyMore.addEventListener('click', () => loadHistory().catch(error => showError(error.message)));
 els.loadMore.addEventListener('click', () => fetchDetail(detailPage + 1, true).catch(error => showError(error.message)));
+// transcript 面板 details 化后下载下拉位于 summary 内：阻止冒泡，点击下拉不触发面板折叠
+els.downloadSelect.addEventListener('click', event => event.stopPropagation());
 els.downloadSelect.addEventListener('change', () => {
   const kind = els.downloadSelect.value;
   els.downloadSelect.value = '';

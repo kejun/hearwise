@@ -67,3 +67,23 @@
 .translation::-webkit-scrollbar{display:none}
 .original{max-height:3.2em;overflow-y:auto;scrollbar-width:none}
 .original::-webkit-scrollbar{display:none}
+/* 面板与知识条目折叠指示箭头 */
+.knowledge-panel summary,.transcript-panel summary{list-style:none}
+.knowledge-panel summary::-webkit-details-marker,.transcript-panel summary::-webkit-details-marker,details.knowledge-item>summary::-webkit-details-marker{display:none}
+.knowledge-panel summary::before,.transcript-panel summary::before,details.knowledge-item>summary::before{content:'▸';display:inline-block;margin-right:9px;color:#4c7768;font-size:.8em;transition:transform .15s}
+.knowledge-panel[open]>summary::before,.transcript-panel[open]>summary::before,details.knowledge-item[open]>summary::before{transform:rotate(90deg)}
+/* transcript 面板 details 化：summary 沿用 head 布局 */
+.transcript-panel summary.transcript-head{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer}
+.transcript-panel summary.transcript-head h3{margin:0;font-size:19px}
+/* 知识条目默认收起：padding 从卡片移到 summary 与内容 */
+details.knowledge-item{padding:0}
+details.knowledge-item>summary{cursor:pointer;padding:15px 17px}
+details.knowledge-item>summary~*{margin-left:17px;margin-right:17px}
+details.knowledge-item>summary~*:last-child{margin-bottom:15px}
+.toggle-all{margin-left:12px;border:1px solid #b5c5b8;border-radius:999px;background:#fff;color:#315f4d;font-size:12px;font-weight:650;padding:5px 13px;cursor:pointer;vertical-align:2px}
+.toggle-all:hover{background:#edf5ed}
+/* 返回顶部浮标：z-index 低于 modal-backdrop(10) */
+.back-to-top{position:fixed;right:26px;bottom:30px;z-index:9;width:46px;height:46px;border-radius:50%;border:1px solid #d7ded4;background:#fff;color:#315f4d;display:grid;place-items:center;cursor:pointer;box-shadow:0 8px 20px #243c291f}
+.back-to-top:hover{background:#edf5ed}
+.back-to-top[hidden]{display:none}
+@media(max-width:700px){.back-to-top{right:16px;bottom:20px;width:42px;height:42px}}
