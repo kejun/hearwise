@@ -444,11 +444,15 @@ function renderKnowledge() {
     card.dataset.kid = String(item.id ?? item.canonical_name);
     card.open = openIds.has(card.dataset.kid); // 默认收起；重建后恢复原有展开状态
     const heading = el('summary', 'knowledge-heading');
-    heading.append(el('strong', '', item.canonical_name), el('span', 'knowledge-type', names[item.type] || item.type));
+    const labels = { person: '人物', organization: '组织', product: '产品', work: '作品', method: '方法', event: '事件', place: '地点' };
+    heading.append(el('strong', '', item.canonical_name), el('span', 'knowledge-type', labels[item.display_label] || names[item.type] || item.type));
     if (item.certainty === 'needs_review') heading.append(el('span', 'needs-review', '待确认'));
+    if (item.short_description || item.dialogue_summary) heading.append(el('span', 'knowledge-brief', item.short_description || item.dialogue_summary));
     card.append(heading);
     if (item.aliases?.length) card.append(el('p', 'knowledge-aliases', `别名：${item.aliases.join('、')}`));
-    card.append(el('p', 'knowledge-dialogue', `对话中提到：${item.dialogue_summary}`));
+    if (item.facts?.length) {
+      for (const fact of item.facts) card.append(el('p', 'knowledge-dialogue', `本次提到：${fact.content}`));
+    } else card.append(el('p', 'knowledge-dialogue', `对话中提到：${item.dialogue_summary}`));
     if (item.background_note) card.append(el('p', 'knowledge-background', `背景补充（模型生成）：${item.background_note}`));
     for (const revision of item.revisions || []) card.append(el('p', 'knowledge-revision', `更名记录：${revision.old_value} → ${revision.new_value}（${revision.reason}）`));
     const evidence = el('div', 'knowledge-evidence');

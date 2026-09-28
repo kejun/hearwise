@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 
 const promptDocument = readFileSync(new URL('./docs/knowledge-extraction-prompt.md', import.meta.url), 'utf8');
 export const SYSTEM_PROMPT = promptDocument.match(/## System Message：固定提示词\s*```text\n([\s\S]*?)\n```/)?.[1];
-if (!SYSTEM_PROMPT) throw new Error('知识抽取提示词缺失');
+const promptV2Document = readFileSync(new URL('./docs/knowledge-extraction-prompt-v2.md', import.meta.url), 'utf8');
+export const SYSTEM_PROMPT_V2 = promptV2Document.match(/## System Message：固定提示词\s*```text\n([\s\S]*?)\n```/)?.[1];
+if (!SYSTEM_PROMPT || !SYSTEM_PROMPT_V2) throw new Error('知识抽取提示词缺失');
 
 const fail = message => { throw new Error(`知识结果无效：${message}`); };
 const clip = (value, max) => value.trim().slice(0, max);
@@ -86,6 +88,68 @@ export function parseKnowledge(raw, input) {
   return { items, rejected };
 }
 
+const broadNames = new Set(['ai', '人工智能', '互联网', '摄影', '相机', '技术', '公司', '产品', '普通人', '大规模生产']);
+const labels = { person: 'person', organization: 'other', product: 'other', work: 'other',
+  method: 'term', event: 'event', place: 'other' };
+
+export function parseKnowledgeV2(raw, input) {
+  if (typeof raw !== 'string' || raw.length > 30000) fail('响应过长');
+  let data;
+  try { data = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
+  catch { fail('不是 JSON'); }
+  if (!data || !Array.isArray(data.items) || data.items.length > 12) fail('条目数量');
+  const focus = new Map(input.focus_segments.map(s => [s.id, s.text]));
+  const existing = new Map(input.existing_candidates.map(c => [c.id, c]));
+  const observed = new Map((input.observed_candidates || []).map(c => [c.id, c]));
+  const sourceText = [...input.focus_segments, ...(input.context_segments || [])].map(s => s.text);
+  const items = [], rejected = [];
+  for (const [index, rawItem] of data.items.entries()) {
+    try {
+      const item = rawItem || {};
+      if (!['create', 'update', 'repeat', 'observe', 'exclude'].includes(item.action) ||
+          labels[item.display_label] !== item.type ||
+          typeof item.canonical_name !== 'string' || !item.canonical_name.trim() ||
+          typeof item.reason !== 'string' || !item.reason.trim() ||
+          typeof item.role !== 'string' || !item.role.trim() ||
+          !['clear', 'needs_review'].includes(item.certainty)) fail('字段');
+      const name = clip(item.canonical_name, 120);
+      if (broadNames.has(name.normalize('NFKC').toLocaleLowerCase()) && ['create', 'observe'].includes(item.action)) fail('泛词');
+      const evidence = [];
+      if (Array.isArray(item.evidence)) for (const entry of item.evidence.slice(0, 12)) {
+        const text = focus.get(entry?.segment_id);
+        const quote = text ? findVerbatim(text, entry?.quote) : null;
+        if (quote && !evidence.some(e => e.segment_id === entry.segment_id && e.quote === quote))
+          evidence.push({ segment_id: entry.segment_id, quote });
+      }
+      if (item.action !== 'exclude' && !evidence.length) fail('原文证据');
+      const target = existing.get(item.existing_item_id);
+      if (['update', 'repeat'].includes(item.action) && (!target || target.type !== item.type ||
+          (target.display_label && target.display_label !== item.display_label))) fail('目标条目');
+      const candidate = observed.get(item.observed_candidate_id);
+      if (item.observed_candidate_id != null && (!candidate || candidate.type !== item.type ||
+          candidate.display_label !== item.display_label)) fail('待观察候选');
+      if (item.action === 'create' && !input.focus_segments.some(s => findVerbatim(s.text, name)) &&
+          (!candidate || candidate.canonical_name !== name)) fail('名称不在原文');
+      if (['create', 'update'].includes(item.action) &&
+          (typeof item.short_description !== 'string' || !item.short_description.trim() ||
+           typeof item.new_information !== 'string' || !item.new_information.trim())) fail('增量内容');
+      const aliases = Array.isArray(item.aliases) ? item.aliases.filter(a => typeof a === 'string' && a.trim() && a.length <= 120 &&
+        sourceText.some(text => findVerbatim(text, a))).slice(0, 12).map(a => a.trim()) : [];
+      items.push({ action: item.action, type: item.type, display_label: item.display_label, canonical_name: name,
+        role: clip(item.role, 80), reason: clip(item.reason, 200), existing_item_id: target?.id || null,
+        observed_candidate_id: candidate?.id || null, aliases: [...new Set(aliases)],
+        correction_reason: typeof item.correction_reason === 'string' && item.correction_reason.trim()
+          ? clip(item.correction_reason, 200) : null,
+        short_description: ['create', 'update'].includes(item.action) ? clip(item.short_description, 240) : null,
+        new_information: ['create', 'update'].includes(item.action) ? clip(item.new_information, 500) : null,
+        certainty: item.certainty, evidence });
+    } catch (error) {
+      rejected.push({ index, name: String(rawItem?.canonical_name || `条目${index + 1}`).slice(0, 60), reason: String(error.message || error) });
+    }
+  }
+  return { items, rejected };
+}
+
 export function splitFocusSegments(input, maxChars = 2500) {
   const groups = [];
   let group = [], size = 0;
@@ -106,10 +170,11 @@ export async function extractKnowledge(key, input, endpoint) {
   const response = await fetch(endpoint, {
     method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: KNOWLEDGE_MODEL, enable_thinking: false, messages: [
-      { role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(input) }
+      { role: 'system', content: input.policy_version === 2 ? SYSTEM_PROMPT_V2 : SYSTEM_PROMPT },
+      { role: 'user', content: JSON.stringify(input) }
     ] }), signal: AbortSignal.timeout(30000)
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error?.message || result.message || `知识服务 HTTP ${response.status}`);
-  return parseKnowledge(result.choices?.[0]?.message?.content, input);
+  return (input.policy_version === 2 ? parseKnowledgeV2 : parseKnowledge)(result.choices?.[0]?.message?.content, input);
 }

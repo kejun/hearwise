@@ -157,9 +157,14 @@ test('WebSocket 最终句持久化、翻译抽取、停止后重试和继续收�
       const input = JSON.parse(body.messages[1].content);
       const focus = input.focus_segments[0];
       const candidate = input.existing_candidates.find(c => c.canonical_name === 'Maya');
-      content = JSON.stringify({ items: focus ? [{ type: 'person', canonical_name: 'Maya', aliases: [],
-        dialogue_summary: '对话提到 Maya。', background_note: null, certainty: 'clear', decision: candidate ? 'link' : 'create',
-        existing_item_id: candidate?.id || null, correction_reason: null, evidence: [{ segment_id: focus.id, quote: 'Maya' }] }] : [] });
+      content = JSON.stringify({ items: focus ? [input.policy_version === 2
+        ? { action: candidate ? 'repeat' : 'create', type: 'person', display_label: 'person', canonical_name: 'Maya',
+          role: '讨论主体', reason: '谈话围绕 Maya', existing_item_id: candidate?.id || null, observed_candidate_id: null,
+          aliases: [], short_description: candidate ? null : '谈话中的人物 Maya。',
+          new_information: candidate ? null : '对话提到 Maya。', certainty: 'clear', evidence: [{ segment_id: focus.id, quote: 'Maya' }] }
+        : { type: 'person', canonical_name: 'Maya', aliases: [], dialogue_summary: '对话提到 Maya。',
+          background_note: null, certainty: 'clear', decision: candidate ? 'link' : 'create',
+          existing_item_id: candidate?.id || null, correction_reason: null, evidence: [{ segment_id: focus.id, quote: 'Maya' }] }] : [] });
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content } }] }));
