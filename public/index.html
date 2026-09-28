@@ -24,7 +24,7 @@
       </div>
 
       <section class="caption-stage" aria-label="实时字幕" aria-live="polite">
-        <div class="caption-head"><span>译文</span><label class="size-control"><span class="a-small" aria-hidden="true">A</span><input id="translation-size" type="range" min="30" max="70" step="1" value="50" aria-label="译文字号" /><span class="a-big" aria-hidden="true">A</span></label><span class="caption-badge" id="caption-badge">等待开始</span></div>
+        <div class="caption-head"><span>译文</span><label class="size-control"><span class="a-small" aria-hidden="true">A</span><input id="translation-size" type="range" min="30" max="70" step="1" value="44" aria-label="译文字号" /><span class="a-big" aria-hidden="true">A</span></label><span class="caption-badge" id="caption-badge">等待开始</span></div>
         <p class="translation placeholder" id="translation">字幕会显示在这里</p>
         <div class="original-wrap"><span class="original-label">原文</span><p class="original placeholder" id="original">开始聆听后，实时识别的文字会出现。</p></div>
       </section>
@@ -41,7 +41,7 @@
         <div class="panel-heading"><h2 id="record-title">本次收听</h2><span id="processing-status"></span></div>
         <div class="panel-actions"><button class="switch-button" id="retry-processing" type="button" hidden>继续处理</button></div>
         <details class="knowledge-panel" open><summary>对话知识 <span id="knowledge-count">0</span><button class="toggle-all" id="knowledge-toggle-all" type="button" hidden>全部展开</button><button class="toggle-all knowledge-track" id="knowledge-track" type="button" aria-pressed="false" title="开启后，新知识出现时自动滚动到对应卡片并短暂高亮">追踪新增</button></summary><div id="knowledge-list" class="knowledge-list"></div></details>
-        <section class="runs-panel"><h3>收听片段</h3><div id="runs-list"></div></section>
+        <details class="runs-panel" id="runs-panel" open><summary><h3>收听片段</h3></summary><div id="runs-list"></div></details>
         <details class="transcript-panel" open><summary class="transcript-head"><h3>原文与译文</h3><select class="download-select" id="download-select" aria-label="下载原文或译文"><option value="" selected>下载…</option><option value="original">下载原文</option><option value="translation">下载译文</option></select></summary><div id="transcript-list"></div><button class="switch-button load-more" id="load-more" type="button" hidden>加载更多句子</button></details>
       </section>
     </main>
@@ -57,7 +57,7 @@
 
   <div class="modal-backdrop" id="settings-modal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <div class="modal-top"><div><div class="modal-kicker" id="settings-title">设置</div></div><button class="close-button" id="close-settings" type="button" aria-label="关闭设置">×</button></div>
+        <div class="modal-top"><h2 id="settings-title">设置</h2><button class="close-button" id="close-settings" type="button" aria-label="关闭设置">×</button></div>
       <div class="tab-bar" role="tablist" aria-label="设置分类">
         <button class="tab-button active" id="tab-connection-button" type="button" role="tab" aria-selected="true" aria-controls="tab-connection">连接设置</button>
         <button class="tab-button" id="tab-language-button" type="button" role="tab" aria-selected="false" aria-controls="tab-language">语言设置</button>
