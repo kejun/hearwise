@@ -97,7 +97,8 @@ async function checkTranslation(key) {
 }
 async function checkKnowledge(key) {
   try {
-    const input = { listening_id: 'test', context_segments: [], focus_segments: [{ id: 'test-segment', text: 'Hello.' }], existing_candidates: [] };
+    const input = { listening_id: 'test', policy_version: 2, context_segments: [],
+      focus_segments: [{ id: 'test-segment', text: 'Hello.' }], existing_candidates: [], observed_candidates: [] };
     await extractKnowledge(key, input, mtEndpoint);
     return { ok: true, message: '知识抽取模型可用' };
   } catch (error) { return { ok: false, message: errorMessage(error) }; }
@@ -194,7 +195,9 @@ function pumpExtraction() {
     try {
       for (const input of splitFocusSegments(baseInput)) {
         if (!store.hasListening(job.listening_id)) break;
-        input.existing_candidates = store.jobInput(job).existing_candidates;
+        const refreshed = store.jobInput(job, input.focus_segments);
+        input.existing_candidates = refreshed.existing_candidates;
+        if (job.prompt_version === 2) input.observed_candidates = refreshed.observed_candidates;
         let parsed;
         for (let attempt = 0; attempt < 2; attempt++) {
           try { parsed = await extractKnowledge(keys.get(job.listening_id), input, mtEndpoint); break; }
@@ -203,7 +206,9 @@ function pumpExtraction() {
         if (!store.hasListening(job.listening_id)) break;
         if (parsed.rejected.length) console.info('knowledge_rejected', job.id, `${parsed.rejected.length}/${parsed.rejected.length + parsed.items.length}`,
           parsed.rejected.map(r => `${r.name}（${r.reason}）`).join('；').slice(0, 400));
-        const changed = store.applyKnowledge(job.listening_id, parsed.items);
+        const changed = job.prompt_version === 2
+          ? store.applyKnowledgeV2(job.listening_id, parsed.items)
+          : store.applyKnowledge(job.listening_id, parsed.items);
         for (const item of changed) broadcast(job.listening_id, { type: 'knowledge-upserted', item });
       }
       store.markJob(job.id, 'complete');

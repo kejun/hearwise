@@ -80,6 +80,7 @@ details.knowledge-item{padding:0}
 details.knowledge-item>summary{cursor:pointer;padding:15px 17px}
 details.knowledge-item>summary~*{margin-left:17px;margin-right:17px}
 details.knowledge-item>summary~*:last-child{margin-bottom:15px}
+.knowledge-brief{flex-basis:100%;color:#52675a;font-size:13px;font-weight:400;line-height:1.5;margin-left:0}
 .toggle-all{margin-left:12px;border:1px solid #b5c5b8;border-radius:999px;background:#fff;color:#315f4d;font-size:12px;font-weight:650;padding:5px 13px;cursor:pointer;vertical-align:2px}
 .toggle-all:hover{background:#edf5ed}
 /* 返回顶部浮标：z-index 低于 modal-backdrop(10) */
