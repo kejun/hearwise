@@ -17,7 +17,7 @@ const els = {
   recordPanel: $('record-panel'), recordTitle: $('record-title'), processingStatus: $('processing-status'),
   retryProcessing: $('retry-processing'), knowledgeList: $('knowledge-list'), knowledgeCount: $('knowledge-count'),
   transcriptList: $('transcript-list'), runsList: $('runs-list'), loadMore: $('load-more'), downloadSelect: $('download-select'),
-  knowledgeToggleAll: $('knowledge-toggle-all'), backToTop: $('back-to-top'),
+  knowledgeToggleAll: $('knowledge-toggle-all'), knowledgeTrack: $('knowledge-track'), backToTop: $('back-to-top'),
   sizeSlider: $('translation-size'), captionMode: $('caption-mode')
 };
 
@@ -74,6 +74,23 @@ els.captionMode.addEventListener('change', () => {
   captionMode = els.captionMode.value === 'classic' ? 'classic' : 'realtime';
   localStorage.setItem(CAPTION_MODE_KEY, captionMode);
 });
+
+// —— 知识追踪（issue #5）：开启后新知识到达时自动滚动到对应卡片并短暂高亮 ——
+const KNOWLEDGE_TRACK_KEY = 'tongsheng:knowledge-track';
+let trackKnowledge = localStorage.getItem(KNOWLEDGE_TRACK_KEY) === '1';
+const knowledgeFlashTimers = new WeakMap();
+function syncKnowledgeTrack() {
+  els.knowledgeTrack.textContent = trackKnowledge ? '追踪中' : '追踪新增';
+  els.knowledgeTrack.setAttribute('aria-pressed', trackKnowledge ? 'true' : 'false');
+  els.knowledgeTrack.classList.toggle('active', trackKnowledge);
+}
+els.knowledgeTrack.addEventListener('click', event => {
+  event.stopPropagation(); event.preventDefault(); // 按钮嵌在 summary 内，点击不应触发面板折叠
+  trackKnowledge = !trackKnowledge;
+  localStorage.setItem(KNOWLEDGE_TRACK_KEY, trackKnowledge ? '1' : '0');
+  syncKnowledgeTrack();
+});
+syncKnowledgeTrack();
 let connectionGeneration = 0; // 每次连接递增；旧连接的事件/定时器不得污染新会话
 let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
@@ -442,6 +459,7 @@ function renderKnowledge() {
   for (const item of detail.knowledge) {
     const card = el('details', 'knowledge-item');
     card.dataset.kid = String(item.id ?? item.canonical_name);
+    card.dataset.id = item.id != null ? String(item.id) : ''; // 追踪定位按事件条目 id 查找（不一定是列表末尾）
     card.open = openIds.has(card.dataset.kid); // 默认收起；重建后恢复原有展开状态
     const heading = el('summary', 'knowledge-heading');
     const labels = { person: '人物', organization: '组织', product: '产品', work: '作品', method: '方法', event: '事件', place: '地点' };
@@ -475,6 +493,21 @@ function syncKnowledgeToggleAll() {
   const cards = els.knowledgeList.querySelectorAll('details.knowledge-item');
   els.knowledgeToggleAll.hidden = !cards.length;
   if (cards.length) els.knowledgeToggleAll.textContent = [...cards].some(card => !card.open) ? '全部展开' : '全部收起';
+}
+// 追踪新增知识：面板折叠时先展开，再平滑滚动到卡片并短暂高亮；仅在开关开启时生效
+function focusKnowledgeItem(itemId) {
+  if (!trackKnowledge || itemId == null) return;
+  const card = els.knowledgeList.querySelector(`details.knowledge-item[data-id="${String(itemId)}"]`);
+  if (!card) return;
+  const panel = card.closest('details.knowledge-panel');
+  if (panel && !panel.open) panel.open = true;
+  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  card.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
+  card.classList.remove('knowledge-flash');
+  void card.offsetWidth; // 重新触发动画：连续 upsert 同一卡片也要看到高亮
+  card.classList.add('knowledge-flash');
+  clearTimeout(knowledgeFlashTimers.get(card));
+  knowledgeFlashTimers.set(card, setTimeout(() => card.classList.remove('knowledge-flash'), 1900));
 }
 els.knowledgeToggleAll.addEventListener('click', event => {
   event.stopPropagation(); event.preventDefault();
@@ -784,6 +817,7 @@ async function start() {
           if (index >= 0) detail.knowledge[index] = message.item;
           else detail.knowledge.push(message.item);
           renderKnowledge();
+          focusKnowledgeItem(message.item.id); // 追踪开关开启时定位高亮（含更新已有条目）
         }
       }
       if (message.type === 'processing-updated') fetchDetail().catch(() => {});

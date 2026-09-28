@@ -88,3 +88,8 @@ details.knowledge-item>summary~*:last-child{margin-bottom:15px}
 .back-to-top:hover{background:#edf5ed}
 .back-to-top[hidden]{display:none}
 @media(max-width:700px){.back-to-top{right:16px;bottom:20px;width:42px;height:42px}}
+/* 知识追踪（issue #5）：开关态 + 新条目到达时的高亮闪烁 */
+.toggle-all.knowledge-track{margin-left:6px}
+.toggle-all.knowledge-track.active{background:#e7f2e9;border-color:#8fb097;color:#2c5745}
+details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
+@keyframes knowledge-flash{0%{border-color:#5f9070;background:#e9f4ea;box-shadow:0 0 0 3px #5f907033}70%{border-color:#5f9070;background:#eef6ef;box-shadow:0 0 0 3px #5f907022}100%{border-color:#e5e9e2;background:#fbfcfa;box-shadow:none}}
