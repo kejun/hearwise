@@ -468,9 +468,11 @@ function renderKnowledge() {
     card.dataset.id = item.id != null ? String(item.id) : ''; // 追踪定位按事件条目 id 查找（不一定是列表末尾）
     card.open = openIds.has(card.dataset.kid); // 默认收起；重建后恢复原有展开状态
     const heading = el('summary', 'knowledge-heading');
+    const titleLine = el('span', 'knowledge-title-line');
     const labels = { person: '人物', organization: '组织', product: '产品', work: '作品', method: '方法', event: '事件', place: '地点' };
-    heading.append(el('strong', '', item.canonical_name), el('span', 'knowledge-type', labels[item.display_label] || names[item.type] || item.type));
-    if (item.certainty === 'needs_review') heading.append(el('span', 'needs-review', '待确认'));
+    titleLine.append(el('strong', '', item.canonical_name), el('span', 'knowledge-type', labels[item.display_label] || names[item.type] || item.type));
+    if (item.certainty === 'needs_review') titleLine.append(el('span', 'needs-review', '待确认'));
+    heading.append(titleLine);
     if (item.short_description || item.dialogue_summary) heading.append(el('span', 'knowledge-brief', item.short_description || item.dialogue_summary));
     card.append(heading);
     if (item.aliases?.length) card.append(el('p', 'knowledge-aliases', `别名：${item.aliases.join('、')}`));

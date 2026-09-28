@@ -80,7 +80,11 @@ details.knowledge-item{padding:0}
 details.knowledge-item>summary{cursor:pointer;padding:16px}
 details.knowledge-item>summary~*{margin-left:16px;margin-right:16px}
 details.knowledge-item>summary~*:last-child{margin-bottom:16px}
-.knowledge-brief{flex-basis:100%;color:#52675a;font-size:13px;font-weight:400;line-height:1.5;margin-left:0}
+.knowledge-heading{display:grid;grid-template-columns:16px minmax(0,1fr);align-items:start;column-gap:8px;row-gap:7px}
+details.knowledge-item>summary::before{grid-column:1;grid-row:1;margin:6px 0 0 2px}
+.knowledge-title-line{grid-column:2;grid-row:1;display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;min-width:0}
+.knowledge-title-line strong,.knowledge-brief{overflow-wrap:anywhere}
+.knowledge-brief{grid-column:2;display:block;min-width:0;color:#52675a;font-size:13px;font-weight:400;line-height:1.55}
 .toggle-all{margin-left:12px;border:1px solid #b5c5b8;border-radius:999px;background:#fff;color:#315f4d;font-size:12px;font-weight:650;padding:5px 13px;cursor:pointer;vertical-align:2px}
 .toggle-all:hover{background:#edf5ed}
 /* 返回顶部浮标：z-index 低于 modal-backdrop(10) */
