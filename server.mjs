@@ -7,6 +7,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from './storage.mjs';
 import { extractKnowledge, splitFocusSegments } from './knowledge.mjs';
 import { createTranslationScheduler } from './translation-queue.mjs';
+import { createKnowledgeScheduler } from './knowledge-queue.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -16,7 +17,8 @@ const model = 'qwen-audio-3.0-asr-flash-streaming';
 const asrEndpoint = process.env.ASR_ENDPOINT || 'wss://maas.qianwenaiapi.com/api-ws/v1/inference';
 const mtEndpoint = process.env.MT_ENDPOINT || 'https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions';
 const types = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8',
-  '/audio-processor.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8' };
+  '/audio-processor.js': 'text/javascript; charset=utf-8', '/processing-state.js': 'text/javascript; charset=utf-8',
+  '/style.css': 'text/css; charset=utf-8' };
 const targets = ['Chinese', 'English', 'Japanese', 'Korean'];
 const sources = ['auto', 'zh', 'en', 'ja', 'ko'];
 // 识别语言与译文语言相同（如中文→简体中文）时不调用翻译模型，原文直通作为最终译文；auto 无法判定，永远走翻译
@@ -27,16 +29,22 @@ const captionModes = ['realtime', 'classic'];
 const asrSentenceSilenceMs = Math.min(6000, Math.max(200, Number(process.env.ASR_SENTENCE_SILENCE_MS || 2500)));
 const keys = new Map();
 const listeners = new Map();
-const extractionTimers = new Map();
 const translations = createTranslationScheduler();
 let translating = 0;
 let interimTranslating = 0;
-let extracting = false;
-let extractingId = null;
-let extractionDeferred = null;
 const activeTranslations = new Map();
 const modelErrorCounts = new Map();
-const extractionWaitMs = Math.max(1000, Number(process.env.EXTRACTION_WAIT_MS || 15000));
+const configuredExtractionWait = Number(process.env.EXTRACTION_WAIT_MS ?? 1500);
+const extractionWaitMs = Number.isFinite(configuredExtractionWait) ? Math.min(15000, Math.max(0, configuredExtractionWait)) : 1500;
+const knowledgeScheduler = createKnowledgeScheduler({
+  store, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
+  translationBusy: () => Boolean(translations.length || translating || interimTranslating),
+  execute: executeKnowledge, onChange: publishProcessing, onIdle: maybeReleaseKey,
+  onError: error => logModelError('knowledge', error),
+  onLog: entry => console.info('knowledge_job', JSON.stringify(entry)),
+  translationGraceMs: extractionWaitMs,
+  concurrency: Math.min(4, Math.max(1, Math.floor(Number(process.env.EXTRACTION_CONCURRENCY) || 2)))
+});
 
 function sendJson(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -62,6 +70,11 @@ async function readJson(req) {
 function broadcast(listeningId, data) {
   for (const ws of listeners.get(listeningId) || []) if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
 }
+function publishProcessing(id, { refreshDetail = false } = {}) {
+  if (!store.hasListening(id)) return;
+  broadcast(id, { type: 'processing-updated', listeningId: id, processing: store.processing(id),
+    processingAvailable: keys.has(id), refreshDetail });
+}
 function subscribe(id, ws) {
   if (!listeners.has(id)) listeners.set(id, new Set());
   listeners.get(id).add(ws);
@@ -74,7 +87,8 @@ function unsubscribe(id, ws) {
 function errorMessage(error) { return String(error?.message || error || '服务暂时不可用').slice(0, 300); }
 function logModelError(modelName, error) {
   const message = errorMessage(error);
-  const kind = /429|rate limit|限流/i.test(message) ? 'rate_limit' : /timeout|超时/i.test(message) ? 'timeout' : 'other';
+  const kind = error?.status === 429 || /429|rate limit|限流/i.test(message) ? 'rate_limit'
+    : ['TimeoutError', 'AbortError'].includes(error?.name) || /timeout|超时/i.test(message) ? 'timeout' : 'other';
   const counter = `${modelName}:${kind}`;
   modelErrorCounts.set(counter, (modelErrorCounts.get(counter) || 0) + 1);
   console.warn('model_error', counter, modelErrorCounts.get(counter), message);
@@ -128,9 +142,10 @@ function checkRecognition(key) {
 }
 
 function maybeReleaseKey(id) {
-  if (!id || listeners.get(id)?.size || extractionTimers.has(id) || extractingId === id ||
-      activeTranslations.get(id) || translations.hasListening(id) || store.nextJob(id)) return;
+  if (!id || listeners.get(id)?.size || knowledgeScheduler.hasWork(id) ||
+      activeTranslations.get(id) || translations.hasListening(id)) return;
   keys.delete(id);
+  knowledgeScheduler.pump();
 }
 function queueTranslation(segment, listeningId, target, kind = 'background') {
   if (segment.translation_state === 'complete') return;
@@ -158,68 +173,28 @@ function pumpTranslations() {
         translating--;
         activeTranslations.set(task.listeningId, activeTranslations.get(task.listeningId) - 1);
         if (!activeTranslations.get(task.listeningId)) activeTranslations.delete(task.listeningId);
-        pumpTranslations(); pumpExtraction(); maybeReleaseKey(task.listeningId);
+        publishProcessing(task.listeningId);
+        pumpTranslations(); knowledgeScheduler.pump(); maybeReleaseKey(task.listeningId);
       }
     })();
   }
 }
-function scheduleExtraction(listeningId, force = false) {
-  const rows = store.extractionRange(listeningId);
-  if (!rows.length) return;
-  if (rows.length >= 3 || force) {
-    clearTimeout(extractionTimers.get(listeningId));
-    extractionTimers.delete(listeningId);
-    store.createExtractionJob(listeningId, rows);
-    console.info('knowledge_queue_length', store.pendingJobCount());
-    pumpExtraction();
-    if (rows.length === 3 && store.extractionRange(listeningId).length) scheduleExtraction(listeningId);
-    return;
+async function executeKnowledge(job, key) {
+  const baseInput = store.jobInput(job);
+  for (const input of splitFocusSegments(baseInput)) {
+    if (!store.hasListening(job.listening_id)) break;
+    const refreshed = store.jobInput(job, input.focus_segments);
+    input.existing_candidates = refreshed.existing_candidates;
+    if (job.prompt_version === 2) input.observed_candidates = refreshed.observed_candidates;
+    const parsed = await extractKnowledge(key, input, mtEndpoint);
+    if (!store.hasListening(job.listening_id)) break;
+    if (parsed.rejected.length) console.info('knowledge_rejected', job.id, `${parsed.rejected.length}/${parsed.rejected.length + parsed.items.length}`,
+      parsed.rejected.map(r => `${r.name}（${r.reason}）`).join('；').slice(0, 400));
+    const changed = job.prompt_version === 2
+      ? store.applyKnowledgeV2(job.listening_id, parsed.items)
+      : store.applyKnowledge(job.listening_id, parsed.items);
+    for (const item of changed) broadcast(job.listening_id, { type: 'knowledge-upserted', listeningId: job.listening_id, item });
   }
-  if (!extractionTimers.has(listeningId)) extractionTimers.set(listeningId, setTimeout(() => {
-    extractionTimers.delete(listeningId); scheduleExtraction(listeningId, true);
-  }, 10000));
-}
-function pumpExtraction() {
-  if (extracting) return;
-  let job;
-  for (const id of keys.keys()) { job = store.nextJob(id); if (job) break; }
-  if (!job) return;
-  if ((translations.length || translating || interimTranslating) && Date.now() - Date.parse(job.created_at) < extractionWaitMs) {
-    if (!extractionDeferred) extractionDeferred = setTimeout(() => { extractionDeferred = null; pumpExtraction(); }, 1000); return;
-  }
-  extracting = true; extractingId = job.listening_id;
-  store.markJob(job.id, 'running');
-  (async () => {
-    const baseInput = store.jobInput(job);
-    let error;
-    try {
-      for (const input of splitFocusSegments(baseInput)) {
-        if (!store.hasListening(job.listening_id)) break;
-        const refreshed = store.jobInput(job, input.focus_segments);
-        input.existing_candidates = refreshed.existing_candidates;
-        if (job.prompt_version === 2) input.observed_candidates = refreshed.observed_candidates;
-        let parsed;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try { parsed = await extractKnowledge(keys.get(job.listening_id), input, mtEndpoint); break; }
-          catch (caught) { error = caught; if (attempt === 0) continue; throw caught; }
-        }
-        if (!store.hasListening(job.listening_id)) break;
-        if (parsed.rejected.length) console.info('knowledge_rejected', job.id, `${parsed.rejected.length}/${parsed.rejected.length + parsed.items.length}`,
-          parsed.rejected.map(r => `${r.name}（${r.reason}）`).join('；').slice(0, 400));
-        const changed = job.prompt_version === 2
-          ? store.applyKnowledgeV2(job.listening_id, parsed.items)
-          : store.applyKnowledge(job.listening_id, parsed.items);
-        for (const item of changed) broadcast(job.listening_id, { type: 'knowledge-upserted', item });
-      }
-      store.markJob(job.id, 'complete');
-    } catch (caught) {
-      store.markJob(job.id, 'failed', errorMessage(caught));
-      logModelError('knowledge', caught);
-    } finally {
-      broadcast(job.listening_id, { type: 'processing-updated' });
-      extracting = false; extractingId = null; pumpExtraction(); maybeReleaseKey(job.listening_id);
-    }
-  })();
 }
 function resumeProcessing(id, key) {
   keys.set(id, key);
@@ -231,8 +206,8 @@ function resumeProcessing(id, key) {
     }
     queueTranslation(row, id, row.target_lang);
   }
-  scheduleExtraction(id, true);
-  pumpExtraction();
+  knowledgeScheduler.schedule(id, true);
+  knowledgeScheduler.pump();
   maybeReleaseKey(id);
 }
 
@@ -258,7 +233,7 @@ const server = http.createServer(async (req, res) => {
       if (translations.length || translating + interimTranslating >= translations.concurrency) return sendJson(res, 429, { error: '最终译文优先处理' });
       interimTranslating++;
       try { return sendJson(res, 200, { text: await translate(key.trim(), text.trim(), target) }); }
-      finally { interimTranslating--; pumpExtraction(); }
+      finally { interimTranslating--; knowledgeScheduler.pump(); }
     } catch (error) { return sendJson(res, 502, { error: errorMessage(error) }); }
   }
   if (req.method === 'GET' && url.pathname === '/api/listenings') {
@@ -276,11 +251,9 @@ const server = http.createServer(async (req, res) => {
       const result = store.removeListening(match[1]);
       if (result === 'missing') return sendJson(res, 404, { error: '收听记录不存在' });
       if (result === 'active') return sendJson(res, 409, { error: '请先停止这条收听，再删除记录' });
-      clearTimeout(extractionTimers.get(match[1]));
-      extractionTimers.delete(match[1]);
       translations.remove(match[1]);
       keys.delete(match[1]);
-      pumpExtraction();
+      knowledgeScheduler.remove(match[1]);
       return sendJson(res, 200, { ok: true });
     } catch (error) { return sendJson(res, 500, { error: errorMessage(error) }); }
   }
@@ -425,7 +398,7 @@ wss.on('connection', client => {
               const finalSegment = passthrough ? store.setTranslation(segment.id, segment.original_text, false) : segment;
               send({ type: 'segment-final', runId: run.runId, segment: finalSegment });
               if (!passthrough) queueTranslation(segment, listeningId, targetLang, 'realtime');
-              scheduleExtraction(listeningId);
+              knowledgeScheduler.schedule(listeningId);
             }
           } catch (error) { fail(`保存原文失败：${errorMessage(error)}`); }
         }
@@ -440,7 +413,7 @@ wss.on('connection', client => {
           fail(reason);
         }
         if (kind === 'task-finished') {
-          finished = true; store.finishRun(run?.runId); scheduleExtraction(listeningId, true);
+          finished = true; store.finishRun(run?.runId); knowledgeScheduler.schedule(listeningId, true);
           send({ type: 'finished' }); ws.close(); client.close();
         }
       });
@@ -456,10 +429,10 @@ wss.on('connection', client => {
   });
   client.on('close', () => {
     unsubscribe(listeningId, client);
-    if (run && !finished) { store.finishRun(run.runId, true); scheduleExtraction(listeningId, true); }
+    if (run && !finished) { store.finishRun(run.runId, true); knowledgeScheduler.schedule(listeningId, true); }
     upstream?.close();
     maybeReleaseKey(listeningId);
   });
 });
 
-server.listen(port, host, () => console.log(`同声翻译已启动：http://${host}:${port}`));
+server.listen(port, host, () => console.log(`同声翻译已启动：http://${host}:${server.address().port}`));

@@ -23,7 +23,7 @@ export class ListeningStore {
   }
   migrate() {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 2) throw new Error(`不支持的数据库版本：${version}`);
+    if (version > 3) throw new Error(`不支持的数据库版本：${version}`);
     if (version === 0) this.tx(() => {
       this.db.exec(`
         CREATE TABLE listenings (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -84,6 +84,10 @@ export class ListeningStore {
         CREATE INDEX knowledge_fact_item ON knowledge_facts(item_id);
         PRAGMA user_version = 2;
       `);
+    });
+    if (version < 3) this.tx(() => {
+      this.db.exec(`ALTER TABLE extraction_jobs ADD COLUMN retry_at TEXT;
+        PRAGMA user_version = 3;`);
     });
   }
   createRun(listeningId, settings, title) {
@@ -160,11 +164,23 @@ export class ListeningStore {
     const latestSegment = this.db.prepare('SELECT * FROM segments WHERE listening_id=? ORDER BY sequence_no DESC LIMIT 1').get(id);
     const knowledge = this.knowledge(id);
     const jobs = this.db.prepare('SELECT * FROM extraction_jobs WHERE listening_id=? ORDER BY from_sequence').all(id);
-    const processing = this.db.prepare(`SELECT
-      SUM(CASE WHEN translation_state='failed' THEN 1 ELSE 0 END) AS failedTranslations,
-      SUM(CASE WHEN translation_state='pending' THEN 1 ELSE 0 END) AS pendingTranslations
-      FROM segments WHERE listening_id=?`).get(id);
+    const processing = this.processing(id);
     return { listening, runs, segments, latestSegment, segmentCount, knowledge, jobs, processing, page, pageSize };
+  }
+  processing(id) {
+    const translations = this.db.prepare(`SELECT
+      COALESCE(SUM(translation_state='failed'),0) AS failedTranslations,
+      COALESCE(SUM(translation_state='pending'),0) AS pendingTranslations
+      FROM segments WHERE listening_id=?`).get(id);
+    const knowledge = this.db.prepare(`SELECT
+      COALESCE(SUM(state='pending' AND retry_at IS NULL),0) AS pendingJobs,
+      COALESCE(SUM(state='pending' AND retry_at IS NOT NULL),0) AS retryingJobs,
+      COALESCE(SUM(state='running'),0) AS runningJobs,
+      COALESCE(SUM(state='failed'),0) AS failedJobs
+      FROM extraction_jobs WHERE listening_id=?`).get(id);
+    knowledge.bufferedSegments = this.db.prepare(`SELECT COUNT(*) AS n FROM segments
+      WHERE listening_id=? AND sequence_no>(SELECT COALESCE(MAX(to_sequence),0) FROM extraction_jobs WHERE listening_id=?)`).get(id, id).n;
+    return { ...translations, knowledge };
   }
   segmentsQuery(listeningId, { runId = null, latest = null, afterSequence = null, beforeSequence = null, ids = null, limit = 50 } = {}) {
     if (!this.hasListening(listeningId)) return null;
@@ -208,7 +224,7 @@ export class ListeningStore {
   }
   extractionRange(listeningId) {
     const last = this.db.prepare('SELECT COALESCE(MAX(to_sequence),0) AS n FROM extraction_jobs WHERE listening_id=?').get(listeningId).n;
-    const rows = this.db.prepare('SELECT id, sequence_no, original_text FROM segments WHERE listening_id=? AND sequence_no>? ORDER BY sequence_no LIMIT 3').all(listeningId, last);
+    const rows = this.db.prepare('SELECT id, sequence_no, original_text, created_at FROM segments WHERE listening_id=? AND sequence_no>? ORDER BY sequence_no LIMIT 3').all(listeningId, last);
     const selected = [];
     let length = 0;
     for (const row of rows) {
@@ -220,7 +236,7 @@ export class ListeningStore {
   createExtractionJob(listeningId, rows) {
     if (!rows.length) return null;
     return this.tx(() => {
-      const previous = this.db.prepare("SELECT * FROM extraction_jobs WHERE listening_id=? AND state='pending' ORDER BY to_sequence DESC LIMIT 1").get(listeningId);
+      const previous = this.db.prepare("SELECT * FROM extraction_jobs WHERE listening_id=? AND state='pending' AND attempts=0 AND retry_at IS NULL ORDER BY to_sequence DESC LIMIT 1").get(listeningId);
       if (previous && previous.to_sequence + 1 === rows[0].sequence_no &&
           rows.at(-1).sequence_no - previous.from_sequence < 6) {
         const totalChars = this.db.prepare('SELECT SUM(LENGTH(original_text)) AS n FROM segments WHERE listening_id=? AND sequence_no BETWEEN ? AND ?')
@@ -232,7 +248,9 @@ export class ListeningStore {
       }
       const id = randomUUID(), time = now();
       const policyVersion = this.db.prepare('SELECT knowledge_policy_version AS version FROM listenings WHERE id=?').get(listeningId).version;
-      this.db.prepare('INSERT OR IGNORE INTO extraction_jobs VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, listeningId, rows[0].sequence_no,
+      this.db.prepare(`INSERT OR IGNORE INTO extraction_jobs
+        (id,listening_id,from_sequence,to_sequence,prompt_version,state,attempts,last_error,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id, listeningId, rows[0].sequence_no,
         rows.at(-1).sequence_no, policyVersion, 'pending', 0, null, time, time);
       return this.db.prepare('SELECT * FROM extraction_jobs WHERE listening_id=? AND from_sequence=? AND to_sequence=? AND prompt_version=?')
         .get(listeningId, rows[0].sequence_no, rows.at(-1).sequence_no, policyVersion);
@@ -244,9 +262,13 @@ export class ListeningStore {
   nextJob(listeningId) {
     return this.db.prepare("SELECT * FROM extraction_jobs WHERE listening_id=? AND state='pending' ORDER BY from_sequence LIMIT 1").get(listeningId);
   }
-  markJob(id, state, error = null) {
-    this.db.prepare('UPDATE extraction_jobs SET state=?, attempts=attempts+?, last_error=?, updated_at=? WHERE id=?')
-      .run(state, state === 'running' ? 1 : 0, error, now(), id);
+  markJob(id, state, error = null, retryAt = null) {
+    this.db.prepare('UPDATE extraction_jobs SET state=?, attempts=attempts+?, last_error=?, retry_at=?, updated_at=? WHERE id=?')
+      .run(state, state === 'running' ? 1 : 0, error, retryAt, now(), id);
+  }
+  jobMetrics(job) {
+    return this.db.prepare(`SELECT COUNT(*) AS segment_count, MIN(created_at) AS first_final_at, MAX(created_at) AS last_final_at
+      FROM segments WHERE listening_id=? AND sequence_no BETWEEN ? AND ?`).get(job.listening_id, job.from_sequence, job.to_sequence);
   }
   jobInput(job, focusSegments = null) {
     const focus = focusSegments || this.db.prepare('SELECT id, original_text AS text FROM segments WHERE listening_id=? AND sequence_no BETWEEN ? AND ? ORDER BY sequence_no')
@@ -430,6 +452,7 @@ export class ListeningStore {
   }
   retry(listeningId) {
     this.db.prepare("UPDATE segments SET translation_state='pending' WHERE listening_id=? AND translation_state='failed'").run(listeningId);
-    this.db.prepare("UPDATE extraction_jobs SET state='pending', updated_at=? WHERE listening_id=? AND state IN ('failed','running')").run(now(), listeningId);
+    const time = now();
+    this.db.prepare("UPDATE extraction_jobs SET state='pending', attempts=0, retry_at=?, last_error=NULL, updated_at=? WHERE listening_id=? AND state='failed'").run(time, time, listeningId);
   }
 }
