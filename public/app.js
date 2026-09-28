@@ -16,7 +16,7 @@ const els = {
   historyError: $('history-error'), back: $('back-to-listening'),
   recordPanel: $('record-panel'), recordTitle: $('record-title'), processingStatus: $('processing-status'),
   retryProcessing: $('retry-processing'), knowledgeList: $('knowledge-list'), knowledgeCount: $('knowledge-count'),
-  transcriptList: $('transcript-list'), runsList: $('runs-list'), loadMore: $('load-more'), downloadSelect: $('download-select'),
+  transcriptList: $('transcript-list'), runsPanel: $('runs-panel'), runsList: $('runs-list'), loadMore: $('load-more'), downloadSelect: $('download-select'),
   knowledgeToggleAll: $('knowledge-toggle-all'), knowledgeTrack: $('knowledge-track'), backToTop: $('back-to-top'),
   sizeSlider: $('translation-size'), captionMode: $('caption-mode')
 };
@@ -28,10 +28,10 @@ localStorage.removeItem('tongsheng:key');
 localStorage.removeItem('tongsheng:region');
 els.apiKey.value = saved.key;
 
-// 译文字号滑块：范围 30-70，默认 50 居中，持久化到 localStorage
+// 译文字号滑块：范围 30-70，默认 44；用户自定义值保持不变
 const SIZE_KEY = 'tongsheng:translation-size';
 function applyTranslationSize(value) {
-  const size = Math.min(70, Math.max(30, Math.round(Number(value)) || 50));
+  const size = Math.min(70, Math.max(30, Math.round(Number(value)) || 44));
   els.sizeSlider.value = String(size);
   document.documentElement.style.setProperty('--translation-size', String(size));
 }
@@ -39,6 +39,12 @@ applyTranslationSize(localStorage.getItem(SIZE_KEY));
 els.sizeSlider.addEventListener('input', () => {
   applyTranslationSize(els.sizeSlider.value);
   localStorage.setItem(SIZE_KEY, els.sizeSlider.value);
+});
+
+const RUNS_PANEL_KEY = 'tongsheng:runs-panel-open';
+els.runsPanel.open = localStorage.getItem(RUNS_PANEL_KEY) !== 'closed';
+els.runsPanel.addEventListener('toggle', () => {
+  localStorage.setItem(RUNS_PANEL_KEY, els.runsPanel.open ? 'open' : 'closed');
 });
 
 let phase = 'idle';
