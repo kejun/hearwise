@@ -1,6 +1,8 @@
 # 同声
 <img src="https://mdn.alipayobjects.com/huamei_ytl0i7/afts/img/A*dNRZTZ1uLlAAAAAAUCAAAAgAejCYAQ/original" style="max-width:100%;">
+
 同声是一个个人本地应用，它适合用于听一些知识型演讲、播客等，它不仅可以实时翻译，同时可以实时提取知识条目，保留收听全文。
+
 同声是一个极简的本地 Web 应用：麦克风或浏览器标签页的音频通过本地服务转发给千问AI平台 `qwen-audio-3.0-asr-flash-streaming`，识别结果持续显示；译文由 `qwen-mt-flash` 生成，人物、术语等知识由 `qwen3.8-flash` 从最终原文中整理。默认识别英语，翻译为简体中文；也可以手动切换成自动识别。
 
 ## 运行
