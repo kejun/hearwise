@@ -113,9 +113,14 @@ test('3000 字符、trim 后边界及默认语言正常；共享模块可由浏�
   const before = s.calls.length;
   const passthrough = await s.post({ ...valid, source: 'zh', text: ' 同语言原文 ' });
   assert.equal(passthrough.body.text, '同语言原文'); assert.equal(s.calls.length, before);
-  const module = await fetch(`${s.base}/translation-params.js`);
-  assert.equal(module.status, 200); assert.match(module.headers.get('content-type'), /javascript/);
-  assert.match(await module.text(), /export const INTERIM_TRANSLATION_MAX_LENGTH = 3000/);
+  for (const [file, declaration] of [
+    ['translation-params.js', /export const INTERIM_TRANSLATION_MAX_LENGTH = 3000/],
+    ['processing-state.js', /export function createProcessingPoller/]
+  ]) {
+    const module = await fetch(`${s.base}/${file}`);
+    assert.equal(module.status, 200); assert.match(module.headers.get('content-type'), /javascript/);
+    assert.match(await module.text(), declaration);
+  }
 });
 
 test('超长临时输入被明确拒绝，最终原文仍完整入库翻译，繁忙后自动恢复', async t => {

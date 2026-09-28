@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as translationParams from '../public/translation-params.js';
+import { processingView, createProcessingPoller } from '../public/processing-state.js';
 
 // Execute the actual app and event handlers with a minimal DOM and controllable HTTP responses.
 // Deliberately let aborted requests resolve to exercise the stale-response guards.
@@ -35,7 +36,7 @@ function app(t) {
     close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
   }
   const context = vm.createContext({
-    ...translationParams, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
+    ...translationParams, processingView, createProcessingPoller, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },
     document: { getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
     window: { addEventListener() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },

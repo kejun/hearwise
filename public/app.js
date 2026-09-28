@@ -1,4 +1,5 @@
 import { INTERIM_TRANSLATION_MAX_LENGTH, validateInterimTranslation } from './translation-params.js';
+import { processingView, createProcessingPoller } from './processing-state.js';
 
 const $ = id => document.getElementById(id);
 const els = {
@@ -69,7 +70,11 @@ let detail = null;
 let detailPage = 0;
 let historyPage = 0;
 let currentSegmentId = null;
-let pollingTimer;
+let liveProcessing = null;
+const detailPoller = createProcessingPoller({
+  read: async () => { await fetchDetail(); return detail; },
+  isCurrent: id => id === listeningId && phase === 'idle' && !els.listeningView.hidden
+});
 let retryAfterSave = false;
 const liveSegments = new Map();
 const liveKnowledge = new Map();
@@ -573,14 +578,9 @@ els.knowledgeToggleAll.addEventListener('click', event => {
 
 function renderProcessing() {
   if (!detail) return;
-  const failedTranslations = Math.max(detail.processing?.failedTranslations || 0, detail.segments.filter(s => s.translation_state === 'failed').length);
-  const pendingTranslations = Math.max(detail.processing?.pendingTranslations || 0, detail.segments.filter(s => s.translation_state === 'pending').length);
-  const failedJobs = detail.jobs.filter(j => j.state === 'failed').length;
-  const pendingJobs = detail.jobs.filter(j => j.state === 'pending' || j.state === 'running').length;
-  const failed = failedTranslations + failedJobs;
-  const pending = pendingTranslations + pendingJobs;
-  els.processingStatus.textContent = failed ? `${failed} 项处理失败` : pending ? detail.processingAvailable ? `${pending} 项处理中` : `${pending} 项待继续处理（需 API Key）` : '已处理';
-  els.retryProcessing.hidden = !failed && !pending;
+  const view = processingView(detail);
+  els.processingStatus.textContent = view.text;
+  els.retryProcessing.hidden = !view.canRetry;
 }
 function renderDetail() {
   if (!detail) return;
@@ -591,9 +591,18 @@ function renderDetail() {
 async function fetchDetail(page = 1, append = false) {
   if (!listeningId) return;
   const requestedId = listeningId;
-  const response = await fetch(`/api/listenings/${requestedId}?page=${page}`);
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || '无法读取收听记录');
+  const processingAtStart = liveProcessing;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  let response, result;
+  try {
+    response = await fetch(`/api/listenings/${requestedId}?page=${page}`, { signal: controller.signal });
+    result = await response.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('读取收听记录超时，请稍后重试');
+    throw error;
+  } finally { clearTimeout(timeout); }
+  if (!response.ok) throw Object.assign(new Error(result.error || '无法读取收听记录'), { status: response.status });
   if (listeningId !== requestedId) return;
   const segments = new Map(result.segments.map(s => [s.id, s]));
   if (detail?.listening.id === result.listening.id) for (const old of detail.segments) {
@@ -608,6 +617,10 @@ async function fetchDetail(page = 1, append = false) {
   const knowledge = new Map(result.knowledge.map(k => [k.id, k]));
   for (const live of liveKnowledge.values()) if (!knowledge.has(live.id) || live.updated_at > knowledge.get(live.id).updated_at) knowledge.set(live.id, live);
   result.knowledge = [...knowledge.values()];
+  if (liveProcessing !== processingAtStart && liveProcessing?.listeningId === requestedId) {
+    result.processing = liveProcessing.processing;
+    result.processingAvailable = liveProcessing.processingAvailable;
+  }
   detail = result; detailPage = append ? page : Math.max(1, detailPage); renderDetail();
 }
 function showListening() {
@@ -616,7 +629,7 @@ function showListening() {
 }
 async function showHistory() {
   if (phase !== 'idle') return;
-  clearInterval(pollingTimer); showListening();
+  detailPoller.stop(); showListening();
   els.listeningView.hidden = true; els.historyView.hidden = false;
   updatePinnedCaption();
   await reloadHistory();
@@ -663,7 +676,8 @@ async function deleteListening(item, button) {
   }
 }
 async function selectListening(id) {
-  listeningId = id; detail = null; detailPage = 0; liveSegments.clear(); liveKnowledge.clear();
+  detailPoller.stop();
+  listeningId = id; detail = null; detailPage = 0; liveSegments.clear(); liveKnowledge.clear(); liveProcessing = null;
   await fetchDetail();
   if (listeningId !== id || !detail) return;
   const lastRun = detail.runs.at(-1);
@@ -675,13 +689,14 @@ async function selectListening(id) {
   clearError(); setPhase('idle'); showListening();
   const last = detail.latestSegment || detail.segments.at(-1);
   if (last) displayFinal(last);
+  startPolling();
 }
 function resetListening() {
-  clearInterval(pollingTimer);
+  detailPoller.stop();
   clearInterval(segmentPollTimer);
   listeningId = null; detail = null; detailPage = 0; currentSentenceId = null; currentSegmentId = null;
   activeRunId = null; provisionalFor = null;
-  liveSegments.clear(); liveKnowledge.clear();
+  liveSegments.clear(); liveKnowledge.clear(); liveProcessing = null;
   clearTranslationWork();
   els.recordPanel.hidden = true;
   els.original.textContent = '开始聆听后，实时识别的文字会出现。';
@@ -696,21 +711,12 @@ function newListening() {
   resetListening(); showListening();
 }
 function startPolling() {
-  clearInterval(pollingTimer);
-  if (!listeningId) return;
-  pollingTimer = setInterval(async () => {
-    if (phase === 'listening' || phase === 'connecting') return;
-    try {
-      await fetchDetail(1);
-      const pending = (detail.processing?.pendingTranslations || 0) > 0 || detail.jobs.some(j => ['pending','running'].includes(j.state));
-      if (!pending) clearInterval(pollingTimer);
-    } catch { clearInterval(pollingTimer); }
-  }, 2000);
+  if (listeningId) detailPoller.start(listeningId);
 }
 
 els.newListening.addEventListener('click', newListening);
 els.historyListening.addEventListener('click', () => showHistory().catch(error => els.historyList.replaceChildren(el('p', 'empty-note', error.message))));
-els.back.addEventListener('click', showListening);
+els.back.addEventListener('click', () => { showListening(); startPolling(); });
 els.historyMore.addEventListener('click', () => loadHistory().catch(error => showError(error.message)));
 els.loadMore.addEventListener('click', () => fetchDetail(detailPage + 1, true).catch(error => showError(error.message)));
 // transcript 面板 details 化后下载下拉位于 summary 内：阻止冒泡，点击下拉不触发面板折叠
@@ -825,6 +831,7 @@ async function releaseAudio() {
 async function start() {
   if (phase !== 'idle') return;
   if (!saved.key) { openSettings(true); return; }
+  detailPoller.stop();
   clearError();
   currentSentenceId = null; currentSegmentId = null;
   clearTranslationWork();
@@ -864,7 +871,7 @@ async function start() {
           renderTranscript(); renderProcessing();
         }
       }
-      if (message.type === 'knowledge-upserted') {
+      if (message.type === 'knowledge-upserted' && (!message.listeningId || message.listeningId === listeningId)) {
         liveKnowledge.set(message.item.id, message.item);
         if (detail) {
           const index = detail.knowledge.findIndex(k => k.id === message.item.id);
@@ -874,7 +881,17 @@ async function start() {
           focusKnowledgeItem(message.item.id); // 追踪开关开启时定位高亮（含更新已有条目）
         }
       }
-      if (message.type === 'processing-updated') fetchDetail().catch(() => {});
+      if (message.type === 'processing-updated' && (!message.listeningId || message.listeningId === listeningId)) {
+        if (message.processing) {
+          liveProcessing = { ...message, listeningId };
+          if (detail) {
+            detail.processing = message.processing;
+            detail.processingAvailable = message.processingAvailable;
+            renderProcessing();
+          }
+        }
+        if (message.refreshDetail || !message.processing) fetchDetail().catch(() => {});
+      }
       if (message.type === 'error' && gen === connectionGeneration) { showError(message.message || '连接失败'); connection.close(); }
       if (message.type === 'finished') { connection.close(); }
     });
@@ -897,6 +914,7 @@ async function start() {
     setPhase('idle');
     const permissionMessage = els.audioInput.value === 'tab' ? '请允许共享标签页及其音频，然后重试' : '请允许浏览器使用麦克风，然后重试';
     showError(error.name === 'NotAllowedError' ? permissionMessage : error.message || '无法启动音频采集');
+    startPolling();
   }
 }
 
