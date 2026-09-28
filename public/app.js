@@ -1,3 +1,5 @@
+import { INTERIM_TRANSLATION_MAX_LENGTH, validateInterimTranslation } from './translation-params.js';
+
 const $ = id => document.getElementById(id);
 const els = {
   toggle: $('toggle'), toggleLabel: $('toggle-label'), micIcon: $('mic-icon'), tabIcon: $('tab-icon'),
@@ -161,12 +163,18 @@ function setPhase(next, message) {
   if (tabInput && !els.hint.classList.contains('error')) els.hint.textContent = active ? '仅所选标签页的声音发送至阿里云' : '选择浏览器标签页，并勾选“共享标签页音频”';
 }
 
-function showError(message) {
+let hintErrorSource = null;
+function showError(message, source = 'general') {
+  // A provisional translation must not replace a connection/audio error.
+  if (source === 'interim-translation' && hintErrorSource && hintErrorSource !== source) return;
+  hintErrorSource = source;
   els.hint.textContent = message;
   els.hint.classList.add('error');
 }
 
-function clearError() {
+function clearError(source) {
+  if (source && hintErrorSource !== source) return;
+  hintErrorSource = null;
   if (els.audioInput.value === 'tab') els.hint.textContent = phase === 'listening' ? '仅所选标签页的声音发送至阿里云' : '选择浏览器标签页，并勾选“共享标签页音频”';
   else els.hint.textContent = '音频仅在聆听期间发送至阿里云';
   els.hint.classList.remove('error');
@@ -238,7 +246,10 @@ els.showKey.addEventListener('click', () => {
   els.showKey.textContent = shown ? '显示' : '隐藏';
   els.showKey.setAttribute('aria-label', shown ? '显示 API Key' : '隐藏 API Key');
 });
-els.apiKey.addEventListener('input', resetConnectionTest);
+els.apiKey.addEventListener('input', () => {
+  els.apiKey.setCustomValidity('');
+  resetConnectionTest();
+});
 els.testButton.addEventListener('click', async () => {
   const key = els.apiKey.value.trim();
   if (!key) {
@@ -285,9 +296,16 @@ els.testButton.addEventListener('click', async () => {
 });
 els.settingsForm.addEventListener('submit', event => {
   event.preventDefault();
-  saved.key = els.apiKey.value.trim();
-  if (!saved.key) return;
-  localStorage.setItem('tongsheng:qianwen-key', saved.key);
+  const key = els.apiKey.value.trim();
+  if (!key) {
+    els.apiKey.setCustomValidity('请输入有效的 API Key');
+    els.apiKey.reportValidity();
+    return;
+  }
+  els.apiKey.setCustomValidity('');
+  localStorage.setItem('tongsheng:qianwen-key', key);
+  saved.key = key;
+  clearTranslationWork();
   const shouldStart = startAfterSave;
   const shouldRetry = retryAfterSave;
   closeSettings();
@@ -308,42 +326,66 @@ function clearTranslationWork() {
 const sameLanguageTargets = { zh: 'Chinese', en: 'English', ja: 'Japanese', ko: 'Korean' };
 const isPassthrough = () => sameLanguageTargets[els.source.value] === els.target.value;
 
-function scheduleTranslation(text, final) {
+function deferLongTranslation() {
+  clearTranslationWork();
+  clearError('interim-translation');
+  els.badge.textContent = '长句识别中，等待完整译文';
+}
+
+function showInterimTranslationError(message) {
+  els.badge.textContent = '等待完整译文';
+  showError(`临时译文暂不可用：${message}`, 'interim-translation');
+}
+
+function scheduleTranslation(text) {
   if (!text.trim() || isPassthrough()) return;
-  pendingText = text;
-  if (final) clearTranslationWork();
-  else if (translationTimer) return;
-  const delay = final ? 0 : Math.max(0, lastTranslationAt + 1200 - Date.now());
+  pendingText = text.trim();
+  if (pendingText.length > INTERIM_TRANSLATION_MAX_LENGTH) { deferLongTranslation(); return; }
+  if (translationTimer) return;
+  const delay = Math.max(0, lastTranslationAt + 1200 - Date.now());
   translationTimer = setTimeout(async () => {
     translationTimer = null;
     translationRequest?.abort();
     const version = ++translationVersion;
-    const input = pendingText;
+    const input = { key: saved.key, text: pendingText, target: els.target.value, source: els.source.value };
+    const invalid = validateInterimTranslation(input);
+    if (invalid) {
+      if (invalid.code === 'INTERIM_TEXT_TOO_LONG') deferLongTranslation();
+      else showInterimTranslationError(invalid.error);
+      return;
+    }
     lastTranslationAt = Date.now();
     const controller = new AbortController();
     translationRequest = controller;
-    // 已显示临时译文时后台静默刷新，角标保持"临时译文"不闪动；仅占位态才提示"翻译中"
+    // Keep an existing provisional translation visible during background refresh.
     if (els.translation.classList.contains('placeholder')) els.badge.textContent = '翻译中';
     try {
       const response = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: saved.key, text: input, target: els.target.value, source: els.source.value }),
-        signal: controller.signal
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input), signal: controller.signal
       });
       const result = await response.json();
-      if (response.status === 429) { els.badge.textContent = '最终译文优先处理中'; return; }
-      if (!response.ok) throw new Error(result.error || '翻译失败');
+      // Check before ALL response branches: even a late 429 must not change the current caption.
       if (version !== translationVersion) return;
-      updateText(els.translation, result.text.trim() || input);
+      if (response.status === 429) {
+        clearError('interim-translation');
+        els.badge.textContent = '最终译文优先处理中';
+        return;
+      }
+      if (!response.ok && result?.code === 'INTERIM_TEXT_TOO_LONG') { deferLongTranslation(); return; }
+      if (!response.ok) throw new Error(result?.error || '翻译请求失败');
+      if (typeof result?.text !== 'string' || !result.text.trim()) throw new Error('翻译服务未返回文字');
+      clearError('interim-translation');
+      updateText(els.translation, result.text.trim());
       els.translation.classList.remove('placeholder');
-      els.translation.classList.add('provisional'); // 临时译文视觉标记，final 到达时移除
+      els.translation.classList.add('provisional');
       provisionalFor = { sentenceId: String(currentSentenceId) };
       els.badge.textContent = '临时译文';
     } catch (error) {
       if (error.name === 'AbortError' || version !== translationVersion) return;
-      els.badge.textContent = '翻译失败';
-      showError(error.message || '翻译失败，请检查 API Key');
+      showInterimTranslationError(error.message || '请稍后重试');
+    } finally {
+      if (translationRequest === controller) translationRequest = null;
     }
   }, delay);
 }
@@ -352,6 +394,9 @@ function receiveSentence(message) {
   if (typeof message.text !== 'string' || !message.text.trim()) return;
   const passthrough = isPassthrough(); // 同语言：原文直接镜像到译文区，不显示"正在翻译"占位
   if (message.id !== currentSentenceId) { // 新句开始：原文先行，译文待翻译
+    clearTranslationWork();
+    clearError('interim-translation');
+    els.badge.textContent = passthrough ? '无需翻译' : '正在识别';
     currentSentenceId = message.id;
     currentSegmentId = null;
     provisionalFor = null;
@@ -365,11 +410,12 @@ function receiveSentence(message) {
     updateText(els.translation, message.text);
     els.translation.classList.remove('placeholder');
     els.badge.textContent = '无需翻译';
-  } else if (message.text.trim().length >= 5) scheduleTranslation(message.text, false);
+  } else if (message.text.trim().length >= 5) scheduleTranslation(message.text);
 }
 
 function displayFinal(segment) {
   clearTranslationWork();
+  clearError('interim-translation');
   currentSentenceId = segment.asr_sentence_id;
   currentSegmentId = segment.id;
   updateText(els.original, segment.original_text);
@@ -835,6 +881,7 @@ async function start() {
     connection.addEventListener('error', () => { if (gen === connectionGeneration) showError('本地连接失败，请确认服务仍在运行'); });
     connection.addEventListener('close', async () => {
       if (socket !== connection) return;
+      clearTranslationWork();
       socket = null;
       await releaseAudio();
       if (phase === 'listening' || phase === 'connecting') {
