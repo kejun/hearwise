@@ -12,19 +12,24 @@ function harness(t, options = {}) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-09-28T08:00:00Z') });
   const dir = mkdtempSync(path.join(tmpdir(), 'knowledge-queue-'));
   const store = new ListeningStore(path.join(dir, 'test.sqlite'));
-  const keys = new Map(), calls = [], changes = [], logs = [];
+  const keys = new Map(), calls = [], changes = [], logs = [], idle = [];
   let busy = false, sequence = 0;
   const scheduler = createKnowledgeScheduler({ store, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
     translationBusy: () => busy,
     execute: (job, key) => new Promise((resolve, reject) => calls.push({ job, key, resolve, reject })),
     onChange: (id, flags) => changes.push({ id, flags, processing: store.processing(id) }), onLog: entry => logs.push(entry),
+    onIdle: id => idle.push({ id, hasWork: scheduler.hasWork(id) }),
     ...options });
   t.after(() => { scheduler.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
-  const run = (key = 'test-key') => { const r = store.createRun(null, settings, '测试'); keys.set(r.listeningId, key); return r; };
+  const run = (key = 'test-key', policyVersion = 1) => {
+    const r = store.createRun(null, settings, '测试');
+    store.db.prepare('UPDATE listenings SET knowledge_policy_version=? WHERE id=?').run(policyVersion, r.listeningId);
+    keys.set(r.listeningId, key); return r;
+  };
   const add = (r, count = 1, text = 'AlphaFold 是本次讨论的核心系统。') => {
     for (let i = 0; i < count; i++) store.addSegment(r.listeningId, r.runId, { id: String(++sequence), text });
   };
-  return { store, scheduler, keys, calls, changes, logs, run, add, setBusy: value => { busy = value; } };
+  return { store, scheduler, keys, calls, changes, logs, idle, run, add, setBusy: value => { busy = value; } };
 }
 
 test('孤立最终句 1.5 秒后整理，未组批期间已经显示为待处理', async t => {
@@ -214,7 +219,86 @@ test('重试分类限制次数，参数错误不重试，过长 Retry-After 交�
   assert.equal(knowledgeRetryDelay({ name: 'TimeoutError' }, 1), 2000);
 });
 
-test('v2 数据库升级为 v3 并恢复运行中任务，知识策略不变', t => {
+test('v2 continuation 释放全局槽但不完成任务，同收听后批不能越过等待的首批', async t => {
+  const h = harness(t, { concurrency: 1 }), a = h.run('a-key', 2), b = h.run('b-key', 2);
+  const readiness = new Map(), nextJob = h.store.nextJob.bind(h.store);
+  t.mock.method(h.store, 'nextJob', id => {
+    const job = nextJob(id);
+    return job ? { ...job, ready_at: readiness.get(job.id) ?? job.ready_at } : job;
+  });
+  h.add(a, 3); h.scheduler.schedule(a.listeningId);
+  h.add(a, 3); h.scheduler.schedule(a.listeningId);
+  h.add(b, 3); h.scheduler.schedule(b.listeningId);
+  const first = h.calls[0].job;
+  const readyAt = Date.now() + 8000;
+  readiness.set(first.id, readyAt);
+  // 模拟执行器在原子提交有效项后，持久化 pending 与分片 ready_at。
+  h.store.markJob(first.id, 'pending');
+  h.calls[0].resolve({ kind: 'continue', readyAt, reason: 'interval', summary: { created_count: 1 } });
+  await settle();
+  assert.equal(h.store.detail(a.listeningId).jobs[0].state, 'pending');
+  assert.equal(h.store.detail(a.listeningId).jobs[0].retry_at, null);
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[1].job.listening_id, b.listeningId);
+  assert.ok(h.idle.some(entry => entry.id === a.listeningId && entry.hasWork));
+  assert.equal(h.logs.find(entry => entry.state === 'continuing').created_count, 1);
+  h.store.markJob(h.calls[1].job.id, 'complete');
+  h.calls[1].resolve({ kind: 'terminal', outcome: 'empty' }); await settle();
+  t.mock.timers.tick(7999); assert.equal(h.calls.length, 2);
+  t.mock.timers.tick(1);
+  assert.equal(h.calls.length, 3);
+  assert.equal(h.calls[2].job.id, first.id);
+  assert.equal(h.calls[2].job.attempts, 2);
+  h.store.markJob(first.id, 'complete');
+  h.calls[2].resolve({ kind: 'terminal', outcome: 'partial', summary: { unresolved_count: 1 } }); await settle();
+  t.mock.timers.tick(2000);
+  assert.equal(h.calls[3].job.from_sequence, 4);
+  assert.equal(h.logs.find(entry => entry.outcome === 'partial').unresolved_count, 1);
+});
+
+test('v2 普通分片继续仍遵守两秒间隔，多次派发不受旧失败尝试上限限制', async t => {
+  const h = harness(t), r = h.run('test-key', 2);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  for (let index = 0; index < 4; index++) {
+    const call = h.calls[index];
+    h.store.markJob(call.job.id, 'pending');
+    call.resolve({ kind: 'continue', readyAt: Date.now(), reason: 'phase' }); await settle();
+    t.mock.timers.tick(1999); assert.equal(h.calls.length, index + 1);
+    t.mock.timers.tick(1); assert.equal(h.calls.length, index + 2);
+  }
+  assert.equal(h.calls[4].job.attempts, 5);
+  assert.equal(h.logs.filter(entry => entry.state === 'retrying').length, 0);
+  assert.equal(h.store.processing(r.listeningId).knowledge.failedJobs, 0);
+});
+
+test('v2 已内部处理的纠正 429 仍冷却共享 Key，其他 Key 可继续', async t => {
+  const h = harness(t, { concurrency: 1 }), a = h.run('shared-key', 2), b = h.run('shared-key', 2), c = h.run('other-key', 2);
+  h.add(a, 3); h.scheduler.schedule(a.listeningId);
+  for (const r of [b, c]) { h.add(r, 3); h.scheduler.schedule(r.listeningId); }
+  h.store.markJob(h.calls[0].job.id, 'failed', '纠正被限流');
+  h.calls[0].resolve({ kind: 'terminal', outcome: 'invalid', rateLimitMs: 10000, summary: { unresolved_count: 2 } });
+  await settle();
+  assert.equal(h.store.detail(a.listeningId).jobs[0].state, 'failed');
+  assert.equal(h.calls[1].job.listening_id, c.listeningId);
+  assert.equal(h.logs.find(entry => entry.outcome === 'invalid').state, 'failed');
+  h.store.markJob(h.calls[1].job.id, 'complete');
+  h.calls[1].resolve({ kind: 'terminal', outcome: 'ok' }); await settle();
+  t.mock.timers.tick(9999); assert.equal(h.calls.length, 2);
+  t.mock.timers.tick(1); assert.equal(h.calls[2].job.listening_id, b.listeningId);
+});
+
+test('v2 未捕获系统错误直接保留失败，不按 TypeError 自动重放已提交内容', async t => {
+  const errors = [], h = harness(t, { onError: error => errors.push(error) }), r = h.run('test-key', 2);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  h.calls[0].reject(new TypeError('checkpoint write failed')); await settle();
+  t.mock.timers.tick(100000);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.store.detail(r.listeningId).jobs[0].state, 'failed');
+  assert.equal(h.scheduler.hasWork(r.listeningId), false);
+  assert.equal(errors.length, 1);
+});
+
+test('v2 数据库升级为 v4，旧运行中 v2 任务隔离等待历史恢复', t => {
   const dir = mkdtempSync(path.join(tmpdir(), 'knowledge-migration-'));
   const filename = path.join(dir, 'test.sqlite');
   let store = new ListeningStore(filename);
@@ -222,11 +306,18 @@ test('v2 数据库升级为 v3 并恢复运行中任务，知识策略不变', t
   store.addSegment(r.listeningId, r.runId, { id: '1', text: 'AlphaFold' });
   const job = store.createExtractionJob(r.listeningId, store.extractionRange(r.listeningId));
   store.markJob(job.id, 'running');
-  store.db.exec('ALTER TABLE extraction_jobs DROP COLUMN retry_at; PRAGMA user_version=2;');
+  store.db.exec(`DROP TABLE extraction_parts;
+    ALTER TABLE extraction_jobs DROP COLUMN outcome;
+    ALTER TABLE extraction_jobs DROP COLUMN progress_json;
+    ALTER TABLE extraction_jobs DROP COLUMN retry_at;
+    PRAGMA user_version=2;`);
   store.close(); store = new ListeningStore(filename);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 3);
-  assert.equal(store.nextJob(r.listeningId).id, job.id);
-  assert.equal(store.nextJob(r.listeningId).retry_at, null);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(store.nextJob(r.listeningId), undefined);
+  const migrated = store.detail(r.listeningId).jobs[0];
+  assert.equal(migrated.id, job.id);
+  assert.equal(migrated.outcome, 'legacy');
+  assert.match(migrated.last_error, /LEGACY_RECOVERY_REQUIRED/);
   assert.equal(store.detail(r.listeningId).listening.knowledge_policy_version, 2);
 });

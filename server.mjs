@@ -9,6 +9,7 @@ import { ListeningStore } from './storage.mjs';
 import { extractKnowledge, splitFocusSegments } from './knowledge.mjs';
 import { createTranslationScheduler } from './translation-queue.mjs';
 import { createKnowledgeScheduler } from './knowledge-queue.mjs';
+import { createKnowledgeWorkflow } from './knowledge-workflow.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -37,6 +38,20 @@ const activeTranslations = new Map();
 const modelErrorCounts = new Map();
 const configuredExtractionWait = Number(process.env.EXTRACTION_WAIT_MS ?? 1500);
 const extractionWaitMs = Number.isFinite(configuredExtractionWait) ? Math.min(15000, Math.max(0, configuredExtractionWait)) : 1500;
+const knowledgeWorkflow = createKnowledgeWorkflow({
+  store, endpoint: mtEndpoint, onProgress: publishProcessing,
+  onItems: (id, items) => {
+    for (const item of items) broadcast(id, { type: 'knowledge-upserted', listeningId: id, item });
+  },
+  onRejected: (job, part, rejected, stage) => console.info('knowledge_rejected', JSON.stringify({
+    job_id: job.id, part_no: part, stage, rejected_count: rejected.length,
+    items: rejected.map(item => ({ source_index: item.sourceIndex, issues: item.issues }))
+  })),
+  onDiagnostic: (job, part, issues, stage) => console.info('knowledge_diagnostic', JSON.stringify({
+    job_id: job.id, part_no: part, stage, issues
+  })),
+  onError: error => logModelError('knowledge', error)
+});
 const knowledgeScheduler = createKnowledgeScheduler({
   store, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
   translationBusy: () => Boolean(translations.length || translating || interimTranslating),
@@ -181,6 +196,7 @@ function pumpTranslations() {
   }
 }
 async function executeKnowledge(job, key) {
+  if (job.prompt_version === 2) return knowledgeWorkflow.execute(job, key);
   const baseInput = store.jobInput(job);
   for (const input of splitFocusSegments(baseInput)) {
     if (!store.hasListening(job.listening_id)) break;
@@ -191,9 +207,7 @@ async function executeKnowledge(job, key) {
     if (!store.hasListening(job.listening_id)) break;
     if (parsed.rejected.length) console.info('knowledge_rejected', job.id, `${parsed.rejected.length}/${parsed.rejected.length + parsed.items.length}`,
       parsed.rejected.map(r => `${r.name}（${r.reason}）`).join('；').slice(0, 400));
-    const changed = job.prompt_version === 2
-      ? store.applyKnowledgeV2(job.listening_id, parsed.items)
-      : store.applyKnowledge(job.listening_id, parsed.items);
+    const changed = store.applyKnowledge(job.listening_id, parsed.items);
     for (const item of changed) broadcast(job.listening_id, { type: 'knowledge-upserted', listeningId: job.listening_id, item });
   }
 }
