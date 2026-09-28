@@ -1,3 +1,4 @@
+import { validateInterimTranslation, TRANSLATION_TARGETS, RECOGNITION_SOURCES } from './public/translation-params.js';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -18,9 +19,9 @@ const asrEndpoint = process.env.ASR_ENDPOINT || 'wss://maas.qianwenaiapi.com/api
 const mtEndpoint = process.env.MT_ENDPOINT || 'https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions';
 const types = { '/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8',
   '/audio-processor.js': 'text/javascript; charset=utf-8', '/processing-state.js': 'text/javascript; charset=utf-8',
-  '/style.css': 'text/css; charset=utf-8' };
-const targets = ['Chinese', 'English', 'Japanese', 'Korean'];
-const sources = ['auto', 'zh', 'en', 'ja', 'ko'];
+  '/translation-params.js': 'text/javascript; charset=utf-8', '/style.css': 'text/css; charset=utf-8' };
+const targets = TRANSLATION_TARGETS;
+const sources = RECOGNITION_SOURCES;
 // 识别语言与译文语言相同（如中文→简体中文）时不调用翻译模型，原文直通作为最终译文；auto 无法判定，永远走翻译
 const sameLanguageTargets = { zh: 'Chinese', en: 'English', ja: 'Japanese', ko: 'Korean' };
 const isSameLanguage = (source, target) => sameLanguageTargets[source] === target;
@@ -225,16 +226,21 @@ const server = http.createServer(async (req, res) => {
     } catch { return sendJson(res, 400, { error: '测试请求无效' }); }
   }
   if (req.method === 'POST' && url.pathname === '/api/translate') {
+    let input;
+    try { input = await readJson(req); }
+    catch { return sendJson(res, 400, { code: 'INVALID_TRANSLATION_REQUEST', error: '翻译请求格式无效' }); }
+    const invalid = validateInterimTranslation(input);
+    if (invalid) return sendJson(res, 400, invalid);
+    const { key, text, target = 'Chinese', source = 'auto' } = input;
     try {
-      const { key, text, target = 'Chinese', source = 'auto' } = await readJson(req);
-      if (typeof key !== 'string' || !key.trim() || typeof text !== 'string' || !text.trim() || text.length > 3000 || !targets.includes(target) || !sources.includes(source))
-        return sendJson(res, 400, { error: '翻译参数无效' });
-      if (isSameLanguage(source, target)) return sendJson(res, 200, { text: text.trim() }); // 同语言：直接回显原文，不调用翻译模型
-      if (translations.length || translating + interimTranslating >= translations.concurrency) return sendJson(res, 429, { error: '最终译文优先处理' });
+      if (isSameLanguage(source, target)) return sendJson(res, 200, { text: text.trim() });
+      if (translations.length || translating + interimTranslating >= translations.concurrency) {
+        return sendJson(res, 429, { code: 'FINAL_TRANSLATION_BUSY', error: '最终译文优先处理' });
+      }
       interimTranslating++;
       try { return sendJson(res, 200, { text: await translate(key.trim(), text.trim(), target) }); }
       finally { interimTranslating--; knowledgeScheduler.pump(); }
-    } catch (error) { return sendJson(res, 502, { error: errorMessage(error) }); }
+    } catch (error) { return sendJson(res, 502, { code: 'TRANSLATION_FAILED', error: errorMessage(error) }); }
   }
   if (req.method === 'GET' && url.pathname === '/api/listenings') {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
