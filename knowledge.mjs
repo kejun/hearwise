@@ -6,7 +6,7 @@ const promptV2Document = readFileSync(new URL('./docs/knowledge-extraction-promp
 export const SYSTEM_PROMPT_V2 = promptV2Document.match(/## System Message：固定提示词\s*```text\n([\s\S]*?)\n```/)?.[1];
 if (!SYSTEM_PROMPT || !SYSTEM_PROMPT_V2) throw new Error('知识抽取提示词缺失');
 
-const fail = message => { throw new Error(`知识结果无效：${message}`); };
+const fail = message => { throw Object.assign(new Error(`知识结果无效：${message}`), { code: 'KNOWLEDGE_INVALID_RESPONSE' }); };
 const clip = (value, max) => value.trim().slice(0, max);
 
 // 模型转写引用时常"顺手美化"（弯引号、破折号、空白、大小写），
@@ -174,7 +174,20 @@ export async function extractKnowledge(key, input, endpoint) {
       { role: 'user', content: JSON.stringify(input) }
     ] }), signal: AbortSignal.timeout(30000)
   });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error?.message || result.message || `知识服务 HTTP ${response.status}`);
-  return (input.policy_version === 2 ? parseKnowledgeV2 : parseKnowledge)(result.choices?.[0]?.message?.content, input);
+  let result;
+  try { result = await response.json(); }
+  catch (error) {
+    if (!response.ok) result = {};
+    else if (error instanceof SyntaxError) fail('HTTP 响应不是 JSON');
+    else throw error;
+  }
+  if (!response.ok) {
+    const retryAfter = response.headers.get('retry-after');
+    const seconds = retryAfter != null && /^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Number(retryAfter) : NaN;
+    const retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
+    throw Object.assign(new Error(result?.error?.message || result?.message || `知识服务 HTTP ${response.status}`), {
+      status: response.status, retryAfterMs: Number.isFinite(retryAfterMs) ? retryAfterMs : 0
+    });
+  }
+  return (input.policy_version === 2 ? parseKnowledgeV2 : parseKnowledge)(result?.choices?.[0]?.message?.content, input);
 }

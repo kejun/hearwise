@@ -149,7 +149,7 @@ test('WebSocket 最终句持久化、翻译抽取、停止后重试和继续收�
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     if (body.model === 'qwen-mt-flash' && failTranslationCount-- > 0 || body.model === 'qwen3.8-flash' && failKnowledgeCount-- > 0) {
-      res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'temporary failure' } })); return;
+      res.writeHead(body.model === 'qwen-mt-flash' ? 503 : 401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'test failure' } })); return;
     }
     let content;
     if (body.model === 'qwen-mt-flash') content = '已翻译：' + body.messages[0].content;
@@ -230,7 +230,7 @@ test('WebSocket 最终句持久化、翻译抽取、停止后重试和继续收�
   assert.equal(detail.segments[0].translation_text, '已翻译：Maya speaks.');
   assert.equal(detail.runs[0].state, 'complete');
   await waitFor(async () => (await read()).knowledge.length === 1);
-  failTranslationCount = 1; failKnowledgeCount = 2;
+  failTranslationCount = 1; failKnowledgeCount = 1;
   const second = await startRun(first.ready.listeningId);
   second.ws.send(JSON.stringify({ type: 'stop' }));
   await new Promise(resolve => second.ws.once('close', resolve));
