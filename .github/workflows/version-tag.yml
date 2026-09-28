@@ -1,0 +1,42 @@
+name: Version tag
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+      - public/index.html
+      - scripts/check-version.mjs
+      - .github/workflows/version-tag.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Verify version consistency
+        run: npm run check:version
+      - name: Create version tag if missing
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+          if git show-ref --verify --quiet "refs/tags/${tag}"; then
+            if ! git merge-base --is-ancestor "refs/tags/${tag}" "$GITHUB_SHA"; then
+              echo "Existing ${tag} is not an ancestor of this commit; refusing to overwrite it."
+              exit 1
+            fi
+            echo "${tag} already exists; keeping the original tag."
+            exit 0
+          fi
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/${tag}"
