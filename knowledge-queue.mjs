@@ -63,23 +63,41 @@ export function createKnowledgeScheduler({
       first_final_age_ms: metrics.first_final_at ? time - Date.parse(metrics.first_final_at) : null,
       last_final_age_ms: metrics.last_final_at ? time - Date.parse(metrics.last_final_at) : null, ...extra });
   }
+  function coolDown(key, delay) {
+    if (!Number.isFinite(delay) || delay <= 0) return;
+    keyCooldowns.set(key, Math.max(keyCooldowns.get(key) || 0, now() + delay));
+  }
   async function perform(job, key, startedAt) {
     try {
-      await execute(job, key);
+      const result = await execute(job, key);
+      if (result?.rateLimitMs) coolDown(key, result.rateLimitMs);
       if (store.hasListening(job.listening_id)) {
-        store.markJob(job.id, 'complete');
-        log(job, 'complete', startedAt);
+        if (result === undefined) {
+          // v1 执行器仍由调度器提交完成状态；v2 在知识与检查点的同一事务中提交。
+          store.markJob(job.id, 'complete');
+          log(job, 'complete', startedAt);
+        } else if (result.kind === 'continue') {
+          log(job, result.reason === 'network_retry' ? 'retrying' : 'continuing', startedAt,
+            { ...result.summary, outcome: null, continuation_reason: result.reason, ready_at: result.readyAt });
+        } else if (result.kind === 'terminal') {
+          log(job, result.outcome === 'invalid' ? 'failed' : 'complete', startedAt,
+            { ...result.summary, outcome: result.outcome });
+        } else {
+          throw new Error('知识执行器返回了未知的阶段结果');
+        }
       }
     } catch (error) {
-      const delay = knowledgeRetryDelay(error, job.attempts);
+      // v2 已按实际 HTTP 调用持久化预算；意外系统错误不能触发旧的整批重放。
+      const delay = job.prompt_version === 2 ? null : knowledgeRetryDelay(error, job.attempts);
       if (error.status === 429) {
         // 同一 Key 的其他知识任务也让路；不输出或持久化 Key。
-        keyCooldowns.set(key, Math.max(keyCooldowns.get(key) || 0, now() + Math.max(delay || 2000, error.retryAfterMs || 0)));
+        coolDown(key, Math.max(delay || 2000, error.retryAfterMs || 0));
       }
       if (store.hasListening(job.listening_id)) {
-        store.markJob(job.id, delay == null ? 'failed' : 'pending', String(error.message || error).slice(0, 300),
+        const saved = store.markJob(job.id, delay == null ? 'failed' : 'pending', String(error.message || error).slice(0, 300),
           delay == null ? null : new Date(now() + delay).toISOString());
-        log(job, delay == null ? 'failed' : 'retrying', startedAt, { retry_in_ms: delay });
+        log(job, delay == null ? saved?.state || 'failed' : 'retrying', startedAt,
+          { retry_in_ms: delay, ...(job.prompt_version === 2 ? { outcome: saved?.outcome || 'invalid' } : {}) });
       }
       onError(error);
     } finally {
@@ -112,6 +130,7 @@ export function createKnowledgeScheduler({
       if (!job) continue;
       const readyAt = Math.max(
         job.retry_at ? Date.parse(job.retry_at) : 0,
+        Number(job.ready_at) || 0,
         lastStarted.has(id) ? lastStarted.get(id) + config.minStartIntervalMs : 0,
         busy ? Date.parse(job.created_at) + config.translationGraceMs : 0,
         keyCooldowns.get(key) || 0

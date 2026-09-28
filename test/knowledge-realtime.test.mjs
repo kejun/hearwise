@@ -152,3 +152,80 @@ test('模型返回响应头后读取超时仍按超时恢复，不误判为 JSON
   t.mock.method(globalThis, 'fetch', async () => ({ ok: true, json: async () => { throw timeout; } }));
   await assert.rejects(extractKnowledge('test-key', { policy_version: 2 }, 'http://test.invalid'), error => error === timeout);
 });
+
+function newsItem(input, name, extra = {}) {
+  return { action: 'create', display_label: 'organization', canonical_name: name,
+    role: '主体', reason: '新闻的算力合作参与方', existing_item_id: null, observed_candidate_id: null,
+    correction_reason: null, aliases: [], short_description: `${name}参与新闻中的算力合作。`,
+    new_information: `原文提到${name}参与算力合作。`, certainty: 'clear',
+    evidence: [{ segment_id: input.focus_segments[0].id, quote: name }], ...extra };
+}
+
+test('真实HTTP/WebSocket：有效公司先展示，定向纠正只补另一公司并及时发布补全状态', async t => {
+  let held, extractionCalls = 0, repairCalls = 0;
+  const s = await startServer(t, ({ body, res }) => {
+    if (body.model === 'qwen-mt-flash') { reply(res, '两家公司开展算力合作。'); return; }
+    const input = JSON.parse(body.messages[1].content);
+    if (input.rejected) { repairCalls++; held = { input, res }; }
+    else {
+      extractionCalls++;
+      reply(res, JSON.stringify({ items: [newsItem(input, 'Anthropic'), newsItem(input, 'Akamai', { role: null })] }));
+    }
+  });
+  const r = await s.start('en');
+  r.ws.send(Buffer.from('Anthropic signed a compute deal with Akamai.'));
+  await waitFor(() => held);
+  assert.equal(held.input.rejected.length, 1);
+  assert.equal(held.input.rejected[0].item.canonical_name, 'Akamai');
+  assert.ok(held.input.rejected[0].issues.some(issue => issue.code === 'ROLE_REQUIRED'));
+  await waitFor(() => r.events.some(event => event.processing?.knowledge.repairingJobs === 1));
+  const before = await (await fetch(`${s.base}/api/listenings/${r.id}`)).json();
+  assert.equal(before.knowledge.length, 1);
+  assert.equal(before.knowledge[0].canonical_name, 'Anthropic');
+  assert.ok(r.events.some(event => event.type === 'knowledge-upserted' && event.item.canonical_name === 'Anthropic'));
+  assert.equal(before.jobs[0].state, 'running');
+  assert.equal('progress_json' in before.jobs[0], false, 'private checkpoint is not a polling payload');
+  reply(held.res, JSON.stringify({ corrections: [{ rejection_id: held.input.rejected[0].rejection_id,
+    item: { ...held.input.rejected[0].item, role: '主体' } }] }));
+  await waitFor(() => r.events.some(event => event.type === 'knowledge-upserted' && event.item.canonical_name === 'Akamai'));
+  await waitFor(async () => (await (await fetch(`${s.base}/api/listenings/${r.id}`)).json()).jobs[0].outcome === 'ok');
+  const after = await (await fetch(`${s.base}/api/listenings/${r.id}`)).json();
+  assert.deepEqual(after.knowledge.map(item => item.canonical_name).sort(), ['Akamai', 'Anthropic']);
+  assert.equal(after.knowledge.find(item => item.canonical_name === 'Anthropic').id, before.knowledge[0].id);
+  assert.deepEqual([extractionCalls, repairCalls], [1, 1]);
+  assert.match(s.log.join(''), /ROLE_REQUIRED/);
+  assert.ok(!s.log.join('').includes('test-knowledge-key'));
+  t.diagnostic('使用构造模型响应验证完整传输与入库链路；不代表真实模型主体召回率。');
+});
+
+test('真实HTTP/API：全拒绝后空纠正保持失败，人工继续只重试未解决条目', async t => {
+  let extractionCalls = 0, repairCalls = 0;
+  const s = await startServer(t, ({ body, res }) => {
+    if (body.model === 'qwen-mt-flash') { reply(res, '算力合作。'); return; }
+    const input = JSON.parse(body.messages[1].content);
+    if (!input.rejected) {
+      extractionCalls++;
+      reply(res, JSON.stringify({ items: [newsItem(input, 'Akamai', { role: null })] }));
+    } else {
+      repairCalls++;
+      reply(res, JSON.stringify({ corrections: repairCalls === 1 ? [] : input.rejected.map(target => ({
+        rejection_id: target.rejection_id, item: { ...target.item, role: '主体' }
+      })) }));
+    }
+  });
+  const r = await s.start('en');
+  r.ws.send(Buffer.from('Anthropic signed a compute deal with Akamai.'));
+  const read = async () => (await fetch(`${s.base}/api/listenings/${r.id}`)).json();
+  await waitFor(async () => (await read()).jobs[0]?.outcome === 'invalid');
+  const failed = await read();
+  assert.equal(failed.knowledge.length, 0);
+  assert.equal(failed.processing.knowledge.failedJobs, 1);
+  assert.equal(failed.processing.knowledge.unresolvedItems, 1);
+  assert.equal(failed.processing.knowledge.pendingJobs + failed.processing.knowledge.runningJobs, 0);
+  const retry = await fetch(`${s.base}/api/listenings/${r.id}/retry`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'test-knowledge-key' }) });
+  assert.equal(retry.status, 202);
+  await waitFor(async () => (await read()).jobs[0]?.outcome === 'ok');
+  assert.deepEqual([extractionCalls, repairCalls], [1, 2]);
+  assert.equal((await read()).knowledge.length, 1);
+});

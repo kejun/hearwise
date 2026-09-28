@@ -16,6 +16,56 @@ test('尚未组批也显示整理中；自动重试与需要手动继续的状�
   assert.equal(processingView(snapshot()).text, '已处理');
 });
 
+test('部分未解决和全部拒绝均提供继续处理，但不当成自动待处理', () => {
+  assert.deepEqual(processingView(snapshot({ partialJobs: 1, unresolvedItems: 2 })),
+    { text: '部分知识未能整理', pending: 0, canRetry: true });
+  assert.deepEqual(processingView(snapshot({ failedJobs: 1, unresolvedItems: 3 })),
+    { text: '知识整理失败', pending: 0, canRetry: true });
+  for (const [state, outcome, text] of [
+    ['complete', 'partial', '部分知识未能整理'], ['failed', 'invalid', '知识整理失败']
+  ]) {
+    assert.deepEqual(processingView({ jobs: [{ state, outcome, summary: { visibleChangeCount: 0 } }] }),
+      { text, pending: 0, canRetry: true });
+  }
+});
+
+test('合法空结果和仅观察/排除的有效结果正常结束，不按卡片数报警', () => {
+  for (const outcome of ['empty', 'ok', 'legacy']) {
+    assert.deepEqual(processingView({ jobs: [{ state: 'complete', outcome, summary: { visibleChangeCount: 0 } }] }),
+      { text: '已处理', pending: 0, canRetry: false });
+  }
+});
+
+test('补全阶段只改变文案，不重复累加排队与执行数量', () => {
+  const detail = snapshot({ pendingJobs: 1, retryingJobs: 1, runningJobs: 1,
+    repairPendingJobs: 1, repairingJobs: 1, unresolvedItems: 3 });
+  assert.deepEqual(processingView(detail), {
+    text: '知识整理中，正在补全部分条目 · 知识稍后自动重试', pending: 3, canRetry: false
+  });
+  assert.deepEqual(processingView({ ...detail, processingAvailable: false }), {
+    text: '内容待继续处理（需 API Key）', pending: 3, canRetry: true
+  });
+  assert.equal(processingView({ processingAvailable: true,
+    jobs: [{ state: 'pending', retry_at: '2026-09-28T00:00:00Z' }, { state: 'pending', retry_at: null }] }).pending, 2);
+});
+
+test('历史恢复任务只提示，不单独显示无效的继续处理入口', () => {
+  assert.deepEqual(processingView(snapshot({ legacyRecoveryJobs: 2 })),
+    { text: '历史任务需重新核对', pending: 0, canRetry: false });
+  assert.deepEqual(processingView({ jobs: [{ state: 'failed', outcome: 'legacy' }] }),
+    { text: '历史任务需重新核对', pending: 0, canRetry: false });
+});
+
+test('混合翻译失败、知识失败及历史恢复提示时仍能继续真正可重试的工作', () => {
+  assert.deepEqual(processingView({ processingAvailable: true,
+    segments: [{ translation_state: 'failed' }, { translation_state: 'pending' }],
+    jobs: [{ state: 'failed', outcome: 'invalid' }, { state: 'complete', outcome: 'partial' },
+      { state: 'failed', outcome: 'legacy' }] }), {
+    text: '1 项译文处理失败 · 知识整理失败 · 部分知识未能整理 · 历史任务需重新核对 · 译文处理中',
+    pending: 1, canRetry: true
+  });
+});
+
 test('停止后立即查询，网络短暂失败后自动恢复，到全部完成才停止', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let calls = 0;
@@ -30,6 +80,25 @@ test('停止后立即查询，网络短暂失败后自动恢复，到全部完�
   t.mock.timers.tick(1); await settle(); assert.equal(calls, 2);
   t.mock.timers.tick(2000); await settle(); assert.equal(calls, 3);
   t.mock.timers.tick(30000); assert.equal(calls, 3);
+});
+
+test('部分或全部未解决的终态停止轮询，人工继续后可以恢复', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const knowledge of [{ partialJobs: 1, unresolvedItems: 2 }, { failedJobs: 1, unresolvedItems: 3 }]) {
+    let calls = 0, current = snapshot(knowledge);
+    const poller = createProcessingPoller({ isCurrent: () => true,
+      read: async () => { calls++; return current; } });
+    t.after(() => poller.stop());
+    poller.start('a'); await settle();
+    t.mock.timers.tick(30000); assert.equal(calls, 1);
+    current = snapshot({ pendingJobs: 1, repairPendingJobs: 1 });
+    poller.start('a'); await settle(); assert.equal(calls, 2);
+    t.mock.timers.tick(2000); await settle(); assert.equal(calls, 3);
+    current = snapshot();
+    t.mock.timers.tick(2000); await settle(); assert.equal(calls, 4);
+    t.mock.timers.tick(30000); assert.equal(calls, 4);
+    poller.stop();
+  }
 });
 
 test('慢查询不叠加；切换记录后旧响应不能重启轮询', async t => {
