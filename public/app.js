@@ -8,8 +8,9 @@ const els = {
   toggle: $('toggle'), toggleLabel: $('toggle-label'), micIcon: $('mic-icon'), tabIcon: $('tab-icon'),
   status: $('status'), liveDot: $('live-dot'),
   hint: $('hint'), translation: $('translation'), original: $('original'), badge: $('caption-badge'),
-  captionStage: document.querySelector('.caption-stage'), pinnedCaption: $('pinned-caption'),
+  livePanel: $('live-panel'), pinnedCaption: $('pinned-caption'),
   pinnedTranslation: $('pinned-translation'), pinnedBadge: $('pinned-badge'),
+  pinnedToggle: $('pinned-toggle'), pinnedToggleLabel: $('pinned-toggle-label'),
   modal: $('settings-modal'), settingsTrigger: $('settings-trigger'), closeSettings: $('close-settings'),
   settingsForm: $('settings-form'), apiKey: $('api-key'), audioInput: $('audio-input'),
   switchTab: $('switch-tab'), source: $('source-language'),
@@ -118,6 +119,8 @@ const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translatio
 let speechPreview = false;
 let speechCanJump = false;
 const speech = createSpeechController({ onChange(state) {
+  $('speech-tab-indicator').hidden = !state.enabled;
+  $('live-speech-tab').title = state.enabled ? '语音播报已开启，点击管理播报' : '';
   speechPreview = state.preview;
   speechEls.toggle.textContent = state.enabled ? '关闭播报' : '开启译文播报';
   speechEls.toggle.setAttribute('aria-pressed', String(state.enabled));
@@ -222,18 +225,64 @@ function updateText(el, text) {
 }
 
 function syncPinnedCaption() {
-  // pinned 的滚动容器是 .pinned-caption（限高 40dvh）：更新前贴近底部才贴底跟随
-  const stick = els.pinnedCaption.scrollHeight - els.pinnedCaption.scrollTop - els.pinnedCaption.clientHeight < 40;
-  els.pinnedTranslation.textContent = els.translation.textContent;
+  // Only the text scrolls, so the collapse control always remains reachable.
+  updateText(els.pinnedTranslation, els.translation.textContent);
   els.pinnedTranslation.classList.toggle('placeholder', els.translation.classList.contains('placeholder'));
   els.pinnedTranslation.classList.toggle('provisional', els.translation.classList.contains('provisional'));
   els.pinnedBadge.textContent = els.badge.textContent;
-  if (stick) els.pinnedCaption.scrollTop = els.pinnedCaption.scrollHeight;
 }
 
 function updatePinnedCaption() {
-  els.pinnedCaption.hidden = els.listeningView.hidden || els.captionStage.getBoundingClientRect().bottom > 12;
+  els.pinnedCaption.hidden = els.listeningView.hidden || els.livePanel.getBoundingClientRect().bottom > 12;
 }
+
+const PINNED_COLLAPSED_KEY = 'tongsheng:pinned-caption-collapsed';
+let pinnedCollapsed = localStorage.getItem(PINNED_COLLAPSED_KEY) === '1';
+function applyPinnedCollapse() {
+  els.pinnedCaption.classList.toggle('collapsed', pinnedCollapsed);
+  els.pinnedTranslation.hidden = els.pinnedBadge.hidden = pinnedCollapsed;
+  els.pinnedToggle.setAttribute('aria-expanded', String(!pinnedCollapsed));
+  els.pinnedToggle.setAttribute('aria-label', pinnedCollapsed ? '展开吸顶字幕' : '收起吸顶字幕');
+  els.pinnedToggleLabel.textContent = pinnedCollapsed ? '展开' : '收起';
+  if (!pinnedCollapsed) els.pinnedTranslation.scrollTop = els.pinnedTranslation.scrollHeight;
+}
+els.pinnedToggle.addEventListener('click', () => {
+  pinnedCollapsed = !pinnedCollapsed;
+  localStorage.setItem(PINNED_COLLAPSED_KEY, pinnedCollapsed ? '1' : '0');
+  applyPinnedCollapse();
+});
+applyPinnedCollapse();
+
+// View changes never start or stop speech. The shared panel is the pinning boundary.
+const liveTabs = [
+  { button: $('live-caption-tab'), panel: $('live-caption-panel') },
+  { button: $('live-speech-tab'), panel: $('live-speech-panel') }
+];
+function activateLiveTab(index, focusButton = false) {
+  liveTabs.forEach((tab, i) => {
+    const active = i === index;
+    tab.button.classList.toggle('active', active);
+    tab.button.setAttribute('aria-selected', String(active));
+    tab.button.tabIndex = active ? 0 : -1;
+    tab.panel.hidden = !active;
+  });
+  if (focusButton) liveTabs[index].button.focus();
+  if (index === 0) {
+    els.translation.scrollTop = els.translation.scrollHeight;
+    els.original.scrollTop = els.original.scrollHeight;
+  }
+  updatePinnedCaption();
+}
+liveTabs.forEach((tab, index) => {
+  tab.button.addEventListener('click', () => activateLiveTab(index));
+  tab.button.addEventListener('keydown', event => {
+    const next = { ArrowRight: (index + 1) % liveTabs.length, ArrowLeft: (index + liveTabs.length - 1) % liveTabs.length, Home: 0, End: liveTabs.length - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    activateLiveTab(next, true);
+  });
+});
+activateLiveTab(0);
 
 new MutationObserver(syncPinnedCaption).observe(els.translation, { childList: true, characterData: true, attributes: true, attributeFilter: ['class'] });
 new MutationObserver(syncPinnedCaption).observe(els.badge, { childList: true, characterData: true });

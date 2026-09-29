@@ -22,6 +22,18 @@ try {
     ws.on('framesent', ({ payload }) => { if (typeof payload === 'string') { const event = JSON.parse(payload); if (event.type === 'speech.progress') progress.push(event); } });
   });
   await page.goto(fixture.base);
+  const captionTab = page.locator('#live-caption-tab'), speechTab = page.locator('#live-speech-tab');
+  assert.equal(await captionTab.getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#live-speech-panel').isHidden(), true);
+  await captionTab.focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await speechTab.evaluate(el => el === document.activeElement), true);
+  assert.equal(await speechTab.getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#live-caption-panel').isHidden(), true);
+  assert.equal(await page.locator('#pinned-caption').isHidden(), true);
+  await page.keyboard.press('Home');
+  assert.equal(await captionTab.getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('End');
   assert.equal(await page.getByRole('button', { name: '开启译文播报', exact: true }).isDisabled(), true);
   assert.equal(fixture.stats.connections, 0);
   assert.equal(await page.locator('#speech-key, #speech-remember').count(), 0);
@@ -38,17 +50,24 @@ try {
   await until(() => fixture.stats.asrClients.size === 1);
   // Even completed translations must not start speech before the click.
   fixture.final('Sentence 1.');
-  await page.locator('#translation').filter({ hasText: '这是第' }).waitFor();
+  await page.locator('#translation').filter({ hasText: '这是第' }).waitFor({ state: 'attached' });
   assert.equal(fixture.stats.connections, 0);
   await page.getByRole('button', { name: '开启译文播报', exact: true }).click();
   assert.match(await page.locator('#speech-status').textContent(), /下一句|说完一句|首次播放/);
   await until(() => progress.some(p => p.consumedSamples > 0));
   assert.equal(fixture.stats.sessions[0].sample_rate, 24000);
+  const samplesBeforeSwitch = progress.at(-1).consumedSamples, connectionsBeforeSwitch = fixture.stats.connections;
+  await captionTab.click();
+  assert.equal(await page.locator('#speech-tab-indicator').isVisible(), true);
+  await until(() => progress.some(p => p.consumedSamples > samplesBeforeSwitch));
+  assert.equal(fixture.stats.connections, connectionsBeforeSwitch);
+  await speechTab.click();
+  assert.equal(await page.locator('#speech-toggle').getAttribute('aria-pressed'), 'true');
   if (process.env.SPEECH_SCREENSHOT) await page.screenshot({ path: process.env.SPEECH_SCREENSHOT });
   await page.getByRole('button', { name: '关闭播报', exact: true }).click();
   const commits = fixture.stats.commits.length;
   fixture.final('Sentence 99.');
-  await page.locator('#translation').filter({ hasText: '99' }).waitFor();
+  await page.locator('#translation').filter({ hasText: '99' }).waitFor({ state: 'attached' });
   assert.equal(fixture.stats.commits.length, commits);
   await page.getByRole('button', { name: '开启译文播报', exact: true }).click();
   await until(() => fixture.stats.commits.length > commits);
@@ -76,6 +95,24 @@ try {
   await page.getByRole('button', { name: '继续收听', exact: true }).click();
   await page.getByRole('button', { name: '停止聆听', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '开启译文播报', exact: true }).getAttribute('aria-pressed'), 'false');
+  // Pin against the shared panel even while the caption tab is hidden.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.locator('#pinned-caption').waitFor();
+  const expandedHeight = (await page.locator('#pinned-caption').boundingBox()).height;
+  await page.getByRole('button', { name: '收起吸顶字幕', exact: true }).click();
+  assert.equal(await page.locator('#pinned-toggle').getAttribute('aria-expanded'), 'false');
+  assert.ok((await page.locator('#pinned-caption').boundingBox()).height < expandedHeight);
+  fixture.final('Sentence 777.');
+  await page.locator('#pinned-translation').filter({ hasText: '777' }).waitFor({ state: 'attached' });
+  assert.equal(await page.locator('#pinned-translation').isHidden(), true);
+  await page.getByRole('button', { name: '展开吸顶字幕', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#pinned-translation').isVisible(), true);
+  if (process.env.PINNED_SCREENSHOT) await page.locator('#pinned-caption').screenshot({ path: process.env.PINNED_SCREENSHOT });
+  await page.getByRole('button', { name: '收起吸顶字幕', exact: true }).click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.locator('#pinned-caption').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '停止聆听', exact: true }).click();
   await page.getByRole('button', { name: '继续收听', exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -83,6 +120,12 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   if (process.env.SPEECH_TRANSCRIPT_SCREENSHOT) await page.locator('.transcript-panel').screenshot({ path: process.env.SPEECH_TRANSCRIPT_SCREENSHOT });
   await page.reload();
+  assert.equal(await captionTab.getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#pinned-toggle').getAttribute('aria-expanded'), 'false');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  if (process.env.CAPTION_PANEL_SCREENSHOT) await page.locator('#live-panel').screenshot({ path: process.env.CAPTION_PANEL_SCREENSHOT });
+  await speechTab.click();
+  if (process.env.SPEECH_PANEL_SCREENSHOT) await page.locator('#live-panel').screenshot({ path: process.env.SPEECH_PANEL_SCREENSHOT });
   assert.equal(await page.getByRole('button', { name: '开启译文播报', exact: true }).getAttribute('aria-pressed'), 'false');
   await page.getByRole('button', { name: '播报设置', exact: true }).click();
   await page.getByRole('button', { name: '试听语音', exact: true }).click();
@@ -93,7 +136,7 @@ try {
   assert.ok(fixture.stats.authorizations.every(value => value === 'Bearer mock-shared-key'));
   console.log(JSON.stringify({ ok: true, uiErrors: errors, ttsSessions: fixture.stats.connections,
     responses: fixture.stats.commits.length, consumedSamples: Math.max(...progress.map(p => p.consumedSamples)),
-    checks: ['shared key', 'small toggle', 'first playback hint', 'default off', 'save without speech', 'final translation to AudioWorklet consumption', 'stop', 're-enable', 'drain', 'full original', 'full translation', 'stop transcript', 'new run off', 'reload off', 'preview', 'mobile width'] }, null, 2));
+    checks: ['tabs and keyboard navigation', 'tab switch preserves playback', 'pin shared panel', 'collapse survives caption updates and reload', 'keyboard expand', 'shared key', 'small toggle', 'first playback hint', 'default off', 'save without speech', 'final translation to AudioWorklet consumption', 'stop', 're-enable', 'drain', 'full original', 'full translation', 'stop transcript', 'new run off', 'reload off', 'preview', 'mobile width'] }, null, 2));
 } finally {
   await browser?.close(); await fixture.close();
 }
