@@ -121,5 +121,10 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .speech-options input { width: 80px; accent-color: var(--speech-accent); }
 .speech-reading { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid #e5e6dd; color: #41594b; font-size: 14px; line-height: 1.7; max-height: 5em; overflow-y: auto; }
 .speech-config-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0; }
-.speech-remember { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.speech-actions .speech-toggle-small { height: 32px; min-height: 32px; padding: 6px 12px; border-radius: 8px; font-size: 12px; line-height: 18px; }
+.transcript-speech { margin: 16px 0; padding: 14px 16px; background: #f6f8f3; border-radius: 10px; }
+.transcript-speech-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.transcript-speech .switch-button { height: 32px; padding: 6px 12px; border-radius: 8px; font-size: 12px; }
+.transcript-speech .active { background: var(--speech-accent); color: #fff; border-color: var(--speech-accent); }
+#transcript-speech-status { margin: 10px 0 0; color: #69776d; font-size: 12px; line-height: 1.6; }
 @media (max-width: 580px) { .speech-bar { padding: 14px; } .speech-actions > span { flex-basis: 55%; } .speech-config-grid { grid-template-columns: 1fr; } }

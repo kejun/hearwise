@@ -74,6 +74,69 @@ test('explicit replay reads only the selected final segment and then stops', asy
   assert.equal(f.client.events.at(-1).type, 'speech.finished');
 });
 
+test('全文原文跨片段和分页顺序读取，忽略翻译状态，播放超过实时收尾期限仍继续', async t => {
+  let time = 0;
+  const f = fixture(t, { now: () => time });
+  const expected = [];
+  for (let i = 0; i < 55; i++) { const row = f.add(); expected.push(row.original_text); }
+  f.store.finishRun(f.run.runId);
+  const second = f.store.createRun(f.run.listeningId, { source: 'ja', targetLang: 'English', audioSource: 'tab' }, 'next');
+  const row = f.store.addSegment(f.run.listeningId, second.runId, { id: 1, text: 'Second run.' }).segment;
+  expected.push(row.original_text); f.store.finishRun(second.runId);
+  f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'original', config });
+  await flush();
+  assert.equal(f.client.events.find(e => e.type === 'speech.ready').total, 56);
+  while (f.client.readyState === 1) { time += 1000; f.ack(); await flush(); }
+  assert.ok(time > 20000);
+  assert.deepEqual(f.spoken, expected);
+  assert.equal(f.client.events.at(-1).message, '原文全文播报完成');
+});
+
+test('全文译文从第一句开始，等待未完成句子而不漏读，结束后自动关闭', async t => {
+  const f = fixture(t); f.add('第一句。'); const pending = f.add(); f.add('第三句。');
+  f.store.finishRun(f.run.runId);
+  f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'translation', config }); await flush();
+  assert.deepEqual(f.spoken, ['第一句。']); assert.match(f.client.events.at(-1).message, /等待第 2 \/ 3 句译文/);
+  f.store.setTranslation(pending.id, '第二句。', false); f.service.notify(f.run.listeningId); await flush(); f.ack(); await flush();
+  assert.deepEqual(f.spoken, ['第一句。', '第二句。', '第三句。']); f.ack(); await flush();
+  assert.equal(f.client.events.at(-1).message, '译文全文播报完成');
+});
+
+test('全文译文缺失有等待上限，失败不跳过；活动记录和无效类型不会产生语音', async t => {
+  let time = 0; const f = fixture(t, { now: () => time, translationWaitMs: 100 });
+  f.add(); f.store.finishRun(f.run.runId);
+  f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'translation', config }); await flush();
+  time = 101; f.service.notify(f.run.listeningId); assert.equal(f.client.readyState, 3);
+  assert.match(f.client.events.at(-1).message, /第 1 句译文尚未完成/);
+  const failed = fixture(t); const row = failed.add(); failed.store.setTranslation(row.id, null, true); failed.store.finishRun(failed.run.runId);
+  failed.client.message({ type: 'speech.transcript', epoch: 7, listeningId: failed.run.listeningId, kind: 'translation', config });
+  assert.match(failed.client.events.at(-1).message, /翻译失败/); assert.deepEqual(failed.spoken, []);
+  const active = fixture(t); active.add('在听。');
+  active.client.message({ type: 'speech.transcript', epoch: 7, listeningId: active.run.listeningId, kind: 'original', config });
+  assert.match(active.client.events.at(-1).message, /先停止收听/); assert.deepEqual(active.spoken, []);
+  const invalid = fixture(t); invalid.store.finishRun(invalid.run.runId);
+  invalid.client.message({ type: 'speech.transcript', epoch: 7, listeningId: invalid.run.listeningId, kind: 'other', config });
+  assert.match(invalid.client.events.at(-1).message, /请选择/);
+});
+
+test('另一个页面继续收听会停止全文播报，防止新旧内容混入', async t => {
+  const f = fixture(t); f.add('第一句。第二句。第三句。'); f.store.finishRun(f.run.runId);
+  f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'translation', config }); await flush();
+  f.store.createRun(f.run.listeningId, { source: 'en', targetLang: 'Chinese', audioSource: 'tab' }, 'next');
+  f.service.notify(f.run.listeningId); await flush();
+  assert.equal(f.client.readyState, 3); assert.equal(f.spoken.length, 2);
+  assert.match(f.client.events.at(-1).message, /收听已继续/);
+});
+
+test('后一句翻译失败会先播完前一句，不会因预取而截断正在听的内容', async t => {
+  const f = fixture(t); f.add('先读完这一句。'); const failed = f.add();
+  f.store.setTranslation(failed.id, null, true); f.store.finishRun(f.run.runId);
+  f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'translation', config }); await flush();
+  assert.equal(f.client.readyState, 1); assert.deepEqual(f.spoken, ['先读完这一句。']);
+  f.ack(); await flush(); assert.equal(f.client.readyState, 3);
+  assert.match(f.client.events.at(-1).message, /第 2 句翻译失败/);
+});
+
 test('run completion freezes the tail bound; late callbacks cannot extend drain', async t => {
   const f = fixture(t); f.start(); f.add('边界内。'); await flush();
   f.store.finishRun(f.run.runId); f.service.notify(f.run.listeningId);
@@ -123,6 +186,8 @@ test('speech units retain numbers, quoted clauses and meaningful text', () => {
   assert.deepEqual(speechUnits('**值是 3.14**，不是 3.1。“不要。拆开！”然后继续。'), ['值是 3.14，不是 3.1。', '“不要。拆开！”然后继续。']);
   assert.deepEqual(speechUnits('你好。再见！'), ['你好。', '再见！']);
   assert.throws(() => speechUnits('字'.repeat(601)), /过长/);
+  assert.deepEqual(speechUnits('Dr. Smith works in the U.S. today. It costs 3.14 dollars. Next sentence.'),
+    ['Dr. Smith works in the U.S. today.', 'It costs 3.14 dollars.', 'Next sentence.']);
 });
 
 for (const rate of [44100, 48000]) test(`PCM streams resample at ${rate} Hz without gaps or dropped short tail`, () => {
@@ -176,4 +241,32 @@ test('controller starts off with no audio/network; stop and run changes reject l
   assert.equal(c.enabled, false); assert.equal(players[1].closed, true);
   sockets[0].dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ epoch, type: 'speech.state', message: 'stale' }) }));
   assert.notEqual(states.at(-1).message, 'stale');
+});
+
+test('首次等待说明不被缓冲统计覆盖；全文原文允许非中文记录，切换模式先停止旧播放器', async () => {
+  const states = [], sockets = [], players = [];
+  const c = createSpeechController({ onChange: state => states.push(state), createPlayer: callback => {
+    const p = { callback, closed: false, async unlock() {}, close() { this.closed = true; }, begin() {} };
+    players.push(p); return p;
+  }, createSocket: () => {
+    const s = new EventTarget(); s.readyState = 1; s.sent = [];
+    s.send = data => s.sent.push(JSON.parse(data)); s.close = () => {}; sockets.push(s); return s;
+  } });
+  c.setContext({ phase: 'listening', target: 'Chinese', runId: 'run', listeningId: 'record' });
+  await c.start(config); sockets[0].dispatchEvent(new Event('open'));
+  const epoch = sockets[0].sent[0].epoch;
+  const event = data => sockets[0].dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ epoch, ...data }) }));
+  event({ type: 'speech.state', state: 'waiting', message: '等待新的完整译文' });
+  assert.match(states.at(-1).message, /说话人说完一句/);
+  event({ type: 'speech.backlog', estimatedSeconds: 0, waiting: 0 }); assert.match(states.at(-1).message, /说话人说完一句/);
+  event({ type: 'speech.state', state: 'buffering', message: '正在准备语音' }); assert.match(states.at(-1).message, /第一句语音/);
+  event({ type: 'speech.unit', unit: 1, text: '完整译文。' }); players[0].callback({ type: 'started', unit: 1 });
+  assert.equal(states.at(-1).message, '正在播报');
+  c.setContext({ phase: 'idle', target: 'English', runId: 'run', listeningId: 'record' });
+  await c.start(config, { transcript: 'original' }); sockets[1].dispatchEvent(new Event('open'));
+  assert.equal(players[0].closed, true); assert.equal(sockets[1].sent[0].type, 'speech.transcript');
+  assert.equal(sockets[1].sent[0].kind, 'original');
+  c.setContext({ phase: 'idle', target: 'English', runId: 'run', listeningId: 'record' }); assert.equal(c.enabled, true);
+  c.setContext({ phase: 'idle', target: 'English', runId: 'other', listeningId: 'other' });
+  assert.equal(players[1].closed, true); assert.equal(c.enabled, false);
 });

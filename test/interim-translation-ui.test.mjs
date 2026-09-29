@@ -12,7 +12,7 @@ import { speechConfig } from '../public/speech-protocol.js';
 function app(t) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 10000 });
   const elements = new Map(), requests = [];
-  const storage = new Map([['tongsheng:qianwen-key', 'old-test-key']]);
+  const storage = new Map([['tongsheng:qianwen-key', 'old-test-key'], ['hearwise:speech-key', 'obsolete-tts-key']]);
   function element(id) {
     if (elements.has(id)) return elements.get(id);
     const classes = new Set(), events = new Map();
@@ -43,7 +43,7 @@ function app(t) {
     document: { getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
     window: { addEventListener() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
-    sessionStorage: { getItem: () => null, setItem() {} },
+    sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, body: JSON.parse(options.body), resolve, reject })); }
   });
   const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -80,6 +80,16 @@ test('更换音源先结束旧连接再启动新片段，取消选择保留旧�
   a.run(`phase = 'listening'; switchEvents.length = 0; chooseTab = async () => { const error = new Error('cancel'); error.name = 'NotAllowedError'; throw error; };`);
   await a.run('switchTab()');
   assert.deepEqual(Array.from(a.run('switchEvents')), []); assert.equal(a.run('phase'), 'listening');
+});
+
+test('播报只读取保存的连接 Key，清理旧独立 Key，更新连接后立即使用新值', t => {
+  const a = app(t);
+  assert.equal(a.storage.has('hearwise:speech-key'), false);
+  assert.equal(a.run('readSpeechConfig().key'), 'old-test-key');
+  a.element('api-key').value = 'new-shared-key';
+  a.element('settings-form').emit('submit');
+  assert.equal(a.run('readSpeechConfig().key'), 'new-shared-key');
+  assert.equal(a.run('speech.enabled'), false);
 });
 
 test('超长临时文本保留已有译文且不发送请求；修订为短句后恢复', async t => {
