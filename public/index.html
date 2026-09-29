@@ -23,29 +23,35 @@
         <p class="intro-copy">收听麦克风或浏览器标签页，实时识别并翻译。</p>
       </div>
 
-      <section class="caption-stage" aria-label="实时字幕" aria-live="polite">
-        <div class="caption-head"><span>译文</span><label class="size-control"><span class="a-small" aria-hidden="true">A</span><input id="translation-size" type="range" min="30" max="70" step="1" value="44" aria-label="译文字号" /><span class="a-big" aria-hidden="true">A</span></label><span class="caption-badge" id="caption-badge">等待开始</span></div>
-        <p class="translation placeholder" id="translation">字幕会显示在这里</p>
-        <div class="original-wrap"><span class="original-label">原文</span><p class="original placeholder" id="original">开始聆听后，实时识别的文字会出现。</p></div>
-      </section>
-      <section class="speech-bar" aria-label="译文语音播报">
-        <div class="speech-actions">
-          <button class="switch-button speech-toggle-small" id="speech-toggle" type="button" aria-pressed="false" disabled>开启译文播报</button>
-          <span id="speech-status" role="status" aria-live="polite">播报默认关闭，开始收听后可手动开启</span>
-          <button class="speech-link" id="speech-settings" type="button">播报设置</button>
+      <section class="live-panel" id="live-panel" aria-label="实时字幕与语音播报">
+        <div class="tab-bar live-tabs" role="tablist" aria-label="实时内容">
+          <button class="tab-button active" id="live-caption-tab" type="button" role="tab" aria-selected="true" aria-controls="live-caption-panel">实时字幕</button>
+          <button class="tab-button" id="live-speech-tab" type="button" role="tab" aria-selected="false" aria-controls="live-speech-panel" tabindex="-1">语音播报<span class="speech-tab-indicator" id="speech-tab-indicator" aria-hidden="true" hidden></span></button>
         </div>
-        <div class="speech-options">
-          <label>播报音量 <input id="speech-volume" type="range" min="0" max="1" step="0.05" value="0.8" /></label>
-          <button class="speech-link" id="speech-jump" type="button" title="停止当前声音，跳过未读内容，从之后的新句子开始" hidden>跳到最新内容</button>
-          <button class="speech-link" id="speech-replay" type="button" title="从头读出中断句，读完后关闭播报" hidden>重播中断句</button>
-          <span id="speech-backlog"></span>
-          <span>麦克风收听时建议佩戴耳机，避免重复识别播报声。</span>
-        </div>
-        <p class="speech-reading" id="speech-reading" hidden></p>
+        <section class="caption-stage" id="live-caption-panel" role="tabpanel" aria-labelledby="live-caption-tab" aria-live="polite" tabindex="0">
+          <div class="caption-head"><span>译文</span><label class="size-control"><span class="a-small" aria-hidden="true">A</span><input id="translation-size" type="range" min="30" max="70" step="1" value="44" aria-label="译文字号" /><span class="a-big" aria-hidden="true">A</span></label><span class="caption-badge" id="caption-badge">等待开始</span></div>
+          <p class="translation placeholder" id="translation">字幕会显示在这里</p>
+          <div class="original-wrap"><span class="original-label">原文</span><p class="original placeholder" id="original">开始聆听后，实时识别的文字会出现。</p></div>
+        </section>
+        <section class="speech-bar" id="live-speech-panel" role="tabpanel" aria-labelledby="live-speech-tab" tabindex="0" hidden>
+          <div class="speech-actions">
+            <button class="switch-button speech-toggle-small" id="speech-toggle" type="button" aria-pressed="false" disabled>开启译文播报</button>
+            <span id="speech-status" role="status" aria-live="polite">播报默认关闭，开始收听后可手动开启</span>
+            <button class="speech-link" id="speech-settings" type="button">播报设置</button>
+          </div>
+          <p class="speech-reading" id="speech-reading" hidden></p>
+          <div class="speech-options">
+            <label>播报音量 <input id="speech-volume" type="range" min="0" max="1" step="0.05" value="0.8" /></label>
+            <button class="speech-link" id="speech-jump" type="button" title="停止当前声音，跳过未读内容，从之后的新句子开始" hidden>跳到最新内容</button>
+            <button class="speech-link" id="speech-replay" type="button" title="从头读出中断句，读完后关闭播报" hidden>重播中断句</button>
+            <span id="speech-backlog"></span>
+            <span>麦克风收听时建议佩戴耳机，避免重复识别播报声。</span>
+          </div>
+        </section>
       </section>
-      <div class="pinned-caption" id="pinned-caption" hidden aria-hidden="true">
-        <div class="caption-head"><span>译文</span><span class="caption-badge" id="pinned-badge">等待开始</span></div>
-        <p class="pinned-translation placeholder" id="pinned-translation">字幕会显示在这里</p>
+      <div class="pinned-caption" id="pinned-caption" role="region" aria-label="吸顶实时字幕" hidden>
+        <div class="caption-head"><span>实时字幕</span><div class="pinned-actions"><span class="caption-badge" id="pinned-badge" aria-hidden="true">等待开始</span><button class="pinned-toggle" id="pinned-toggle" type="button" aria-expanded="true" aria-controls="pinned-translation" aria-label="收起吸顶字幕"><span id="pinned-toggle-label">收起</span><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 10 4-4 4 4"/></svg></button></div></div>
+        <p class="pinned-translation placeholder" id="pinned-translation" aria-hidden="true">字幕会显示在这里</p>
       </div>
 
       <div class="controls">
