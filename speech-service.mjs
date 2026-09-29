@@ -70,7 +70,8 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
         while (!closed) {
           const run = preview || replay || transcript ? { state: 'complete' } : store.speechRun(consumer.listeningId, consumer.runId);
           if (!run) return finish('speech.error', '收听片段已不存在');
-          if (!transcript && run.state !== 'active' && drainAt == null) drainAt = now();
+          // The synthetic completed run used by preview/replay is not a stopped live run.
+          if (!preview && !replay && !transcript && run.state !== 'active' && drainAt == null) drainAt = now();
           if (sentSamples - consumedSamples >= TTS_SAMPLE_RATE * 4 || unitIndex - playedUnit >= 2) return;
           if (!units.length) {
             segment = preview ? (unitIndex ? null : { id: 'preview', sequence_no: 0, translation_state: 'complete', translation_text: PREVIEW_TEXT })
@@ -148,7 +149,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
       if (msg.type === 'speech.stop') { metric(msg.reason === 'skip' ? 'skip' : 'cancel', { afterSequence: cursor }); dispose(); client.close(); return; }
       if (initialized) {
         if (msg.epoch !== epoch) return;
-        if (msg.type === 'speech.drain' && !transcript) { drainAt ??= now(); state('draining', '正在读完最后几句'); }
+        if (msg.type === 'speech.drain' && !preview && !replay && !transcript) { drainAt ??= now(); state('draining', '正在读完最后几句'); }
         if (msg.type === 'speech.progress') {
           if (!Number.isSafeInteger(msg.consumedSamples) || msg.consumedSamples < consumedSamples || msg.consumedSamples > sentSamples ||
               !Number.isSafeInteger(msg.playedUnit) || msg.playedUnit < playedUnit || msg.playedUnit > unitIndex ||
