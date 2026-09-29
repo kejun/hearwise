@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { ListeningStore } from '../storage.mjs';
 import { createSpeechService } from '../speech-service.mjs';
-import { speechUnits } from '../speech-scheduler.mjs';
+import { speechUnits, transcriptSpeechUnits } from '../speech-scheduler.mjs';
 import { SpeechBuffer } from '../public/speech-buffer.js';
 import { createSpeechController } from '../public/speech-controller.js';
 import { createTranslationScheduler } from '../translation-queue.mjs';
@@ -34,8 +34,8 @@ function fixture(t, options = {}) {
   const client = new Client(); service.accept(client);
   t.after(() => { client.close(); store.db.close(); });
   let sentence = 0;
-  const add = text => {
-    const row = store.addSegment(run.listeningId, run.runId, { id: ++sentence, text: `Source ${sentence}` }).segment;
+  const add = (text, original) => {
+    const row = store.addSegment(run.listeningId, run.runId, { id: ++sentence, text: original ?? `Source ${sentence}` }).segment;
     if (text) store.setTranslation(row.id, text, false);
     service.notify(run.listeningId); return row;
   };
@@ -159,12 +159,49 @@ test('全文译文缺失有等待上限，失败不跳过；活动记录和无�
 });
 
 test('另一个页面继续收听会停止全文播报，防止新旧内容混入', async t => {
-  const f = fixture(t); f.add('第一句。第二句。第三句。'); f.store.finishRun(f.run.runId);
+  const f = fixture(t); f.add('旧内容'.repeat(300)); f.store.finishRun(f.run.runId);
   f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'translation', config }); await flush();
   f.store.createRun(f.run.listeningId, { source: 'en', targetLang: 'Chinese', audioSource: 'tab' }, 'next');
   f.service.notify(f.run.listeningId); await flush();
   assert.equal(f.client.readyState, 3); assert.equal(f.spoken.length, 2);
   assert.match(f.client.events.at(-1).message, /收听已继续/);
+});
+
+for (const kind of ['original', 'translation']) for (const provider of ['qwen', 'fish']) {
+  test(`${provider} 全文${kind}长记录按段完整播放，暂停停止前不无限预生成`, async t => {
+    const f = fixture(t), original = 'English words without any sentence punctuation '.repeat(35).trim();
+    const translation = '“' + '长引号中的全部译文必须被读出来而不是因长度限制被跳过。'.repeat(40) + '”';
+    const first = f.add(translation, original), second = f.add('下一条记录。', 'Next record.');
+    f.store.finishRun(f.run.runId);
+    const input = provider === 'qwen' ? config : { provider: 'fish', key: 'fake-fish-key', referenceId: 'voice', model: 's2.1-pro-free', rate: .5, latency: 'balanced' };
+    f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind, config: input }); await flush();
+    assert.equal(f.spoken.length, 2); assert.equal(f.client.readyState, 1);
+    f.client.message({ type: 'speech.pause', epoch: 7 }); f.ack(); await flush();
+    assert.equal(f.spoken.length, 2);
+    f.client.message({ type: 'speech.resume', epoch: 7 }); await flush();
+    let loops = 0;
+    while (f.client.readyState === 1 && loops++ < 200) { f.ack(); await flush(); }
+    assert.equal(f.client.events.at(-1).type, 'speech.finished');
+    const units = f.client.events.filter(e => e.type === 'speech.unit');
+    assert.equal(units.filter(e => e.segmentId === first.id).map(e => e.text).join(''), kind === 'original' ? original : translation);
+    assert.equal(units.filter(e => e.segmentId === second.id).map(e => e.text).join(''), kind === 'original' ? 'Next record.' : '下一条记录。');
+    assert.deepEqual(f.spoken, units.map(e => e.text));
+    const firstUnits = units.filter(e => e.segmentId === first.id);
+    assert.deepEqual(firstUnits.map(e => e.part), Array.from({ length: firstUnits.length }, (_, i) => i + 1));
+    assert.ok(firstUnits.every(e => e.parts === firstUnits.length && e.position === 1 && e.total === 2));
+    assert.equal(units.at(-1).position, 2);
+  });
+}
+
+test('全文分段受 PCM 水位限制，手动停止不会继续生成剩余长文', async t => {
+  const spoken = [];
+  const f = fixture(t, { createTts: () => ({ async synthesize(text, audio) { spoken.push(text); audio(Buffer.alloc(24000 * 2 * 10)); }, close() {} }) });
+  f.add('字'.repeat(3000)); f.store.finishRun(f.run.runId);
+  f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'translation', config }); await flush();
+  assert.equal(spoken.length, 1, '10 seconds of PCM must stop prefetch until the player consumes it');
+  f.ack(); await flush(); assert.equal(spoken.length, 2);
+  f.client.message({ type: 'speech.stop', epoch: 7 }); f.service.notify(f.run.listeningId); await flush();
+  assert.equal(spoken.length, 2); assert.equal(f.client.readyState, 3);
 });
 
 test('后一句翻译失败会先播完前一句，不会因预取而截断正在听的内容', async t => {
@@ -273,6 +310,34 @@ test('speech units retain numbers, quoted clauses and meaningful text', () => {
     ['Dr. Smith works in the U.S. today.', 'It costs 3.14 dollars.', 'Next sentence.']);
 });
 
+test('全文分段不因缺少标点、长引号或未配对括号报错，所有正文保持原序', () => {
+  for (const text of ['字'.repeat(5000), 'word '.repeat(700).trim(), '“' + '一段完整的引用。'.repeat(100) + '”', '(' + '没有右括号'.repeat(200), 'x'.repeat(1000)]) {
+    const units = transcriptSpeechUnits(text);
+    assert.ok(units.length > 1); assert.equal(units.join(''), text);
+    assert.ok(units.every(unit => unit.trim() && [...unit].length <= 180));
+  }
+});
+
+test('全文分段优先段落、句末和词界，保留小数、缩写和 Unicode 字素', () => {
+  const paragraphs = '第一段，保留原文。\n第二段，单独播报。';
+  assert.deepEqual(transcriptSpeechUnits(paragraphs), ['第一段，保留原文。\n', '第二段，单独播报。']);
+  const text = ('Dr. Smith works in the U.S. today. It costs 3.14 dollars. ' + 'words without punctuation ').repeat(30).trim();
+  const units = transcriptSpeechUnits(text);
+  assert.equal(units.join(''), text);
+  assert.deepEqual(units.flatMap(unit => unit.trim().split(/\s+/)), text.split(/\s+/), 'English words must not be split when a word boundary fits');
+  const complex = '👨‍👩‍👧‍👦e\u0301𠮷'.repeat(100), clusters = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  const split = transcriptSpeechUnits(complex);
+  assert.equal(split.join(''), complex);
+  assert.deepEqual(split.flatMap(unit => [...clusters.segment(unit)].map(c => c.segment)), [...clusters.segment(complex)].map(c => c.segment));
+});
+
+test('全文分段随语速缩小或放大，较慢 Fish 音色不使用长文本上限', () => {
+  for (const text of ['字'.repeat(1200), '1234567890'.repeat(120)]) for (const rate of [.5, 1, 1.1, 1.2, 2]) {
+    const units = transcriptSpeechUnits(text, { rate });
+    assert.equal(units.join(''), text); assert.ok(units.every(unit => [...unit].length <= Math.floor(60 * rate)));
+  }
+});
+
 for (const rate of [44100, 48000]) test(`PCM streams resample at ${rate} Hz without gaps or dropped short tail`, () => {
   const pcm = Int16Array.from({ length: 2401 }, (_, i) => Math.round(Math.sin(i / 20) * 20000));
   const buffer = new SpeechBuffer(rate); buffer.begin(1); buffer.push(pcm); buffer.end(1);
@@ -349,6 +414,13 @@ test('首次等待说明不被缓冲统计覆盖；全文原文允许非中文�
   await c.start(config, { transcript: 'original' }); sockets[1].dispatchEvent(new Event('open'));
   assert.equal(players[0].closed, true); assert.equal(sockets[1].sent[0].type, 'speech.transcript');
   assert.equal(sockets[1].sent[0].kind, 'original');
+  const transcriptEpoch = sockets[1].sent[0].epoch;
+  for (const data of [{ type: 'speech.ready', total: 3 }, { type: 'speech.unit', unit: 1, text: '原文中的第二小段', position: 1, part: 2, parts: 8 }]) {
+    sockets[1].dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ epoch: transcriptEpoch, ...data }) }));
+  }
+  players[1].callback({ type: 'started', unit: 1 });
+  assert.equal(states.at(-1).message, '正在播报原文 · 第 1 / 3 句 · 第 2 / 8 段');
+  assert.equal(states.at(-1).reading, '原文中的第二小段');
   c.setContext({ phase: 'idle', target: 'English', runId: 'run', listeningId: 'record' }); assert.equal(c.enabled, true);
   c.setContext({ phase: 'idle', target: 'English', runId: 'other', listeningId: 'other' });
   assert.equal(players[1].closed, true); assert.equal(c.enabled, false);

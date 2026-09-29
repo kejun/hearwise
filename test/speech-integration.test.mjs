@@ -55,6 +55,39 @@ test('speech endpoint rejects cross-origin upgrades and rejects unsupported conf
   await once(client.ws, 'close'); assert.equal(client.events[0].type, 'speech.error'); assert.equal(f.stats.connections, 0);
 });
 
+test('真实全文链路：千问和 Fish 均将长原文/译文拆成多个请求，收到全部音频回执才完成', { timeout: 15000 }, async t => {
+  const original = 'Long English transcript with no punctuation between words '.repeat(18).trim();
+  const translation = '“' + '长篇译文即使没有句号也应该拆成小段完整连续播放'.repeat(30) + '”';
+  const f = await speechFixture({ translationText: translation }); t.after(() => f.close());
+  const asr = await socket(f.base.replace('http', 'ws') + '/ws'); t.after(() => asr.ws.terminate());
+  asr.send({ type: 'start', key: 'mock-asr-key', source: 'en', targetLang: 'Chinese', audioSource: 'tab' });
+  await waitFor(() => asr.events.some(e => e.type === 'listening-ready'));
+  const { listeningId } = asr.events.find(e => e.type === 'listening-ready');
+  f.final(original); await waitFor(() => asr.events.some(e => e.type === 'translation-updated'));
+  asr.send({ type: 'stop' }); await once(asr.ws, 'close');
+  for (const provider of ['qwen', 'fish']) for (const kind of ['original', 'translation']) {
+    const client = await socket(f.base.replace('http', 'ws') + '/ws/tts'); t.after(() => client.ws.terminate());
+    let samples = 0;
+    client.ws.on('message', (raw, binary) => {
+      if (binary) { samples += raw.readUInt32LE(12); return; }
+      const msg = JSON.parse(raw);
+      if (msg.type === 'speech.unit-end') client.send({ type: 'speech.progress', epoch: 13, consumedSamples: samples, playedUnit: msg.unit });
+    });
+    const first = provider === 'qwen' ? f.stats.commits.length : f.stats.fishRequests.length;
+    const input = provider === 'qwen' ? config : { provider, key: 'mock-fish-key', model: 's2.1-pro-free', referenceId: 'voice', rate: .5, latency: 'balanced' };
+    const closed = once(client.ws, 'close');
+    client.send({ type: 'speech.transcript', epoch: 13, listeningId, kind, config: input });
+    await closed;
+    const requests = provider === 'qwen' ? f.stats.commits.slice(first) : f.stats.fishRequests.slice(first).map(r => r.body.text);
+    assert.ok(requests.length > 2); assert.equal(requests.join(''), kind === 'original' ? original : translation);
+    assert.equal(client.events.at(-1).type, 'speech.finished');
+    assert.equal(samples, requests.length * 2400);
+    const units = client.events.filter(e => e.type === 'speech.unit');
+    assert.deepEqual(units.map(e => e.part), requests.map((_text, i) => i + 1));
+    assert.ok(units.every(e => e.parts === requests.length && e.position === 1 && e.total === 1));
+  }
+});
+
 test('语音 Prompt 经实际 WebSocket 下发到 Instruct 会话，留空回到默认模型，非法指令不调用上游', { timeout: 10000 }, async t => {
   const f = await speechFixture(); t.after(() => f.close());
   const prompt = '用温和、清晰的语气朗读。';

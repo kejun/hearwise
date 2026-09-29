@@ -17,7 +17,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
   };
   const send = data => { if (socket?.readyState === 1) socket.send(JSON.stringify({ ...data, epoch })); };
   const playingMessage = () => mode === 'transcript'
-    ? `正在播报${kind === 'original' ? '原文' : '译文'} · 第 ${readingMeta?.position || 1} / ${total} 句`
+    ? `正在播报${kind === 'original' ? '原文' : '译文'} · 第 ${readingMeta?.position || 1} / ${total} 句${readingMeta?.parts > 1 ? ` · 第 ${readingMeta.part} / ${readingMeta.parts} 段` : ''}`
     : draining ? '正在读完最后几句' : '正在播报';
   function stop(message = '播报已关闭', reason = 'cancel') {
     const previous = socket, previousEpoch = epoch, stoppedMode = mode, stoppedKind = kind;
