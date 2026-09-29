@@ -123,6 +123,11 @@
       </section>
       <section class="tab-panel" id="tab-speech" role="tabpanel" aria-labelledby="tab-speech-button" hidden>
         <form id="speech-form">
+          <label class="form-label" for="speech-provider">语音模型服务商</label>
+          <select class="speech-select" id="speech-provider"><option value="qwen" selected>阿里云千问</option><option value="fish">Fish Audio</option></select>
+          <fieldset class="speech-provider-fields" id="speech-qwen-fields" aria-label="阿里云千问设置">
+          <label class="form-label" for="speech-qwen-model">模型</label>
+          <input class="speech-input" id="speech-qwen-model" value="Qwen3-TTS-Flash-Realtime" readonly />
           <div class="speech-config-grid">
             <label class="language-field"><span>服务地域</span><select id="speech-region"><option value="beijing">中国内地（北京）</option><option value="singapore">国际（新加坡）</option></select></label>
             <label class="language-field"><span>音色</span><select id="speech-voice"><option value="Cherry">Cherry · 女声</option><option value="Serena">Serena · 女声</option><option value="Ethan">Ethan · 男声</option><option value="Chelsie">Chelsie · 女声</option></select></label>
@@ -131,8 +136,27 @@
           <label class="form-label" for="speech-prompt">语音 Prompt（可选）</label>
           <textarea class="speech-prompt" id="speech-prompt" rows="3" maxlength="500" placeholder="例如：用自然、温和的语气播报，吐字清楚，句间稍作停顿。" aria-describedby="speech-prompt-hint"></textarea>
           <p class="form-note" id="speech-prompt-hint">用中文或英文描述语气、情绪和表达方式，最多 500 个字符。留空使用默认风格。</p>
+          </fieldset>
+          <fieldset class="speech-provider-fields" id="speech-fish-fields" aria-label="Fish Audio 设置" disabled hidden>
+            <label class="form-label" for="speech-fish-model">模型</label>
+            <select class="speech-select" id="speech-fish-model"><option value="s2.1-pro-free">s2.1-pro-free</option><option value="s2.1-pro">s2.1-pro</option></select>
+            <p class="form-note">free 适合试用，响应延迟无保证；pro 为付费模型。</p>
+            <label class="form-label" for="speech-fish-key">Fish Audio API Key</label>
+            <input class="speech-input" id="speech-fish-key" type="password" autocomplete="off" spellcheck="false" required maxlength="2048" placeholder="填写 Fish Audio API Key" />
+            <p class="form-note">仅保存在当前浏览器。<a href="https://fish.audio/app/api-keys" target="_blank" rel="noopener noreferrer">获取 API Key</a></p>
+            <label class="form-label" for="speech-fish-voice">音色 ID（reference_id）</label>
+            <input class="speech-input" id="speech-fish-voice" type="text" spellcheck="false" required maxlength="128" placeholder="粘贴 Fish Audio 音色 ID" aria-describedby="speech-fish-voice-hint" />
+            <p class="form-note" id="speech-fish-voice-hint">从 <a href="https://fish.audio/discovery" target="_blank" rel="noopener noreferrer">Fish Audio 音色库</a> 或自己的音色页面复制 ID，连续播报会使用同一音色。</p>
+            <div class="speech-config-grid fish-config-grid">
+              <label class="language-field"><span>语速</span><input class="speech-input" id="speech-fish-rate" type="number" min="0.5" max="2" step="0.1" value="1" required /></label>
+              <label class="language-field"><span>延迟模式</span><select id="speech-fish-latency"><option value="balanced">实时优先</option><option value="normal">音质优先</option><option value="low">最低延迟</option></select></label>
+            </div>
+            <label class="form-label" for="speech-fish-style">表达风格（可选）</label>
+            <input class="speech-input" id="speech-fish-style" maxlength="120" placeholder="例如：calm 或 whispers softly" aria-describedby="speech-fish-style-hint" />
+            <p class="form-note" id="speech-fish-style-hint">填写一条简短描述，按 Fish 的 [描述] 方式应用到每句；留空按音色自然播报。</p>
+          </fieldset>
           <p class="form-note">更改播报设置后保存，会关闭当前播报；手动重新开启后生效。</p>
-          <p class="form-note">开启或试听时，待播报文本会发送至所选地域的阿里云服务，可能产生费用。</p>
+          <p class="form-note" id="speech-service-note">开启或试听时，待播报文本会发送至所选地域的阿里云服务，可能产生费用。</p>
           <button class="test-button" id="speech-preview" type="button">试听语音</button>
           <p class="form-note" id="speech-result" role="status" aria-live="polite">试听会朗读一段固定的中文短句。</p>
           <button class="save-button" type="submit">保存播报设置</button>

@@ -45,6 +45,8 @@ try {
   await page.getByRole('button', { name: '保存并继续', exact: true }).click();
   await page.getByRole('button', { name: '播报设置', exact: true }).click();
   assert.doesNotMatch(await page.locator('#tab-speech').textContent(), /使用 Qwen3-TTS-Flash-Realtime 朗读|语音播报与识别、翻译共用/);
+  assert.equal(await page.locator('#speech-provider').inputValue(), 'qwen');
+  assert.equal(await page.locator('#speech-qwen-model').inputValue(), 'Qwen3-TTS-Flash-Realtime');
   await page.getByLabel('语音 Prompt（可选）', { exact: true }).fill(speechPrompt);
   await page.getByRole('button', { name: '保存播报设置', exact: true }).click();
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('hearwise:speech')).prompt), speechPrompt);
@@ -151,12 +153,74 @@ try {
   await page.locator('#speech-result').filter({ hasText: '试听完成' }).waitFor();
   assert.equal(fixture.stats.models.at(-1), 'qwen3-tts-flash-realtime');
   assert.equal(fixture.stats.sessions.at(-1).instructions, undefined);
+  const qwenBeforeFish = fixture.stats.connections;
+  await page.locator('#speech-provider').selectOption('fish');
+  assert.equal(await page.locator('#speech-qwen-fields').isHidden(), true);
+  assert.equal(await page.locator('#speech-fish-model').inputValue(), 's2.1-pro-free');
+  await page.getByRole('button', { name: '试听语音', exact: true }).click();
+  assert.match(await page.locator('#speech-result').textContent(), /Fish Audio API Key/);
+  assert.equal(fixture.stats.fishRequests.length, 0);
+  await page.getByLabel('Fish Audio API Key', { exact: true }).fill('mock-fish-key');
+  await page.getByLabel('音色 ID（reference_id）', { exact: true }).fill('voice-browser-test');
+  await page.locator('#speech-fish-style').fill('calm');
+  await page.getByRole('button', { name: '试听语音', exact: true }).click();
+  await page.locator('#speech-result').filter({ hasText: '试听完成' }).waitFor();
+  assert.ok(fixture.stats.fishRequests.every(r => r.model === 's2.1-pro-free' && r.body.text.startsWith('[calm] ')));
+  assert.equal(fixture.stats.connections, qwenBeforeFish);
+  await page.locator('#speech-fish-model').selectOption('s2.1-pro');
+  if (process.env.FISH_SETTINGS_SCREENSHOT) await page.locator('.modal').screenshot({ path: process.env.FISH_SETTINGS_SCREENSHOT });
+  await page.getByRole('button', { name: '保存播报设置', exact: true }).click();
+  const fishAfterSave = fixture.stats.fishRequests.length;
+  await page.reload(); await speechTab.click();
+  await page.getByRole('button', { name: '播报设置', exact: true }).click();
+  assert.equal(await page.locator('#speech-provider').inputValue(), 'fish');
+  assert.equal(await page.locator('#speech-fish-key').inputValue(), 'mock-fish-key');
+  assert.equal(await page.locator('#speech-fish-model').inputValue(), 's2.1-pro');
+  assert.equal(fixture.stats.fishRequests.length, fishAfterSave);
+  assert.equal(await page.evaluate(() => localStorage.getItem('tongsheng:qianwen-key')), 'mock-shared-key');
+  fixture.stats.holdFish = true;
+  const aborted = fixture.stats.fishAborted;
+  await page.getByRole('button', { name: '试听语音', exact: true }).click();
+  await until(() => fixture.stats.fishRequests.length > fishAfterSave);
+  await page.locator('#speech-provider').selectOption('qwen');
+  await until(() => fixture.stats.fishAborted > aborted);
+  assert.equal(await page.locator('#speech-toggle').getAttribute('aria-pressed'), 'false');
+  assert.equal(await page.locator('#speech-fish-fields').isHidden(), true);
+  await page.locator('#speech-provider').selectOption('fish'); fixture.stats.holdFish = false;
+  await page.getByRole('button', { name: '保存播报设置', exact: true }).click();
+  await page.locator('#toggle').click();
+  await page.getByRole('button', { name: '停止聆听', exact: true }).waitFor();
+  const progressBeforeFish = progress.length;
+  await page.getByRole('button', { name: '开启译文播报', exact: true }).click();
+  await until(() => progress.slice(progressBeforeFish).some(p => p.consumedSamples > 0));
+  assert.equal(fixture.stats.fishRequests.at(-1).model, 's2.1-pro');
+  await page.getByRole('button', { name: '停止聆听', exact: true }).click();
+  await page.getByRole('button', { name: '开启译文播报', exact: true }).waitFor();
+  const fishDetail = await page.evaluate(async () => {
+    const list = await (await fetch('/api/listenings')).json();
+    return (await fetch(`/api/listenings/${list.items[0].id}`)).json();
+  });
+  for (const [kind, label] of [['original', '原文'], ['translation', '译文']]) {
+    const start = fixture.stats.fishRequests.length;
+    await page.getByRole('button', { name: `播报全部${label}`, exact: true }).click();
+    await page.locator('#transcript-speech-status').filter({ hasText: `${label}全文播报完成` }).waitFor();
+    assert.deepEqual(fixture.stats.fishRequests.slice(start).map(r => r.body.text), fishDetail.segments.map(s => `[calm] ${s[`${kind}_text`]}`));
+  }
+  await page.getByRole('button', { name: '播报设置', exact: true }).click();
+  await page.locator('#speech-provider').selectOption('qwen');
+  await page.getByRole('button', { name: '试听语音', exact: true }).click();
+  await page.locator('#speech-result').filter({ hasText: '试听完成' }).waitFor();
+  assert.equal(fixture.stats.connections, qwenBeforeFish + 1);
+  assert.ok(fixture.stats.fishRequests.every(r => r.authorization === 'Bearer mock-fish-key' && r.body.instructions === undefined));
+  assert.ok(await page.evaluate(() => !localStorage.getItem('hearwise:speech').includes('mock-fish-key')));
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   assert.deepEqual(errors, []);
   assert.ok(fixture.stats.authorizations.every(value => value === 'Bearer mock-shared-key'));
   console.log(JSON.stringify({ ok: true, uiErrors: errors, ttsSessions: fixture.stats.connections,
-    responses: fixture.stats.commits.length, consumedSamples: Math.max(...progress.map(p => p.consumedSamples)),
+    responses: fixture.stats.commits.length, fishRequests: fixture.stats.fishRequests.length,
+    fishChecks: ['independent key', 'free and pro models', 'save and reload', 'provider switch aborts', 'live AudioWorklet playback', 'full original and translation', 'switch back to Qwen'],
+    consumedSamples: Math.max(...progress.map(p => p.consumedSamples)),
     checks: ['prompt saved and restored', 'prompt reaches live, transcript and preview', 'clear prompt restores default model', 'tabs and keyboard navigation', 'tab switch preserves playback', 'pin shared panel', 'collapse survives caption updates and reload', 'keyboard expand', 'shared key', 'small toggle', 'first playback hint', 'default off', 'save without speech', 'final translation to AudioWorklet consumption', 'stop', 're-enable', 'drain', 'full original', 'full translation', 'stop transcript', 'new run off', 'reload off', 'preview', 'mobile width'] }, null, 2));
 } finally {
   await browser?.close(); await fixture.close();

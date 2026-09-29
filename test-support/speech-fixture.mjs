@@ -10,7 +10,8 @@ import { once } from 'node:events';
 
 export async function speechFixture({ autoSentences = false, audioSamples = 2400 } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
-  const stats = { connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [] };
+  const stats = { connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
+    fishRequests: [], fishAborted: 0, holdFish: false };
   const mt = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     let body; try { body = JSON.parse(Buffer.concat(chunks).toString()); } catch { res.writeHead(400); return res.end(); }
@@ -19,6 +20,23 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
     res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));
   });
   mt.listen(0, '127.0.0.1'); await once(mt, 'listening');
+  const fish = http.createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    stats.fishRequests.push({ authorization: req.headers.authorization, model: req.headers.model, body });
+    res.on('close', () => { if (!res.writableFinished) stats.fishAborted++; });
+    res.writeHead(200, { 'Content-Type': 'audio/pcm' });
+    const pcm = Buffer.alloc(audioSamples * 2);
+    for (let i = 0; i < audioSamples; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 24000 * 440 * Math.PI * 2) * 2000), i * 2);
+    res.write(pcm.subarray(0, 1001));
+    if (stats.holdFish) return; // Used to verify immediate cancellation in the browser.
+    for (let offset = 1001; offset < pcm.length && !res.destroyed; offset += 1001) {
+      await new Promise(resolve => setTimeout(resolve, 1));
+      res.write(pcm.subarray(offset, offset + 1001));
+    }
+    res.end();
+  });
+  fish.listen(0, '127.0.0.1'); await once(fish, 'listening');
   const asr = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(asr, 'listening');
   const tts = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(tts, 'listening');
   let sentence = 0;
@@ -61,7 +79,7 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
   const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(fileURLToPath(new URL('..', import.meta.url))),
     env: { ...process.env, PORT: '0', LISTENING_DB: path.join(directory, 'test.sqlite'),
       ASR_ENDPOINT: `ws://127.0.0.1:${asr.address().port}`, MT_ENDPOINT: `http://127.0.0.1:${mt.address().port}`,
-      TTS_ENDPOINT: `ws://127.0.0.1:${tts.address().port}`, EXTRACTION_WAIT_MS: '15000' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      TTS_ENDPOINT: `ws://127.0.0.1:${tts.address().port}`, FISH_TTS_ENDPOINT: `http://127.0.0.1:${fish.address().port}/v1/tts`, EXTRACTION_WAIT_MS: '15000' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; child.stderr.on('data', data => { logs += data; });
   const base = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Fixture startup timeout: ' + logs)), 10000);
@@ -73,6 +91,7 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
       const exited = once(child, 'exit'); child.kill(); await exited;
       for (const server of [asr, tts]) { for (const ws of server.clients) ws.terminate(); await new Promise(resolve => server.close(resolve)); }
       mt.closeAllConnections(); await new Promise(resolve => mt.close(resolve));
+      fish.closeAllConnections(); await new Promise(resolve => fish.close(resolve));
       await rm(directory, { recursive: true, force: true });
     }
   };
