@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import WebSocket, { WebSocketServer } from 'ws';
 import { speechFixture } from '../test-support/speech-fixture.mjs';
 import { QwenTts } from '../qwen-tts.mjs';
+import { PREVIEW_TEXT, TTS_MODEL, TTS_INSTRUCT_MODEL } from '../public/speech-protocol.js';
 
 const config = { key: 'mock-only-key', region: 'beijing', voice: 'Cherry', rate: 1.1 };
 async function waitFor(check) {
@@ -52,6 +53,36 @@ test('speech endpoint rejects cross-origin upgrades and rejects unsupported conf
   const client = await socket(f.base.replace('http', 'ws') + '/ws/tts');
   client.send({ type: 'speech.preview', epoch: 1, config: { ...config, region: 'http://localhost' } });
   await once(client.ws, 'close'); assert.equal(client.events[0].type, 'speech.error'); assert.equal(f.stats.connections, 0);
+});
+
+test('语音 Prompt 经实际 WebSocket 下发到 Instruct 会话，留空回到默认模型，非法指令不调用上游', { timeout: 10000 }, async t => {
+  const f = await speechFixture(); t.after(() => f.close());
+  const prompt = '用温和、清晰的语气朗读。';
+  for (const input of [
+    { ...config, prompt: `  ${prompt}\n` },
+    { ...config, region: 'singapore', prompt },
+    { ...config, prompt: ' \n ' }
+  ]) {
+    const firstCommit = f.stats.commits.length;
+    const client = await socket(f.base.replace('http', 'ws') + '/ws/tts');
+    t.after(() => client.ws.terminate());
+    client.send({ type: 'speech.preview', epoch: 1, config: input });
+    await waitFor(() => client.events.filter(e => e.type === 'speech.unit-end').length === 2);
+    assert.equal(f.stats.models.at(-1), input.prompt.trim() ? TTS_INSTRUCT_MODEL : TTS_MODEL);
+    assert.equal(f.stats.sessions.at(-1).instructions, input.prompt.trim() || undefined);
+    assert.equal(f.stats.sessions.at(-1).optimize_instructions, input.prompt.trim() ? false : undefined);
+    assert.equal(f.stats.commits.slice(firstCommit).join(''), PREVIEW_TEXT); // Instructions must never become spoken content.
+    client.send({ type: 'speech.stop', epoch: 1 }); await once(client.ws, 'close');
+  }
+  for (const prompt of ['长'.repeat(501), { instructions: 'invalid' }]) {
+    const client = await socket(f.base.replace('http', 'ws') + '/ws/tts');
+    t.after(() => client.ws.terminate());
+    client.send({ type: 'speech.preview', epoch: 2, config: { ...config, prompt } });
+    await once(client.ws, 'close');
+    assert.equal(client.events[0].type, 'speech.error');
+    assert.match(client.events[0].message, /语音 Prompt/);
+  }
+  assert.equal(f.stats.connections, 3);
 });
 
 test('Qwen reconnects before first audio, never replays after partial audio, and close aborts in-flight work', { timeout: 10000 }, async t => {

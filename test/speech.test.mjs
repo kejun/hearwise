@@ -7,8 +7,17 @@ import { speechUnits } from '../speech-scheduler.mjs';
 import { SpeechBuffer } from '../public/speech-buffer.js';
 import { createSpeechController } from '../public/speech-controller.js';
 import { createTranslationScheduler } from '../translation-queue.mjs';
+import { speechConfig, TTS_PROMPT_MAX_LENGTH } from '../public/speech-protocol.js';
 
 const config = { key: 'fake-key', region: 'beijing', voice: 'Cherry', rate: 1 };
+test('语音 Prompt 兼容旧配置，去除首尾空白，拒绝错误类型和超长指令', () => {
+  assert.equal(speechConfig(config).prompt, '');
+  assert.equal(speechConfig({ ...config, prompt: ' \n温和、清晰地朗读。\n ' }).prompt, '温和、清晰地朗读。');
+  assert.equal(speechConfig({ ...config, prompt: ' \n ' }).prompt, '');
+  assert.equal(speechConfig({ ...config, prompt: '字'.repeat(TTS_PROMPT_MAX_LENGTH) }).prompt.length, 500);
+  assert.throws(() => speechConfig({ ...config, prompt: '字'.repeat(TTS_PROMPT_MAX_LENGTH + 1) }), /最多 500/);
+  for (const prompt of [null, 42, {}, []]) assert.throws(() => speechConfig({ ...config, prompt }), /必须是文本/);
+});
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
 class Client extends EventEmitter {
   readyState = 1; bufferedAmount = 0; events = []; packets = [];

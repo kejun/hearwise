@@ -10,7 +10,7 @@ import { once } from 'node:events';
 
 export async function speechFixture({ autoSentences = false, audioSamples = 2400 } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
-  const stats = { connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [] };
+  const stats = { connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [] };
   const mt = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     let body; try { body = JSON.parse(Buffer.concat(chunks).toString()); } catch { res.writeHead(400); return res.end(); }
@@ -38,6 +38,7 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
   });
   tts.on('connection', (ws, req) => {
     stats.authorizations.push(req.headers.authorization);
+    stats.models.push(new URL(req.url, 'http://localhost').searchParams.get('model'));
     stats.connections++; let text = '';
     ws.send(JSON.stringify({ type: 'session.created', session: { id: 'mock' } }));
     ws.on('message', raw => {

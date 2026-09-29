@@ -112,7 +112,7 @@ let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
 
 // Speech is deliberately never restored as enabled. Only preferences may survive a reload.
-const speechEls = Object.fromEntries(['toggle', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'region', 'voice', 'rate', 'form', 'preview', 'result']
+const speechEls = Object.fromEntries(['toggle', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'region', 'voice', 'rate', 'prompt', 'form', 'preview', 'result']
   .map(name => [name, $(`speech-${name}`)]));
 const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translation', 'stop', 'status', 'reading']
   .map(name => [name, $(`transcript-speech-${name}`)]));
@@ -156,12 +156,13 @@ localStorage.removeItem('hearwise:speech-key');
 speechEls.region.value = speechPreferences.region || 'beijing';
 speechEls.voice.value = speechPreferences.voice || 'Cherry';
 speechEls.rate.value = String(speechPreferences.rate || 1);
+speechEls.prompt.value = typeof speechPreferences.prompt === 'string' ? speechPreferences.prompt : '';
 speechEls.volume.value = String(speechPreferences.volume ?? .8);
-function readSpeechConfig() { return speechConfig({ key: saved.key, region: speechEls.region.value, voice: speechEls.voice.value, rate: Number(speechEls.rate.value) }); }
+function readSpeechConfig() { return speechConfig({ key: saved.key, region: speechEls.region.value, voice: speechEls.voice.value, rate: Number(speechEls.rate.value), prompt: speechEls.prompt.value }); }
 function openSpeechSettings() { openSettings(); activateTab(2); speechEls.region.focus(); }
 function speechConfigError(error) {
   if (!saved.key) { openSettings(); activateTab(0); els.apiKey.focus(); }
-  else openSpeechSettings();
+  else { openSpeechSettings(); if (error.message.startsWith('语音 Prompt')) speechEls.prompt.focus(); }
   speechEls.status.textContent = error.message;
   speechEls.result.textContent = error.message;
 }
@@ -191,7 +192,8 @@ speechEls.form.addEventListener('submit', event => {
   try {
     const config = readSpeechConfig();
     speech.stop('设置已保存，请手动开启译文播报');
-    speechPreferences = { region: config.region, voice: config.voice, rate: config.rate, volume: Number(speechEls.volume.value) };
+    speechPreferences = { region: config.region, voice: config.voice, rate: config.rate, prompt: config.prompt, volume: Number(speechEls.volume.value) };
+    speechEls.prompt.value = config.prompt;
     localStorage.setItem('hearwise:speech', JSON.stringify(speechPreferences));
     closeSettings();
   } catch (error) { speechConfigError(error); }
