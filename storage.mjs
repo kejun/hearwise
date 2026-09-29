@@ -201,6 +201,18 @@ export class ListeningStore {
     return this.db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(LENGTH(COALESCE(translation_text,original_text))),0) AS characters
       FROM segments WHERE listening_id=? AND run_id=? AND sequence_no>?`).get(listeningId, runId, afterSequence);
   }
+  speechTranscript(listeningId) {
+    if (typeof listeningId !== 'string') return null;
+    return this.db.prepare(`SELECT l.id,
+      EXISTS(SELECT 1 FROM listening_runs WHERE listening_id=l.id AND state='active') AS active,
+      (SELECT COUNT(*) FROM segments WHERE listening_id=l.id) AS total,
+      COALESCE((SELECT MAX(sequence_no) FROM segments WHERE listening_id=l.id),0) AS maxSequence
+      FROM listenings l WHERE l.id=?`).get(listeningId) || null;
+  }
+  speechTranscriptNext(listeningId, afterSequence, throughSequence) {
+    return this.db.prepare(`SELECT * FROM segments WHERE listening_id=? AND sequence_no>? AND sequence_no<=?
+      ORDER BY sequence_no LIMIT 1`).get(listeningId, afterSequence, throughSequence) || null;
+  }
   processing(id) {
     const translations = this.db.prepare(`SELECT
       COALESCE(SUM(translation_state='failed'),0) AS failedTranslations,

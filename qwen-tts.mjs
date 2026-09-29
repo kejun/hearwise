@@ -39,7 +39,7 @@ export class QwenTts {
         if (ws !== this.ws || this.closed) return;
         let event; try { event = JSON.parse(raw.toString()); } catch { return fail(new Error('语音服务响应无效')); }
         if (event.type === 'session.created') this.send('session.update', { session: {
-          mode: 'commit', voice: this.config.voice, language_type: 'Chinese',
+          mode: 'commit', voice: this.config.voice, language_type: this.config.language || 'Chinese',
           response_format: 'pcm', sample_rate: TTS_SAMPLE_RATE, speech_rate: this.config.rate
         } });
         if (event.type === 'session.updated' && !settled) {

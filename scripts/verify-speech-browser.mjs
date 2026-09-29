@@ -24,14 +24,15 @@ try {
   await page.goto(fixture.base);
   assert.equal(await page.getByRole('button', { name: '开启译文播报', exact: true }).isDisabled(), true);
   assert.equal(fixture.stats.connections, 0);
-  await page.getByRole('button', { name: '播报设置', exact: true }).click();
-  await page.getByLabel('阿里云百炼语音 API Key', { exact: true }).fill('mock-tts-key');
-  await page.getByRole('button', { name: '保存播报设置', exact: true }).click();
-  assert.equal(fixture.stats.connections, 0);
+  assert.equal(await page.locator('#speech-key, #speech-remember').count(), 0);
+  assert.ok((await page.locator('#speech-toggle').boundingBox()).height <= 34);
   await page.getByRole('button', { name: '打开设置', exact: true }).click();
   await page.getByRole('tab', { name: '连接设置', exact: true }).click();
-  await page.getByLabel('API Key', { exact: true }).fill('mock-asr-key');
+  await page.getByLabel('API Key', { exact: true }).fill('mock-shared-key');
   await page.getByRole('button', { name: '保存并继续', exact: true }).click();
+  await page.getByRole('button', { name: '播报设置', exact: true }).click();
+  await page.getByRole('button', { name: '保存播报设置', exact: true }).click();
+  assert.equal(fixture.stats.connections, 0);
   await page.getByRole('button', { name: '开始聆听', exact: true }).click();
   await page.getByRole('button', { name: '停止聆听', exact: true }).waitFor();
   await until(() => fixture.stats.asrClients.size === 1);
@@ -40,6 +41,7 @@ try {
   await page.locator('#translation').filter({ hasText: '这是第' }).waitFor();
   assert.equal(fixture.stats.connections, 0);
   await page.getByRole('button', { name: '开启译文播报', exact: true }).click();
+  assert.match(await page.locator('#speech-status').textContent(), /下一句|说完一句|首次播放/);
   await until(() => progress.some(p => p.consumedSamples > 0));
   assert.equal(fixture.stats.sessions[0].sample_rate, 24000);
   if (process.env.SPEECH_SCREENSHOT) await page.screenshot({ path: process.env.SPEECH_SCREENSHOT });
@@ -53,11 +55,33 @@ try {
   await page.getByRole('button', { name: '停止聆听', exact: true }).click();
   await page.getByRole('button', { name: '开启译文播报', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '开启译文播报', exact: true }).isDisabled(), true);
+  // Read the full stored transcript, not only the currently visible caption.
+  await page.getByRole('button', { name: '播报全部原文', exact: true }).waitFor();
+  const detail = await page.evaluate(async () => {
+    const list = await (await fetch('/api/listenings')).json();
+    return (await fetch(`/api/listenings/${list.items[0].id}`)).json();
+  });
+  const originalStart = fixture.stats.commits.length;
+  await page.getByRole('button', { name: '播报全部原文', exact: true }).click();
+  await page.locator('#transcript-speech-status').filter({ hasText: '原文全文播报完成' }).waitFor();
+  assert.deepEqual(fixture.stats.commits.slice(originalStart), detail.segments.map(s => s.original_text));
+  assert.equal(fixture.stats.sessions.at(-1).language_type, 'Auto');
+  const translationStart = fixture.stats.commits.length;
+  await page.getByRole('button', { name: '播报全部译文', exact: true }).click();
+  await page.locator('#transcript-speech-status').filter({ hasText: '译文全文播报完成' }).waitFor();
+  assert.deepEqual(fixture.stats.commits.slice(translationStart), detail.segments.map(s => s.translation_text));
+  await page.getByRole('button', { name: '播报全部原文', exact: true }).click();
+  await page.getByRole('button', { name: '停止全文播报', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '停止全文播报', exact: true }).isHidden(), true);
   await page.getByRole('button', { name: '继续收听', exact: true }).click();
   await page.getByRole('button', { name: '停止聆听', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '开启译文播报', exact: true }).getAttribute('aria-pressed'), 'false');
   await page.getByRole('button', { name: '停止聆听', exact: true }).click();
   await page.getByRole('button', { name: '继续收听', exact: true }).waitFor();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: '播报全部原文', exact: true }).waitFor();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  if (process.env.SPEECH_TRANSCRIPT_SCREENSHOT) await page.locator('.transcript-panel').screenshot({ path: process.env.SPEECH_TRANSCRIPT_SCREENSHOT });
   await page.reload();
   assert.equal(await page.getByRole('button', { name: '开启译文播报', exact: true }).getAttribute('aria-pressed'), 'false');
   await page.getByRole('button', { name: '播报设置', exact: true }).click();
@@ -66,9 +90,10 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   assert.deepEqual(errors, []);
+  assert.ok(fixture.stats.authorizations.every(value => value === 'Bearer mock-shared-key'));
   console.log(JSON.stringify({ ok: true, uiErrors: errors, ttsSessions: fixture.stats.connections,
     responses: fixture.stats.commits.length, consumedSamples: Math.max(...progress.map(p => p.consumedSamples)),
-    checks: ['default off', 'save without speech', 'final translation to AudioWorklet consumption', 'stop', 're-enable', 'drain', 'new run off', 'reload off', 'preview', 'mobile width'] }, null, 2));
+    checks: ['shared key', 'small toggle', 'first playback hint', 'default off', 'save without speech', 'final translation to AudioWorklet consumption', 'stop', 're-enable', 'drain', 'full original', 'full translation', 'stop transcript', 'new run off', 'reload off', 'preview', 'mobile width'] }, null, 2));
 } finally {
   await browser?.close(); await fixture.close();
 }

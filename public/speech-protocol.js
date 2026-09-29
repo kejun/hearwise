@@ -8,7 +8,7 @@ export const TTS_VOICES = ['Cherry', 'Serena', 'Ethan', 'Chelsie'];
 export function speechConfig(input) {
   if (!input || typeof input.key !== 'string' || !input.key.trim() || input.key.length > 2048 ||
       !Object.hasOwn(TTS_REGIONS, input.region) || !TTS_VOICES.includes(input.voice) ||
-      ![1, 1.1, 1.2].includes(input.rate)) throw new Error('请检查语音 Key、地域、音色和语速');
+      ![1, 1.1, 1.2].includes(input.rate)) throw new Error('请检查连接设置中的 API Key，以及播报地域、音色和语速');
   return { key: input.key.trim(), region: input.region, voice: input.voice, rate: input.rate };
 }
 // Binary frames: little-endian uint32 epoch, unit, frame, PCM sample count; then signed PCM16 LE.

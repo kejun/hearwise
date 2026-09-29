@@ -111,8 +111,10 @@ let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
 
 // Speech is deliberately never restored as enabled. Only preferences may survive a reload.
-const speechEls = Object.fromEntries(['toggle', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'key', 'region', 'voice', 'rate', 'remember', 'form', 'preview', 'result']
+const speechEls = Object.fromEntries(['toggle', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'region', 'voice', 'rate', 'form', 'preview', 'result']
   .map(name => [name, $(`speech-${name}`)]));
+const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translation', 'stop', 'status', 'reading']
+  .map(name => [name, $(`transcript-speech-${name}`)]));
 let speechPreview = false;
 let speechCanJump = false;
 const speech = createSpeechController({ onChange(state) {
@@ -123,6 +125,13 @@ const speech = createSpeechController({ onChange(state) {
   speechEls.toggle.disabled = !state.enabled && (phase !== 'listening' || els.target.value !== 'Chinese');
   speechEls.status.textContent = state.message;
   speechEls.result.textContent = state.message;
+  if (state.mode === 'transcript') transcriptSpeech.status.textContent = state.message;
+  transcriptSpeech.stop.hidden = !state.enabled || state.mode !== 'transcript';
+  for (const kind of ['original', 'translation']) {
+    const active = state.enabled && state.mode === 'transcript' && state.kind === kind;
+    transcriptSpeech[kind].setAttribute('aria-pressed', String(active));
+    transcriptSpeech[kind].classList.toggle('active', active);
+  }
   if (state.canJump !== undefined) speechCanJump = state.canJump;
   speechEls.jump.hidden = !state.enabled || state.preview || phase !== 'listening' || !speechCanJump;
   speechEls.preview.textContent = state.preview ? '停止试听' : '试听语音';
@@ -131,34 +140,43 @@ const speech = createSpeechController({ onChange(state) {
   if (state.reading !== undefined) {
     speechEls.reading.textContent = state.reading ? `正在读：${state.reading}` : '';
     speechEls.reading.hidden = !state.reading;
+    transcriptSpeech.reading.textContent = state.mode === 'transcript' ? state.reading : '';
+    transcriptSpeech.reading.hidden = !transcriptSpeech.reading.textContent;
   }
 } });
 let speechPreferences;
 try { speechPreferences = JSON.parse(localStorage.getItem('hearwise:speech') || '{}'); } catch { speechPreferences = {}; }
 if (!speechPreferences || typeof speechPreferences !== 'object' || Array.isArray(speechPreferences)) speechPreferences = {};
-speechEls.key.value = sessionStorage.getItem('hearwise:speech-key') || localStorage.getItem('hearwise:speech-key') || '';
-speechEls.remember.checked = Boolean(localStorage.getItem('hearwise:speech-key'));
+// All model calls use the saved connection key; discard the obsolete separate TTS credential.
+sessionStorage.removeItem('hearwise:speech-key');
+localStorage.removeItem('hearwise:speech-key');
 speechEls.region.value = speechPreferences.region || 'beijing';
 speechEls.voice.value = speechPreferences.voice || 'Cherry';
 speechEls.rate.value = String(speechPreferences.rate || 1);
 speechEls.volume.value = String(speechPreferences.volume ?? .8);
-function readSpeechConfig() { return speechConfig({ key: speechEls.key.value, region: speechEls.region.value, voice: speechEls.voice.value, rate: Number(speechEls.rate.value) }); }
-function openSpeechSettings() { openSettings(); activateTab(2); speechEls.key.focus(); }
+function readSpeechConfig() { return speechConfig({ key: saved.key, region: speechEls.region.value, voice: speechEls.voice.value, rate: Number(speechEls.rate.value) }); }
+function openSpeechSettings() { openSettings(); activateTab(2); speechEls.region.focus(); }
+function speechConfigError(error) {
+  if (!saved.key) { openSettings(); activateTab(0); els.apiKey.focus(); }
+  else openSpeechSettings();
+  speechEls.status.textContent = error.message;
+  speechEls.result.textContent = error.message;
+}
 function enableSpeech(reason) {
   try { void speech.start(readSpeechConfig(), { volume: Number(speechEls.volume.value), reason }); }
-  catch (error) { openSpeechSettings(); speechEls.result.textContent = error.message; }
+  catch (error) { speechConfigError(error); }
 }
 speechEls.toggle.addEventListener('click', () => speech.enabled ? speech.stop() : enableSpeech());
 speechEls.jump.addEventListener('click', () => enableSpeech('skip'));
 speechEls.replay.addEventListener('click', () => {
   try { void speech.replay(readSpeechConfig(), { volume: Number(speechEls.volume.value) }); }
-  catch (error) { openSpeechSettings(); speechEls.result.textContent = error.message; }
+  catch (error) { speechConfigError(error); }
 });
 speechEls.settings.addEventListener('click', openSpeechSettings);
 speechEls.preview.addEventListener('click', () => {
   if (speechPreview) return speech.stop('试听已停止');
   try { void speech.start(readSpeechConfig(), { preview: true, volume: Number(speechEls.volume.value) }); }
-  catch (error) { speechEls.result.textContent = error.message; }
+  catch (error) { speechConfigError(error); }
 });
 speechEls.volume.addEventListener('input', () => {
   speech.volume(Number(speechEls.volume.value));
@@ -170,19 +188,28 @@ speechEls.form.addEventListener('submit', event => {
   try {
     const config = readSpeechConfig();
     speech.stop('设置已保存，请手动开启译文播报');
-    sessionStorage.setItem('hearwise:speech-key', config.key);
-    if (speechEls.remember.checked) localStorage.setItem('hearwise:speech-key', config.key);
-    else localStorage.removeItem('hearwise:speech-key');
     speechPreferences = { region: config.region, voice: config.voice, rate: config.rate, volume: Number(speechEls.volume.value) };
     localStorage.setItem('hearwise:speech', JSON.stringify(speechPreferences));
     closeSettings();
-  } catch (error) { speechEls.result.textContent = error.message; }
+  } catch (error) { speechConfigError(error); }
 });
+for (const kind of ['original', 'translation']) transcriptSpeech[kind].addEventListener('click', () => {
+  if (phase !== 'idle' || !listeningId) return;
+  try { void speech.start(readSpeechConfig(), { transcript: kind, volume: Number(speechEls.volume.value) }); }
+  catch (error) { speechConfigError(error); }
+});
+transcriptSpeech.stop.addEventListener('click', () => speech.stop('全文播报已停止'));
+function syncTranscriptSpeech() {
+  transcriptSpeech.controls.hidden = phase !== 'idle' || !detail?.segmentCount || detail.listening?.id !== listeningId;
+  const active = detail?.runs?.some(run => run.state === 'active');
+  transcriptSpeech.original.disabled = transcriptSpeech.translation.disabled = Boolean(active);
+}
 function syncSpeechContext() {
   speech.setContext({ phase, listeningId, runId: activeRunId, target: els.target.value });
   speechEls.toggle.disabled = !speech.enabled && (phase !== 'listening' || els.target.value !== 'Chinese');
   speechEls.toggle.title = els.target.value === 'Chinese' ? '开启后从新的完整译文开始播报' : '当前仅支持中文译文播报';
   speechEls.jump.hidden = !speech.enabled || speechPreview || phase !== 'listening' || !speechCanJump;
+  syncTranscriptSpeech();
 }
 els.target.addEventListener('change', syncSpeechContext);
 syncSpeechContext();
@@ -390,6 +417,7 @@ els.settingsForm.addEventListener('submit', event => {
     return;
   }
   els.apiKey.setCustomValidity('');
+  if (key !== saved.key) speech.stop('API Key 已更新，请手动开启播报');
   localStorage.setItem('tongsheng:qianwen-key', key);
   saved.key = key;
   clearTranslationWork();
@@ -573,6 +601,7 @@ function renderRuns() {
   }
 }
 function renderTranscript() {
+  syncTranscriptSpeech();
   els.transcriptList.replaceChildren();
   for (const segment of detail?.segments || []) {
     const card = el('article', 'transcript-item');

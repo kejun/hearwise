@@ -5,13 +5,14 @@ import { speechUnits } from './speech-scheduler.mjs';
 import { AUDIO_HEADER_BYTES, PREVIEW_TEXT, TTS_SAMPLE_RATE, speechConfig } from './public/speech-protocol.js';
 
 export function createSpeechService({ store, setHead = () => {}, createTts = config => new QwenTts(config),
-  now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, onMetric = () => {} }) {
+  now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, onMetric = () => {} }) {
   const consumers = new Set();
   function accept(client) {
     const owner = randomUUID();
     let consumer, epoch, tts, timer, initialized = false, closed = false, busy = false;
     let cursor = 0, throughSequence = null, units = [], segment, unitIndex = 0, playedUnit = 0, sentSamples = 0, consumedSamples = 0;
     let lastProgress = now(), drainAt = null, preview = false, replay = null, lastState = '', lastBacklog = '', underruns = 0;
+    let transcript = null, position = 0, waitingTranslation = null;
     const completedSamples = new Map();
     const metric = (event, extra = {}) => onMetric({ event, consumer: owner, run: consumer?.runId, ...extra });
     const send = data => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ ...data, epoch })); };
@@ -28,14 +29,21 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
     const initTimeout = setTimeout(() => finish('speech.error', '语音连接未初始化'), 10000);
     const pump = async () => {
       if (closed || !initialized) return;
-      if (!preview && !replay) {
+      if (transcript) {
+        const snapshot = store.speechTranscript(consumer.listeningId);
+        if (!snapshot) return finish('speech.error', '收听记录已不存在');
+        if (snapshot.active) return finish('speech.error', '收听已继续，整篇播报已停止');
+      } else if (!preview && !replay) {
         const snapshot = store.speechRun(consumer.listeningId, consumer.runId);
         if (!snapshot) return finish('speech.error', '收听片段已不存在');
         if (snapshot.state !== 'active') { drainAt ??= now(); throughSequence ??= snapshot.maxSequence; }
       }
       if (now() - lastProgress > progressTimeoutMs) return finish('speech.error', '播放端已暂停或失去连接，播报已关闭');
       if (drainAt != null && now() - drainAt > drainMs) return finish('speech.error', '收尾等待已结束；未读内容仍保留在文字记录中');
-      if (!preview && !replay) {
+      if (transcript && waitingTranslation && now() - waitingTranslation.since > translationWaitMs && playedUnit === unitIndex) {
+        return finish('speech.error', `第 ${position + 1} 句译文尚未完成，请先继续处理，再播报全文`);
+      }
+      if (!transcript && !preview && !replay) {
         const current = (busy || units.length) && segment?.translation_state === 'complete' ? segment.sequence_no : cursor;
         const backlog = store.speechBacklog(consumer.listeningId, consumer.runId, Math.max(cursor, current));
         const estimate = Math.ceil((sentSamples - consumedSamples) / TTS_SAMPLE_RATE + (backlog.characters + units.join('').length) / 5);
@@ -48,33 +56,47 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
       busy = true;
       try {
         while (!closed) {
-          const run = preview || replay ? { state: 'complete' } : store.speechRun(consumer.listeningId, consumer.runId);
+          const run = preview || replay || transcript ? { state: 'complete' } : store.speechRun(consumer.listeningId, consumer.runId);
           if (!run) return finish('speech.error', '收听片段已不存在');
-          if (run.state !== 'active' && drainAt == null) drainAt = now();
+          if (!transcript && run.state !== 'active' && drainAt == null) drainAt = now();
           if (sentSamples - consumedSamples >= TTS_SAMPLE_RATE * 4 || unitIndex - playedUnit >= 2) return;
           if (!units.length) {
             segment = preview ? (unitIndex ? null : { id: 'preview', sequence_no: 0, translation_state: 'complete', translation_text: PREVIEW_TEXT })
-              : replay ? (unitIndex ? null : replay) : store.speechNext(consumer.listeningId, consumer.runId, cursor);
+              : replay ? (unitIndex ? null : replay)
+                : transcript ? store.speechTranscriptNext(consumer.listeningId, cursor, throughSequence)
+                  : store.speechNext(consumer.listeningId, consumer.runId, cursor);
             if (segment && throughSequence != null && segment.sequence_no > throughSequence) segment = null;
             if (!segment) {
               setHead(owner, null);
-              if (run.state !== 'active' && playedUnit === unitIndex) return finish('speech.finished', preview ? '试听完成' : '本次播报已完成');
-              state(drainAt == null ? 'waiting' : 'draining', drainAt == null ? '等待新的完整译文' : '正在读完最后几句');
+              if (run.state !== 'active' && playedUnit === unitIndex) return finish('speech.finished', preview ? '试听完成' : transcript ? `${transcript.kind === 'original' ? '原文' : '译文'}全文播报完成` : '本次播报已完成');
+              state(transcript || drainAt != null ? 'draining' : 'waiting', transcript || drainAt != null ? '正在读完最后几句' : '等待新的完整译文');
               return;
             }
-            if (segment.translation_state !== 'complete') {
+            if (transcript?.kind !== 'original' && segment.translation_state !== 'complete') {
               setHead(owner, segment.id);
+              if (transcript) {
+                if (segment.translation_state === 'failed') {
+                  if (playedUnit < unitIndex) { state('blocked', `第 ${position + 1} 句翻译失败，正在读完前面的内容`); return; }
+                  return finish('speech.error', `第 ${position + 1} 句翻译失败，请先继续处理，再播报全文`);
+                }
+                if (waitingTranslation?.id !== segment.id) waitingTranslation = { id: segment.id, since: now() };
+                state('waiting-translation', `正在等待第 ${position + 1} / ${transcript.total} 句译文，完成后继续播报`);
+                return;
+              }
               state('waiting-translation', segment.translation_state === 'failed' ? '前一句翻译失败，可继续处理或跳到最新内容' : '等待前一句译文，保持播报顺序', { canJump: true });
               return;
             }
             setHead(owner, null);
-            units = speechUnits(segment.translation_text);
+            waitingTranslation = null;
+            units = speechUnits(transcript?.kind === 'original' ? segment.original_text : segment.translation_text);
+            if (transcript) position++;
           }
           const text = units.shift();
           const index = ++unitIndex;
           const requestedAt = now();
           let frame = 0, samples = 0;
-          send({ type: 'speech.unit', unit: index, segmentId: segment.id, sequence: segment.sequence_no, text });
+          send({ type: 'speech.unit', unit: index, segmentId: segment.id, sequence: segment.sequence_no, text,
+            ...(transcript ? { position, total: transcript.total, kind: transcript.kind } : {}) });
           state('buffering', drainAt == null ? '正在准备语音' : '正在读完最后几句');
           const response = await tts.synthesize(text, pcm => {
             if (closed) return;
@@ -114,7 +136,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
       if (msg.type === 'speech.stop') { metric(msg.reason === 'skip' ? 'skip' : 'cancel', { afterSequence: cursor }); dispose(); client.close(); return; }
       if (initialized) {
         if (msg.epoch !== epoch) return;
-        if (msg.type === 'speech.drain') { drainAt ??= now(); state('draining', '正在读完最后几句'); }
+        if (msg.type === 'speech.drain' && !transcript) { drainAt ??= now(); state('draining', '正在读完最后几句'); }
         if (msg.type === 'speech.progress') {
           if (!Number.isSafeInteger(msg.consumedSamples) || msg.consumedSamples < consumedSamples || msg.consumedSamples > sentSamples ||
               !Number.isSafeInteger(msg.playedUnit) || msg.playedUnit < playedUnit || msg.playedUnit > unitIndex ||
@@ -127,12 +149,21 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
         }
         void pump(); return;
       }
-      if (!['speech.start', 'speech.preview', 'speech.replay'].includes(msg.type)) return finish('speech.error', '请先开启播报');
+      if (!['speech.start', 'speech.preview', 'speech.replay', 'speech.transcript'].includes(msg.type)) return finish('speech.error', '请先开启播报');
       try {
-        const config = speechConfig(msg.config);
         if (!Number.isInteger(msg.epoch) || msg.epoch < 1 || msg.epoch > 0xffffffff) throw new Error('播报会话无效');
         epoch = msg.epoch; preview = msg.type === 'speech.preview';
-        if (!preview) {
+        const config = speechConfig(msg.config);
+        if (msg.type === 'speech.transcript') {
+          if (!['original', 'translation'].includes(msg.kind)) throw new Error('请选择播报原文或译文');
+          const snapshot = store.speechTranscript(msg.listeningId);
+          if (!snapshot) throw new Error('收听记录不存在');
+          if (snapshot.active) throw new Error('请先停止收听，再播报全文');
+          if (!snapshot.total) throw new Error('暂无可以播报的内容');
+          transcript = { kind: msg.kind, total: snapshot.total };
+          throughSequence = snapshot.maxSequence;
+          config.language = 'Auto'; // Records can span runs with different source/target languages.
+        } else if (!preview) {
           const run = store.speechRun(msg.listeningId, msg.runId);
           if (msg.type === 'speech.replay') replay = store.speechSegment(msg.listeningId, msg.runId, msg.segmentId);
           if (!run || (run.state !== 'active' && !replay) || run.target_lang !== 'Chinese' ||
@@ -145,7 +176,8 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
         consumers.add(consumer); tts = createTts(config); initialized = true;
         metric(msg.type, { afterSequence: cursor });
         clearTimeout(initTimeout); timer = setInterval(() => { void pump(); }, 1000);
-        send({ type: 'speech.ready', afterSequence: cursor, sampleRate: TTS_SAMPLE_RATE });
+        send({ type: 'speech.ready', afterSequence: cursor, sampleRate: TTS_SAMPLE_RATE,
+          ...(transcript ? { total: transcript.total, kind: transcript.kind } : {}) });
         void pump();
       } catch (error) { finish('speech.error', error.message); }
     });
