@@ -83,6 +83,36 @@ test('explicit replay reads only the selected final segment and then stops', asy
   assert.equal(f.client.events.at(-1).type, 'speech.finished');
 });
 
+for (const mode of ['preview', 'replay']) test(`${mode} 等待首包和播放超过 20 秒不触发实时收尾，仍等待播放回执`, async t => {
+  let time = 0, release, calls = 0, closed = 0;
+  const firstAudio = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, { now: () => time, createTts: () => ({
+    async synthesize(_text, audio) { if (++calls === 1) await firstAudio; audio(Buffer.alloc(480)); },
+    close() { closed++; }
+  }) });
+  const row = f.add('需要重新播报的句子。'); f.store.finishRun(f.run.runId);
+  f.client.message({ type: `speech.${mode}`, epoch: 7, ...f.run, segmentId: row.id, config }); await flush();
+  // Worklet heartbeats keep the player alive while the provider is preparing audio.
+  for (time = 5000; time <= 25000; time += 5000) { f.ack(); await flush(); }
+  assert.equal(f.client.readyState, 1, 'non-live synthesis must not inherit the 20s drain deadline');
+  assert.equal(f.client.packets.length, 0); assert.equal(closed, 0);
+  // A late drain message must also be ignored outside live playback.
+  f.client.message({ type: 'speech.drain', epoch: 7 });
+  for (time = 30000; time <= 60000; time += 5000) { f.ack(); await flush(); }
+  assert.equal(f.client.readyState, 1);
+  release(); await flush();
+  assert.ok(f.client.packets.length > 0); assert.equal(f.client.readyState, 1);
+  const generated = f.client.events.filter(e => e.type === 'speech.unit-end').length;
+  assert.ok(generated > 0);
+  // Audio has been generated, but cannot finish until the player consumes it.
+  for (time = 65000; time <= 90000; time += 5000) {
+    f.client.message({ type: 'speech.progress', epoch: 7, consumedSamples: 0, playedUnit: 0 }); await flush();
+  }
+  assert.equal(f.client.readyState, 1); assert.ok(!f.client.events.some(e => e.type === 'speech.error'));
+  f.ack(); await flush();
+  assert.equal(f.client.events.at(-1).type, 'speech.finished'); assert.equal(closed, 1);
+});
+
 test('全文原文跨片段和分页顺序读取，忽略翻译状态，播放超过实时收尾期限仍继续', async t => {
   let time = 0;
   const f = fixture(t, { now: () => time });
