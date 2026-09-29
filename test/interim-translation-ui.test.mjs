@@ -92,6 +92,36 @@ test('播报只读取保存的连接 Key，清理旧独立 Key，更新连接后
   assert.equal(a.run('speech.enabled'), false);
 });
 
+test('Fish 使用独立 Key 和设置，切换后不借用千问 Key，保存不自动播报', t => {
+  const a = app(t);
+  assert.equal(a.element('speech-provider').value, 'qwen');
+  assert.equal(a.element('speech-qwen-model').value, 'Qwen3-TTS-Flash-Realtime');
+  a.element('speech-prompt').value = '千问专用指令';
+  a.element('speech-form').emit('submit');
+  a.element('speech-provider').value = 'fish'; a.element('speech-provider').emit('change');
+  assert.equal(a.element('speech-qwen-fields').hidden, true);
+  assert.equal(a.element('speech-qwen-fields').disabled, true);
+  assert.equal(a.element('speech-fish-fields').disabled, false);
+  assert.throws(() => a.run('readSpeechConfig()'), /Fish Audio API Key/);
+  a.element('speech-fish-key').value = ' fish-only-key ';
+  a.element('speech-fish-voice').value = 'voice-123';
+  a.element('speech-fish-model').value = 's2.1-pro';
+  a.element('speech-fish-style').value = '[calm]';
+  const config = a.run('readSpeechConfig()');
+  assert.equal(config.key, 'fish-only-key'); assert.equal(config.prompt, undefined);
+  a.element('speech-form').emit('submit');
+  assert.equal(a.storage.get('hearwise:fish-key'), 'fish-only-key');
+  assert.equal(a.storage.get('tongsheng:qianwen-key'), 'old-test-key');
+  const preferences = JSON.parse(a.storage.get('hearwise:speech'));
+  assert.equal(preferences.provider, 'fish'); assert.equal(preferences.fish.model, 's2.1-pro');
+  assert.equal(preferences.fish.style, 'calm'); assert.equal(preferences.prompt, '千问专用指令');
+  assert.ok(!a.storage.get('hearwise:speech').includes('fish-only-key'));
+  assert.equal(a.run('speech.enabled'), false);
+  a.element('speech-provider').value = 'qwen'; a.element('speech-provider').emit('change');
+  assert.equal(a.run('readSpeechConfig().key'), 'old-test-key');
+  assert.equal(a.run('readSpeechConfig().prompt'), '千问专用指令');
+});
+
 test('超长临时文本保留已有译文且不发送请求；修订为短句后恢复', async t => {
   const a = app(t);
   a.receive('Hello world'); await a.tick(0); await a.reply(0, 200, { text: '你好' });

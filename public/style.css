@@ -138,6 +138,11 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .speech-prompt { display: block; width: 100%; min-height: 96px; resize: vertical; padding: 12px 14px; border: 1px solid #cdd7cf; border-radius: 9px; color: #1e2523; background: #fff; font: inherit; font-size: 14px; line-height: 1.6; }
 .speech-prompt::placeholder { color: #89948a; }
 .speech-prompt:focus-visible { outline: 3px solid #adbd4b; outline-offset: 3px; }
+.speech-provider-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.speech-input, .speech-select { display: block; width: 100%; min-width: 0; border: 1px solid #cdd7cf; border-radius: 9px; padding: 11px 12px; background: #fff; color: #1e2523; font: inherit; font-size: 14px; }
+.speech-input[readonly] { background: #f6f8f3; font-size: 12px; }
+.fish-config-grid { grid-template-columns: 1fr 1fr; }
+.speech-provider-fields .form-note a { color: #315f4d; }
 .speech-actions .speech-toggle-small { height: 32px; min-height: 32px; padding: 6px 12px; border-radius: 8px; font-size: 12px; line-height: 18px; }
 .transcript-speech { margin: 16px 0; padding: 14px 16px; background: #f6f8f3; border-radius: 10px; }
 .transcript-speech-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }

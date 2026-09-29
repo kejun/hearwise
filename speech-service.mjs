@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { QwenTts } from './qwen-tts.mjs';
+import { FishTts } from './fish-tts.mjs';
 import { speechUnits } from './speech-scheduler.mjs';
 import { AUDIO_HEADER_BYTES, PREVIEW_TEXT, TTS_SAMPLE_RATE, speechConfig } from './public/speech-protocol.js';
 
-export function createSpeechService({ store, setHead = () => {}, createTts = config => new QwenTts(config),
+export function createSpeechService({ store, setHead = () => {}, createTts = config => config.provider === 'fish' ? new FishTts(config) : new QwenTts(config),
   now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, onMetric = () => {} }) {
   const consumers = new Set();
   function accept(client) {

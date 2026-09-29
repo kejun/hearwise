@@ -85,6 +85,32 @@ test('语音 Prompt 经实际 WebSocket 下发到 Instruct 会话，留空回到
   assert.equal(f.stats.connections, 3);
 });
 
+test('Fish 服务商经 /ws/tts 使用独立 HTTP 流，不访问千问，未知模型和缺失 Key 不调用上游', { timeout: 10000 }, async t => {
+  const f = await speechFixture(); t.after(() => f.close());
+  const fish = { provider: 'fish', key: 'fish-only-key', model: 's2.1-pro-free', referenceId: 'voice-id', rate: 1, latency: 'balanced' };
+  for (const model of ['s2.1-pro-free', 's2.1-pro']) {
+    const first = f.stats.fishRequests.length;
+    const client = await socket(f.base.replace('http', 'ws') + '/ws/tts'); t.after(() => client.ws.terminate());
+    client.send({ type: 'speech.preview', epoch: 3, config: { ...fish, model, prompt: '千问专用指令' } });
+    await waitFor(() => client.events.filter(e => e.type === 'speech.unit-end').length === 2);
+    const requests = f.stats.fishRequests.slice(first);
+    assert.equal(requests.map(r => r.body.text).join(''), PREVIEW_TEXT);
+    assert.ok(requests.every(r => r.model === model && r.authorization === 'Bearer fish-only-key'));
+    assert.ok(requests.every(r => r.body.instructions === undefined && r.body.sample_rate === 24000));
+    const samples = client.pcm.reduce((sum, pcm) => { assert.equal(pcm.readUInt32LE(0), 3); return sum + pcm.readUInt32LE(12); }, 0);
+    assert.equal(samples, 4800);
+    client.send({ type: 'speech.progress', epoch: 3, consumedSamples: samples, playedUnit: 2 });
+    await once(client.ws, 'close');
+    assert.equal(client.events.at(-1).type, 'speech.finished');
+  }
+  for (const invalid of [{ ...fish, model: 'typo' }, { ...fish, key: '' }, { ...fish, provider: 'unknown' }]) {
+    const client = await socket(f.base.replace('http', 'ws') + '/ws/tts');
+    client.send({ type: 'speech.preview', epoch: 4, config: invalid }); await once(client.ws, 'close');
+    assert.equal(client.events.at(-1).type, 'speech.error');
+  }
+  assert.equal(f.stats.connections, 0); assert.equal(f.stats.fishRequests.length, 4);
+});
+
 test('Qwen reconnects before first audio, never replays after partial audio, and close aborts in-flight work', { timeout: 10000 }, async t => {
   const upstream = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(upstream, 'listening');
   t.after(async () => { for (const c of upstream.clients) c.terminate(); await new Promise(r => upstream.close(r)); });

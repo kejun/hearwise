@@ -112,8 +112,9 @@ let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
 
 // Speech is deliberately never restored as enabled. Only preferences may survive a reload.
-const speechEls = Object.fromEntries(['toggle', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'region', 'voice', 'rate', 'prompt', 'form', 'preview', 'result']
+const speechEls = Object.fromEntries(['toggle', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'provider', 'region', 'voice', 'rate', 'prompt', 'form', 'preview', 'result']
   .map(name => [name, $(`speech-${name}`)]));
+const fishEls = Object.fromEntries(['key', 'model', 'voice', 'rate', 'latency', 'style'].map(name => [name, $(`speech-fish-${name}`)]));
 const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translation', 'stop', 'status', 'reading']
   .map(name => [name, $(`transcript-speech-${name}`)]));
 let speechPreview = false;
@@ -150,7 +151,7 @@ const speech = createSpeechController({ onChange(state) {
 let speechPreferences;
 try { speechPreferences = JSON.parse(localStorage.getItem('hearwise:speech') || '{}'); } catch { speechPreferences = {}; }
 if (!speechPreferences || typeof speechPreferences !== 'object' || Array.isArray(speechPreferences)) speechPreferences = {};
-// All model calls use the saved connection key; discard the obsolete separate TTS credential.
+// Qwen uses the saved connection key. Fish credentials have their own browser-only slot.
 sessionStorage.removeItem('hearwise:speech-key');
 localStorage.removeItem('hearwise:speech-key');
 speechEls.region.value = speechPreferences.region || 'beijing';
@@ -158,10 +159,41 @@ speechEls.voice.value = speechPreferences.voice || 'Cherry';
 speechEls.rate.value = String(speechPreferences.rate || 1);
 speechEls.prompt.value = typeof speechPreferences.prompt === 'string' ? speechPreferences.prompt : '';
 speechEls.volume.value = String(speechPreferences.volume ?? .8);
-function readSpeechConfig() { return speechConfig({ key: saved.key, region: speechEls.region.value, voice: speechEls.voice.value, rate: Number(speechEls.rate.value), prompt: speechEls.prompt.value }); }
-function openSpeechSettings() { openSettings(); activateTab(2); speechEls.region.focus(); }
+speechEls.provider.value = speechPreferences.provider === 'fish' ? 'fish' : 'qwen';
+const storedFish = speechPreferences.fish && typeof speechPreferences.fish === 'object' ? speechPreferences.fish : {};
+fishEls.key.value = localStorage.getItem('hearwise:fish-key') || '';
+fishEls.model.value = storedFish.model || 's2.1-pro-free';
+fishEls.voice.value = storedFish.referenceId || '';
+fishEls.rate.value = String(storedFish.rate ?? 1);
+fishEls.latency.value = storedFish.latency || 'balanced';
+fishEls.style.value = typeof storedFish.style === 'string' ? storedFish.style : '';
+function syncSpeechProvider() {
+  const fish = speechEls.provider.value === 'fish';
+  $('speech-qwen-fields').hidden = $('speech-qwen-fields').disabled = fish;
+  $('speech-fish-fields').hidden = $('speech-fish-fields').disabled = !fish;
+  $('speech-qwen-model').value = speechEls.prompt.value.trim() ? 'Qwen3-TTS-Instruct-Flash-Realtime' : 'Qwen3-TTS-Flash-Realtime';
+  $('speech-service-note').textContent = fish
+    ? '开启或试听时，待播报文本会发送至 Fish Audio，费用按所选模型计费。'
+    : '使用连接设置中的 API Key。开启或试听时，待播报文本会发送至所选地域的阿里云服务，可能产生费用。';
+}
+speechEls.provider.addEventListener('change', () => { speech.stop('服务商已切换，请保存设置后手动开启播报'); syncSpeechProvider(); });
+speechEls.prompt.addEventListener('input', syncSpeechProvider);
+syncSpeechProvider();
+function readSpeechConfig() {
+  const provider = speechEls.provider.value;
+  return speechConfig(provider === 'fish'
+    ? { provider, key: fishEls.key.value, model: fishEls.model.value, referenceId: fishEls.voice.value, rate: Number(fishEls.rate.value), latency: fishEls.latency.value, style: fishEls.style.value }
+    : { provider, key: saved.key, region: speechEls.region.value, voice: speechEls.voice.value, rate: Number(speechEls.rate.value), prompt: speechEls.prompt.value });
+}
+function openSpeechSettings() { openSettings(); activateTab(2); speechEls.provider.focus(); }
 function speechConfigError(error) {
-  if (!saved.key) { openSettings(); activateTab(0); els.apiKey.focus(); }
+  if (speechEls.provider.value === 'fish') {
+    openSpeechSettings();
+    if (!fishEls.key.value.trim()) fishEls.key.focus();
+    else if (error.message.includes('音色 ID')) fishEls.voice.focus();
+    else if (error.message.includes('表达风格')) fishEls.style.focus();
+  }
+  else if (!saved.key) { openSettings(); activateTab(0); els.apiKey.focus(); }
   else { openSpeechSettings(); if (error.message.startsWith('语音 Prompt')) speechEls.prompt.focus(); }
   speechEls.status.textContent = error.message;
   speechEls.result.textContent = error.message;
@@ -192,8 +224,16 @@ speechEls.form.addEventListener('submit', event => {
   try {
     const config = readSpeechConfig();
     speech.stop('设置已保存，请手动开启译文播报');
-    speechPreferences = { region: config.region, voice: config.voice, rate: config.rate, prompt: config.prompt, volume: Number(speechEls.volume.value) };
-    speechEls.prompt.value = config.prompt;
+    speechPreferences = { ...speechPreferences, provider: config.provider, volume: Number(speechEls.volume.value) };
+    if (config.provider === 'fish') {
+      const { key, provider, ...preferences } = config;
+      speechPreferences.fish = preferences;
+      localStorage.setItem('hearwise:fish-key', key);
+      fishEls.key.value = key; fishEls.voice.value = config.referenceId; fishEls.style.value = config.style;
+    } else {
+      Object.assign(speechPreferences, { region: config.region, voice: config.voice, rate: config.rate, prompt: config.prompt });
+      speechEls.prompt.value = config.prompt;
+    }
     localStorage.setItem('hearwise:speech', JSON.stringify(speechPreferences));
     closeSettings();
   } catch (error) { speechConfigError(error); }
@@ -468,7 +508,7 @@ els.settingsForm.addEventListener('submit', event => {
     return;
   }
   els.apiKey.setCustomValidity('');
-  if (key !== saved.key) speech.stop('API Key 已更新，请手动开启播报');
+  if (key !== saved.key && speechEls.provider.value === 'qwen') speech.stop('API Key 已更新，请手动开启播报');
   localStorage.setItem('tongsheng:qianwen-key', key);
   saved.key = key;
   clearTranslationWork();
