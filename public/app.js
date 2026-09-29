@@ -112,10 +112,10 @@ let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
 
 // Speech is deliberately never restored as enabled. Only preferences may survive a reload.
-const speechEls = Object.fromEntries(['toggle', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'provider', 'region', 'voice', 'rate', 'prompt', 'form', 'preview', 'result']
+const speechEls = Object.fromEntries(['toggle', 'pause', 'preview-pause', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'provider', 'region', 'voice', 'rate', 'prompt', 'form', 'preview', 'result']
   .map(name => [name, $(`speech-${name}`)]));
 const fishEls = Object.fromEntries(['key', 'model', 'voice', 'rate', 'latency', 'style'].map(name => [name, $(`speech-fish-${name}`)]));
-const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translation', 'stop', 'status', 'reading']
+const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translation', 'stop', 'pause', 'status', 'reading']
   .map(name => [name, $(`transcript-speech-${name}`)]));
 let speechPreview = false;
 let speechCanJump = false;
@@ -127,6 +127,11 @@ const speech = createSpeechController({ onChange(state) {
   speechEls.toggle.setAttribute('aria-pressed', String(state.enabled));
   speechEls.toggle.classList.toggle('active', state.enabled);
   speechEls.toggle.disabled = !state.enabled && (phase !== 'listening' || els.target.value !== 'Chinese');
+  for (const [button, visible] of [[speechEls.pause, state.enabled], [speechEls['preview-pause'], state.enabled && state.preview], [transcriptSpeech.pause, state.enabled && state.mode === 'transcript']]) {
+    button.hidden = !visible;
+    button.textContent = state.paused ? '继续播报' : '暂停播报';
+    button.disabled = state.resuming;
+  }
   speechEls.status.textContent = state.message;
   speechEls.result.textContent = state.message;
   if (state.mode === 'transcript') transcriptSpeech.status.textContent = state.message;
@@ -203,6 +208,9 @@ function enableSpeech(reason) {
   catch (error) { speechConfigError(error); }
 }
 speechEls.toggle.addEventListener('click', () => speech.enabled ? speech.stop() : enableSpeech());
+for (const button of [speechEls.pause, speechEls['preview-pause'], transcriptSpeech.pause]) {
+  button.addEventListener('click', () => speech.paused ? void speech.resume() : speech.pause());
+}
 speechEls.jump.addEventListener('click', () => enableSpeech('skip'));
 speechEls.replay.addEventListener('click', () => {
   try { void speech.replay(readSpeechConfig(), { volume: Number(speechEls.volume.value) }); }
@@ -250,7 +258,7 @@ function syncTranscriptSpeech() {
   transcriptSpeech.original.disabled = transcriptSpeech.translation.disabled = Boolean(active);
 }
 function syncSpeechContext() {
-  speech.setContext({ phase, listeningId, runId: activeRunId, target: els.target.value });
+  speech.setContext({ phase, listeningId, runId: activeRunId, target: els.target.value, audioSource: els.audioInput.value });
   speechEls.toggle.disabled = !speech.enabled && (phase !== 'listening' || els.target.value !== 'Chinese');
   speechEls.toggle.title = els.target.value === 'Chinese' ? '开启后从新的完整译文开始播报' : '当前仅支持中文译文播报';
   speechEls.jump.hidden = !speech.enabled || speechPreview || phase !== 'listening' || !speechCanJump;

@@ -6,7 +6,7 @@ import { speechUnits } from './speech-scheduler.mjs';
 import { AUDIO_HEADER_BYTES, PREVIEW_TEXT, TTS_MODEL, TTS_INSTRUCT_MODEL, TTS_SAMPLE_RATE, speechConfig } from './public/speech-protocol.js';
 
 export function createSpeechService({ store, setHead = () => {}, createTts = config => config.provider === 'fish' ? new FishTts(config) : new QwenTts(config),
-  now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, onMetric = () => {} }) {
+  now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, pauseTimeoutMs = 300000, onMetric = () => {} }) {
   const consumers = new Set();
   function accept(client) {
     const owner = randomUUID();
@@ -16,6 +16,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
     let cursor = 0, throughSequence = null, units = [], segment, unitIndex = 0, playedUnit = 0, sentSamples = 0, consumedSamples = 0;
     let lastProgress = now(), drainAt = null, preview = false, replay = null, lastState = '', lastBacklog = '', underruns = 0;
     let transcript = null, position = 0, waitingTranslation = null;
+    let pausedAt = null;
     const completedSamples = new Map();
     const metric = (event, extra = {}) => onMetric({ event, consumer: owner, run: consumer?.runId, provider, model, ...extra });
     const send = data => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ ...data, epoch })); };
@@ -50,6 +51,11 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
         if (!snapshot) return finish('speech.error', '收听片段已不存在');
         if (snapshot.state !== 'active') { drainAt ??= now(); throughSequence ??= snapshot.maxSequence; }
       }
+      // A suspended AudioContext cannot emit progress. Keep its bounded queue, but never synthesize ahead while paused.
+      if (pausedAt != null) {
+        if (now() - pausedAt > pauseTimeoutMs) return finish('speech.error', '暂停已超过 5 分钟，播报已关闭，请重新开启');
+        return;
+      }
       if (now() - lastProgress > progressTimeoutMs) return finish('speech.error', '播放端已暂停或失去连接，播报已关闭');
       if (drainAt != null && now() - drainAt > drainMs) return finish('speech.error', '收尾等待已结束；未读内容仍保留在文字记录中');
       if (transcript && waitingTranslation && now() - waitingTranslation.since > translationWaitMs && playedUnit === unitIndex) {
@@ -68,6 +74,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
       busy = true;
       try {
         while (!closed) {
+          if (pausedAt != null) return;
           const run = preview || replay || transcript ? { state: 'complete' } : store.speechRun(consumer.listeningId, consumer.runId);
           if (!run) return finish('speech.error', '收听片段已不存在');
           // The synthetic completed run used by preview/replay is not a stopped live run.
@@ -149,6 +156,18 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
       if (msg.type === 'speech.stop') { metric(msg.reason === 'skip' ? 'skip' : 'cancel', { afterSequence: cursor }); dispose(); client.close(); return; }
       if (initialized) {
         if (msg.epoch !== epoch) return;
+        if (msg.type === 'speech.pause') {
+          pausedAt ??= now();
+          state('paused', '播报已暂停，播放位置保留 5 分钟。');
+        }
+        if (msg.type === 'speech.resume' && pausedAt != null) {
+          const resumedAt = now();
+          if (resumedAt - pausedAt > pauseTimeoutMs) return finish('speech.error', '暂停已超过 5 分钟，播报已关闭，请重新开启');
+          // Only count time spent actively playing towards drain/translation deadlines.
+          if (drainAt != null) drainAt += resumedAt - Math.max(pausedAt, drainAt);
+          if (waitingTranslation) waitingTranslation.since += resumedAt - Math.max(pausedAt, waitingTranslation.since);
+          pausedAt = null; lastProgress = resumedAt; lastState = '';
+        }
         if (msg.type === 'speech.drain' && !preview && !replay && !transcript) { drainAt ??= now(); state('draining', '正在读完最后几句'); }
         if (msg.type === 'speech.progress') {
           if (!Number.isSafeInteger(msg.consumedSamples) || msg.consumedSamples < consumedSamples || msg.consumedSamples > sentSamples ||
@@ -189,6 +208,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
         consumer = { listeningId: msg.listeningId, runId: msg.runId, pump,
           stop: () => finish('speech.error', '收听记录已删除') };
         consumers.add(consumer); tts = createTts(config); initialized = true;
+        if (msg.paused === true) pausedAt = now();
         metric(msg.type, { afterSequence: cursor });
         clearTimeout(initTimeout); timer = setInterval(() => { void pump(); }, 1000);
         send({ type: 'speech.ready', afterSequence: cursor, sampleRate: TTS_SAMPLE_RATE,

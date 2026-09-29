@@ -211,6 +211,50 @@ test('wrong run, unsupported language/config, stale progress and deletion cannot
   const h = fixture(t); h.start(); h.service.remove(h.run.listeningId); assert.equal(h.client.readyState, 3);
 });
 
+test('暂停保留队列，超过心跳期限仍可继续；在途一句完成后不再生成新句', async t => {
+  let time = 0, release;
+  const spoken = [];
+  const f = fixture(t, { now: () => time, createTts: () => ({
+    async synthesize(text, audio) { spoken.push(text); if (spoken.length === 1) await new Promise(resolve => { release = resolve; }); audio(Buffer.alloc(480)); }, close() {}
+  }) });
+  f.start(); f.add('第一句。第二句。第三句。'); await flush();
+  f.client.message({ type: 'speech.pause', epoch: 7 }); release(); await flush();
+  assert.deepEqual(spoken, ['第一句。']); assert.equal(f.client.packets.length, 1);
+  time = 120000; f.service.notify(f.run.listeningId); await flush();
+  assert.equal(f.client.readyState, 1); assert.equal(spoken.length, 1);
+  f.client.message({ type: 'speech.resume', epoch: 6 }); await flush(); assert.equal(spoken.length, 1);
+  f.client.message({ type: 'speech.resume', epoch: 7 }); await flush();
+  assert.deepEqual(spoken, ['第一句。', '第二句。']);
+  f.ack(); await flush(); assert.deepEqual(spoken, ['第一句。', '第二句。', '第三句。']);
+  assert.ok(!f.client.events.some(e => e.type === 'speech.error'));
+});
+
+test('初始化前暂停不生成试听；重复暂停不延长 5 分钟期限，过期继续会释放资源', async t => {
+  let time = 0; const f = fixture(t, { now: () => time });
+  f.client.message({ type: 'speech.preview', epoch: 7, config, paused: true }); await flush();
+  assert.deepEqual(f.spoken, []);
+  time = 299000; f.client.message({ type: 'speech.pause', epoch: 7 });
+  time = 300001; f.client.message({ type: 'speech.resume', epoch: 7 });
+  assert.equal(f.client.readyState, 3); assert.equal(f.closed(), 1); assert.match(f.client.events.at(-1).message, /暂停已超过 5 分钟/);
+});
+
+test('暂停时间不消耗收尾或等待翻译预算，删除记录仍立即停止', async t => {
+  let time = 0; const f = fixture(t, { now: () => time });
+  f.start(); f.add('最后一句。'); await flush();
+  f.client.message({ type: 'speech.drain', epoch: 7 });
+  f.client.message({ type: 'speech.pause', epoch: 7 });
+  time = 60000; f.store.finishRun(f.run.runId); f.service.notify(f.run.listeningId);
+  f.client.message({ type: 'speech.resume', epoch: 7 }); f.ack(); await flush();
+  assert.equal(f.client.events.at(-1).type, 'speech.finished');
+  const g = fixture(t, { now: () => time }); g.add(); g.store.finishRun(g.run.runId);
+  g.client.message({ type: 'speech.transcript', epoch: 7, listeningId: g.run.listeningId, kind: 'translation', config });
+  g.client.message({ type: 'speech.pause', epoch: 7 });
+  time += 60000; g.client.message({ type: 'speech.resume', epoch: 7 }); await flush();
+  assert.equal(g.client.readyState, 1);
+  g.client.message({ type: 'speech.pause', epoch: 7 }); g.service.remove(g.run.listeningId);
+  assert.equal(g.client.readyState, 3); assert.match(g.client.events.at(-1).message, /已删除/);
+});
+
 test('speech head gets a bounded priority boost without starving realtime/background work', () => {
   const q = createTranslationScheduler();
   const add = (id, kind) => q.enqueue({ segment: { id }, listeningId: 'l', kind });

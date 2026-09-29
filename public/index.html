@@ -36,6 +36,7 @@
         <section class="speech-bar" id="live-speech-panel" role="tabpanel" aria-labelledby="live-speech-tab" tabindex="0" hidden>
           <div class="speech-actions">
             <button class="switch-button speech-toggle-small" id="speech-toggle" type="button" aria-pressed="false" disabled>开启译文播报</button>
+            <button class="speech-link" id="speech-pause" type="button" hidden>暂停播报</button>
             <span id="speech-status" role="status" aria-live="polite">播报默认关闭，开始收听后可手动开启</span>
             <button class="speech-link" id="speech-settings" type="button">播报设置</button>
           </div>
@@ -68,6 +69,7 @@
             <div class="transcript-speech-actions">
               <button class="switch-button" id="transcript-speech-original" type="button" aria-pressed="false">播报全部原文</button>
               <button class="switch-button" id="transcript-speech-translation" type="button" aria-pressed="false">播报全部译文</button>
+              <button class="speech-link" id="transcript-speech-pause" type="button" hidden>暂停播报</button>
               <button class="speech-link" id="transcript-speech-stop" type="button" hidden>停止全文播报</button>
             </div>
             <p id="transcript-speech-status" role="status" aria-live="polite">从第一句开始，按顺序播报本条记录的全部内容，包含尚未加载的句子。</p>
@@ -158,6 +160,7 @@
           <p class="form-note">更改播报设置后保存，会关闭当前播报；手动重新开启后生效。</p>
           <p class="form-note" id="speech-service-note">开启或试听时，待播报文本会发送至所选地域的阿里云服务，可能产生费用。</p>
           <button class="test-button" id="speech-preview" type="button">试听语音</button>
+          <button class="speech-link" id="speech-preview-pause" type="button" hidden>暂停播报</button>
           <p class="form-note" id="speech-result" role="status" aria-live="polite">试听会朗读一段固定的中文短句。</p>
           <button class="save-button" type="submit">保存播报设置</button>
         </form>

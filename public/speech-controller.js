@@ -1,14 +1,19 @@
 import { SpeechPlayer } from './speech-player.js';
+import { createSpeechMediaSession } from './speech-media-session.js';
 
 export function createSpeechController({ onChange, createPlayer = callback => new SpeechPlayer(callback),
+  media = createSpeechMediaSession(), document = globalThis.document,
   createSocket = () => new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/tts`) }) {
   let epoch = 0, socket, player, enabled = false, context = {}, draining = false, mode = null, kind = null;
   let firstHeard = false, lastMessage = '', total = 0;
+  let paused = false, interrupted = false, resuming = false, playbackRevision = 0;
+  let pauseMessage = '';
   const text = new Map(), metadata = new Map();
   let readingMeta = null, replayTarget = null;
   const report = (message = lastMessage, extra = {}) => {
     lastMessage = message;
-    onChange({ enabled, draining, preview: mode === 'preview', mode, kind, message, ...extra });
+    onChange({ enabled, paused, resuming, draining, preview: mode === 'preview', mode, kind,
+      message: paused ? pauseMessage : message, ...extra });
   };
   const send = data => { if (socket?.readyState === 1) socket.send(JSON.stringify({ ...data, epoch })); };
   const playingMessage = () => mode === 'transcript'
@@ -16,12 +21,38 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
     : draining ? '正在读完最后几句' : '正在播报';
   function stop(message = '播报已关闭', reason = 'cancel') {
     const previous = socket, previousEpoch = epoch, stoppedMode = mode, stoppedKind = kind;
-    ++epoch; enabled = false; draining = false; mode = kind = null;
+    ++epoch; ++playbackRevision; enabled = paused = interrupted = resuming = false; draining = false; mode = kind = null;
     player?.close(); player = null; // Local mute first; no server acknowledgement is required.
+    media.close(); document?.removeEventListener('visibilitychange', recover);
     try { if (previous?.readyState === 1) previous.send(JSON.stringify({ type: 'speech.stop', reason, epoch: previousEpoch })); } catch { /* Already locally muted. */ }
     socket?.close(); socket = null; text.clear(); metadata.clear(); readingMeta = replayTarget = null;
     report(message, { mode: stoppedMode, kind: stoppedKind, reading: '', canJump: false, canReplay: false, backlog: '' });
   }
+  function pause(system = false) {
+    if (!enabled) return;
+    ++playbackRevision; paused = true; interrupted = system; resuming = false;
+    pauseMessage = system ? '系统暂停了声音，可点击继续播报；播放位置保留 5 分钟。' : '播报已暂停，播放位置保留 5 分钟。';
+    player?.pause(); media.setPaused(true); send({ type: 'speech.pause' }); report();
+  }
+  async function resume() {
+    if (!enabled || !paused || resuming) return;
+    const gen = epoch, revision = ++playbackRevision;
+    resuming = true; report();
+    try {
+      const ready = await player.resume();
+      if (gen !== epoch || revision !== playbackRevision) return;
+      resuming = false;
+      if (!ready) { report(); return; }
+      paused = interrupted = false;
+      send({ type: 'speech.resume' }); media.setPaused(false);
+      report(readingMeta ? playingMessage() : '正在继续播报…');
+    } catch {
+      if (gen !== epoch || revision !== playbackRevision) return;
+      resuming = false; player.pause();
+      pauseMessage = '声音暂时无法恢复，请回到页面点击继续播报。'; report();
+    }
+  }
+  function recover() { if (document?.visibilityState === 'visible' && interrupted) void resume(); }
   function fail(message) {
     const failedMode = mode, failedKind = kind;
     const target = ['live', 'replay'].includes(mode) && (readingMeta || metadata.values().next().value);
@@ -50,9 +81,12 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
         text.delete(event.unit); metadata.delete(event.unit); readingMeta = null;
         if (!text.size) report(mode === 'transcript' ? '正在准备下一句…' : draining ? '正在收尾' : '等待新的完整译文', { reading: '' });
       }
-      if (event.type === 'suspended') stop('声音已暂停，请再次点击播报恢复');
+      if (event.type === 'suspended') pause(true);
       if (event.type === 'error') fail('语音缓冲异常，请重新开启播报');
     });
+    media.activate({ mode, kind, context, play: () => { if (gen === epoch) void resume(); },
+      pause: () => { if (gen === epoch) pause(); }, stop: () => { if (gen === epoch) stop(); } });
+    document?.addEventListener('visibilitychange', recover);
     try {
       await output.unlock(volume);
       if (gen !== epoch) return;
@@ -61,7 +95,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
       ws.addEventListener('open', () => {
         if (gen !== epoch) return;
         send({ type: preview ? 'speech.preview' : replay ? 'speech.replay' : transcript ? 'speech.transcript' : 'speech.start', config,
-          listeningId: run.listeningId, runId: run.runId, segmentId: replay?.segmentId, kind: transcript });
+          listeningId: run.listeningId, runId: run.runId, segmentId: replay?.segmentId, kind: transcript, paused });
       });
       ws.addEventListener('message', ({ data }) => {
         if (gen !== epoch) return;
@@ -94,13 +128,14 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
       ws.addEventListener('error', () => { if (gen === epoch) fail('无法连接语音服务，请检查设置'); });
     } catch (error) { if (gen === epoch) stop(error.message || '无法启动语音播放'); }
   }
-  return { start, stop, get enabled() { return enabled; }, get mode() { return mode; }, get kind() { return kind; },
+  return { start, stop, pause, resume, get paused() { return paused; }, get enabled() { return enabled; }, get mode() { return mode; }, get kind() { return kind; },
     replay(config, options) { if (replayTarget) return start(config, { ...options, replay: replayTarget }); },
     setContext(next) {
       const changedRecord = context.listeningId && context.listeningId !== next.listeningId;
       const changedLive = mode !== 'transcript' && mode !== 'preview' && ((context.runId && next.runId !== context.runId) || next.target !== 'Chinese');
       if ((enabled || replayTarget) && (changedRecord || changedLive || next.phase === 'connecting' || (mode === 'transcript' && next.phase !== 'idle'))) stop();
       context = next;
+      media.setContext(context);
     },
     drain() { if (enabled && mode === 'live') { draining = true; send({ type: 'speech.drain' }); report('正在读完最后几句'); } },
     volume(value) { player?.volume(value); }
