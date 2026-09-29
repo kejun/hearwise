@@ -16,6 +16,18 @@ async function waitFor(predicate) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
+
+test('临时与最终翻译共用两槽，临时请求结束后立即唤醒等待的最终句', async t => {
+  const s = await startServer(t); await s.start(); s.pause();
+  const interim = s.post(valid); await waitFor(() => s.held.length === 1);
+  s.sentence('Final one.', true, 'one'); s.sentence('Final two.', true, 'two');
+  await waitFor(() => s.events.filter(e => e.type === 'segment-final').length === 2);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(s.held.length, 2);
+  s.release(); await interim;
+  await waitFor(() => s.events.filter(e => e.type === 'translation-updated').length === 2);
+  assert.equal(s.calls.filter(c => c.model === 'qwen-mt-flash').length, 3);
+});
 async function startServer(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'interim-translation-'));
   const calls = [], held = [], clients = [], events = [];
