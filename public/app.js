@@ -163,7 +163,7 @@ speechEls.provider.value = speechPreferences.provider === 'fish' ? 'fish' : 'qwe
 const storedFish = speechPreferences.fish && typeof speechPreferences.fish === 'object' ? speechPreferences.fish : {};
 fishEls.key.value = localStorage.getItem('hearwise:fish-key') || '';
 fishEls.model.value = storedFish.model || 's2.1-pro-free';
-fishEls.voice.value = storedFish.referenceId || '';
+fishEls.voice.value = storedFish.referenceId || 'bbfff76fd7c74f35a04a33366574f2d6';
 fishEls.rate.value = String(storedFish.rate ?? 1);
 fishEls.latency.value = storedFish.latency || 'balanced';
 fishEls.style.value = typeof storedFish.style === 'string' ? storedFish.style : '';
