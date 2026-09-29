@@ -17,6 +17,15 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, headless: true,
     args: ['--no-sandbox', '--no-zygote', '--disable-gpu', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+  await page.addInitScript(() => {
+    window.mediaActions = {};
+    const setActionHandler = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
+    navigator.mediaSession.setActionHandler = (action, handler) => { window.mediaActions[action] = handler; setActionHandler(action, handler); };
+    const NativeContext = window.AudioContext;
+    window.AudioContext = class extends NativeContext {
+      constructor(options) { super(options); if (options?.sampleRate !== 16000) window.speechAudioContext = this; }
+    };
+  });
   page.on('pageerror', error => errors.push(error.message));
   page.on('websocket', ws => {
     if (!ws.url().endsWith('/ws/tts')) return;
@@ -62,6 +71,29 @@ try {
   assert.match(await page.locator('#speech-status').textContent(), /下一句|说完一句|首次播放/);
   await until(() => progress.some(p => p.consumedSamples > 0));
   assert.equal(fixture.stats.sessions[0].sample_rate, 24000);
+  assert.equal(await page.evaluate(() => navigator.mediaSession.playbackState), 'playing');
+  assert.equal(await page.evaluate(() => navigator.mediaSession.metadata.title), '实时译文播报');
+  // Use the actual registered platform handlers and AudioContext, not a second mock player.
+  await page.evaluate(() => window.mediaActions.pause());
+  await page.waitForFunction(() => window.speechAudioContext.state === 'suspended');
+  await page.locator('#speech-pause').filter({ hasText: '继续播报' }).waitFor();
+  const commitsAtPause = fixture.stats.commits.length, connectionsAtPause = fixture.stats.connections;
+  const pausedTime = await page.evaluate(() => window.speechAudioContext.currentTime);
+  // Exceed the old 12-second progress timeout; suspended worklets send no heartbeat.
+  await new Promise(resolve => setTimeout(resolve, 13000));
+  assert.equal(await page.evaluate(() => window.speechAudioContext.currentTime), pausedTime);
+  assert.equal(fixture.stats.commits.length, commitsAtPause);
+  assert.equal(await page.evaluate(() => navigator.mediaSession.playbackState), 'paused');
+  const samplesAtPause = progress.at(-1).consumedSamples;
+  await page.evaluate(() => window.mediaActions.play());
+  await until(() => progress.at(-1).consumedSamples > samplesAtPause);
+  assert.equal(fixture.stats.connections, connectionsAtPause);
+  // Simulate an OS audio interruption and verify page controls can resume the same stream.
+  await page.evaluate(() => window.speechAudioContext.suspend());
+  await page.locator('#speech-status').filter({ hasText: '系统暂停' }).waitFor();
+  await page.locator('#speech-pause').click();
+  await page.waitForFunction(() => window.speechAudioContext.state === 'running');
+  assert.equal(fixture.stats.connections, connectionsAtPause);
   const samplesBeforeSwitch = progress.at(-1).consumedSamples, connectionsBeforeSwitch = fixture.stats.connections;
   await captionTab.click();
   assert.equal(await page.locator('#speech-tab-indicator').isVisible(), true);
@@ -71,6 +103,9 @@ try {
   assert.equal(await page.locator('#speech-toggle').getAttribute('aria-pressed'), 'true');
   if (process.env.SPEECH_SCREENSHOT) await page.screenshot({ path: process.env.SPEECH_SCREENSHOT });
   await page.getByRole('button', { name: '关闭播报', exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.mediaSession.metadata), null);
+  assert.equal(await page.evaluate(() => navigator.mediaSession.playbackState), 'none');
+  assert.ok(await page.evaluate(() => Object.values(window.mediaActions).every(handler => handler === null)));
   const commits = fixture.stats.commits.length;
   fixture.final('Sentence 99.');
   await page.locator('#translation').filter({ hasText: '99' }).waitFor({ state: 'attached' });
@@ -219,6 +254,7 @@ try {
   assert.ok(fixture.stats.authorizations.every(value => value === 'Bearer mock-shared-key'));
   console.log(JSON.stringify({ ok: true, uiErrors: errors, ttsSessions: fixture.stats.connections,
     responses: fixture.stats.commits.length, fishRequests: fixture.stats.fishRequests.length,
+    mediaChecks: ['platform metadata', 'platform pause/resume', '13s pause retains queue and connection', 'system interruption recovery', 'stop clears media session'],
     fishChecks: ['independent key', 'free and pro models', 'save and reload', 'provider switch aborts', 'live AudioWorklet playback', 'full original and translation', 'switch back to Qwen'],
     consumedSamples: Math.max(...progress.map(p => p.consumedSamples)),
     checks: ['prompt saved and restored', 'prompt reaches live, transcript and preview', 'clear prompt restores default model', 'tabs and keyboard navigation', 'tab switch preserves playback', 'pin shared panel', 'collapse survives caption updates and reload', 'keyboard expand', 'shared key', 'small toggle', 'first playback hint', 'default off', 'save without speech', 'final translation to AudioWorklet consumption', 'stop', 're-enable', 'drain', 'full original', 'full translation', 'stop transcript', 'new run off', 'reload off', 'preview', 'mobile width'] }, null, 2));

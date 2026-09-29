@@ -1,21 +1,26 @@
 import { AUDIO_HEADER_BYTES } from './speech-protocol.js';
 
 export class SpeechPlayer {
-  constructor(onEvent) { this.onEvent = onEvent; this.context = null; this.closed = false; this.unit = 0; this.frame = 0; this.samples = 0; }
+  constructor(onEvent) { this.onEvent = onEvent; this.context = null; this.closed = false; this.paused = false; this.unit = 0; this.frame = 0; this.samples = 0; }
   async unlock(volume) {
     if (!globalThis.AudioContext || !globalThis.AudioWorkletNode) throw new Error('请使用支持语音播放的新版 Chrome 或 Edge');
+    this.level = volume;
     const context = this.context = new AudioContext(); // Separate from the 16 kHz recording graph.
     const resumed = context.resume(); // Must run synchronously inside the user gesture, before the first await.
     await Promise.all([context.audioWorklet.addModule('/speech-output-processor.js'), resumed]);
     if (this.closed) return;
     this.node = new AudioWorkletNode(context, 'speech-output', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
-    this.gain = context.createGain(); this.gain.gain.value = volume;
+    this.gain = context.createGain(); this.gain.gain.value = this.paused ? 0 : this.level;
     this.node.connect(this.gain); this.gain.connect(context.destination);
     this.node.port.onmessage = ({ data }) => { if (!this.closed) this.onEvent(data); };
     context.onstatechange = () => {
-      if (!this.closed && context.state !== 'running') this.onEvent({ type: 'suspended' });
+      if (this.closed) return;
+      if (context.state === 'closed') this.onEvent({ type: 'error' });
+      else if (context.state === 'running' && this.paused) void context.suspend().catch(() => {});
+      else if (context.state !== 'running' && !this.paused) this.onEvent({ type: 'suspended' });
     };
-    if (context.state !== 'running') this.onEvent({ type: 'suspended' });
+    if (this.paused) this.pause();
+    else if (context.state !== 'running') this.onEvent({ type: 'suspended' });
   }
   begin(unit) {
     if (unit !== this.unit + 1) throw new Error('语音单元顺序无效');
@@ -35,7 +40,21 @@ export class SpeechPlayer {
     if (unit !== this.unit || samples !== this.samples) throw new Error('本句语音不完整');
     this.node.port.postMessage({ type: 'end', unit });
   }
-  volume(value) { if (this.gain) this.gain.gain.setTargetAtTime(value, this.context.currentTime, .02); }
+  volume(value) { this.level = value; if (this.gain && !this.paused) this.gain.gain.setTargetAtTime(value, this.context.currentTime, .02); }
+  pause() {
+    this.paused = true;
+    if (this.gain) { this.gain.gain.cancelScheduledValues(this.context.currentTime); this.gain.gain.value = 0; }
+    if (this.context && this.context.state !== 'closed') void this.context.suspend().catch(() => {});
+  }
+  async resume() {
+    if (this.closed || !this.context) return false;
+    this.paused = false;
+    await this.context.resume(); // Called directly by a page or Media Session user gesture.
+    if (this.closed || this.paused) return false;
+    if (this.context.state !== 'running') { this.pause(); throw new Error('系统仍在占用音频'); }
+    if (this.gain) this.gain.gain.setTargetAtTime(this.level, this.context.currentTime, .02);
+    return true;
+  }
   async settle() {
     // Worklet consumption precedes the hardware output. Let the final device buffer drain.
     const seconds = (this.context?.baseLatency || 0) + (this.context?.outputLatency || 0) + .03;
@@ -43,6 +62,7 @@ export class SpeechPlayer {
   }
   close() {
     this.closed = true;
+    if (this.context) this.context.onstatechange = null;
     if (this.gain) { this.gain.gain.cancelScheduledValues(this.context.currentTime); this.gain.gain.value = 0; this.gain.disconnect(); }
     this.node?.disconnect(); this.node?.port.close();
     if (this.context && this.context.state !== 'closed') void this.context.close().catch(() => {});
