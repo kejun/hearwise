@@ -1,5 +1,8 @@
 export const TTS_SAMPLE_RATE = 24000;
 export const TTS_MODEL = 'qwen3-tts-flash-realtime';
+export const TTS_INSTRUCT_MODEL = 'qwen3-tts-instruct-flash-realtime';
+// A compact prompt stays comfortably below the provider's 1600-token limit.
+export const TTS_PROMPT_MAX_LENGTH = 500;
 export const TTS_REGIONS = {
   beijing: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',
   singapore: 'wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime'
@@ -9,7 +12,10 @@ export function speechConfig(input) {
   if (!input || typeof input.key !== 'string' || !input.key.trim() || input.key.length > 2048 ||
       !Object.hasOwn(TTS_REGIONS, input.region) || !TTS_VOICES.includes(input.voice) ||
       ![1, 1.1, 1.2].includes(input.rate)) throw new Error('请检查连接设置中的 API Key，以及播报地域、音色和语速');
-  return { key: input.key.trim(), region: input.region, voice: input.voice, rate: input.rate };
+  if (input.prompt !== undefined && typeof input.prompt !== 'string') throw new Error('语音 Prompt 必须是文本');
+  const prompt = (input.prompt || '').trim();
+  if (prompt.length > TTS_PROMPT_MAX_LENGTH) throw new Error(`语音 Prompt 最多 ${TTS_PROMPT_MAX_LENGTH} 个字符，请缩短后重试`);
+  return { key: input.key.trim(), region: input.region, voice: input.voice, rate: input.rate, prompt };
 }
 // Binary frames: little-endian uint32 epoch, unit, frame, PCM sample count; then signed PCM16 LE.
 export const AUDIO_HEADER_BYTES = 16;

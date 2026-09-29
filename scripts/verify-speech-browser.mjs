@@ -8,6 +8,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const fixture = await speechFixture({ autoSentences: true, audioSamples: 24000 });
 let browser;
 const errors = [], progress = [];
+const speechPrompt = '用自然、温和的语气播报，吐字清楚，句间稍作停顿。';
 const until = async check => {
   const deadline = Date.now() + 12000;
   while (!check()) { if (Date.now() > deadline) throw new Error('Browser verification timed out'); await new Promise(r => setTimeout(r, 30)); }
@@ -43,7 +44,10 @@ try {
   await page.getByLabel('API Key', { exact: true }).fill('mock-shared-key');
   await page.getByRole('button', { name: '保存并继续', exact: true }).click();
   await page.getByRole('button', { name: '播报设置', exact: true }).click();
+  assert.doesNotMatch(await page.locator('#tab-speech').textContent(), /使用 Qwen3-TTS-Flash-Realtime 朗读|语音播报与识别、翻译共用/);
+  await page.getByLabel('语音 Prompt（可选）', { exact: true }).fill(speechPrompt);
   await page.getByRole('button', { name: '保存播报设置', exact: true }).click();
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('hearwise:speech')).prompt), speechPrompt);
   assert.equal(fixture.stats.connections, 0);
   await page.getByRole('button', { name: '开始聆听', exact: true }).click();
   await page.getByRole('button', { name: '停止聆听', exact: true }).waitFor();
@@ -130,13 +134,30 @@ try {
   await page.getByRole('button', { name: '播报设置', exact: true }).click();
   await page.getByRole('button', { name: '试听语音', exact: true }).click();
   await page.locator('#speech-result').filter({ hasText: '试听完成' }).waitFor();
+  assert.equal(await page.locator('#speech-prompt').inputValue(), speechPrompt);
+  if (process.env.SPEECH_SETTINGS_SCREENSHOT) await page.locator('.modal').screenshot({ path: process.env.SPEECH_SETTINGS_SCREENSHOT });
+  assert.ok(fixture.stats.models.every(model => model === 'qwen3-tts-instruct-flash-realtime'));
+  assert.ok(fixture.stats.sessions.every(session => session.instructions === speechPrompt));
+  assert.ok(fixture.stats.commits.every(text => !text.includes(speechPrompt)));
+  await page.locator('#speech-prompt').fill('');
+  await page.getByRole('button', { name: '保存播报设置', exact: true }).click();
+  const sessionsAfterSave = fixture.stats.connections;
+  await page.reload();
+  await page.locator('#live-speech-tab').click();
+  await page.getByRole('button', { name: '播报设置', exact: true }).click();
+  assert.equal(await page.locator('#speech-prompt').inputValue(), '');
+  assert.equal(fixture.stats.connections, sessionsAfterSave);
+  await page.getByRole('button', { name: '试听语音', exact: true }).click();
+  await page.locator('#speech-result').filter({ hasText: '试听完成' }).waitFor();
+  assert.equal(fixture.stats.models.at(-1), 'qwen3-tts-flash-realtime');
+  assert.equal(fixture.stats.sessions.at(-1).instructions, undefined);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   assert.deepEqual(errors, []);
   assert.ok(fixture.stats.authorizations.every(value => value === 'Bearer mock-shared-key'));
   console.log(JSON.stringify({ ok: true, uiErrors: errors, ttsSessions: fixture.stats.connections,
     responses: fixture.stats.commits.length, consumedSamples: Math.max(...progress.map(p => p.consumedSamples)),
-    checks: ['tabs and keyboard navigation', 'tab switch preserves playback', 'pin shared panel', 'collapse survives caption updates and reload', 'keyboard expand', 'shared key', 'small toggle', 'first playback hint', 'default off', 'save without speech', 'final translation to AudioWorklet consumption', 'stop', 're-enable', 'drain', 'full original', 'full translation', 'stop transcript', 'new run off', 'reload off', 'preview', 'mobile width'] }, null, 2));
+    checks: ['prompt saved and restored', 'prompt reaches live, transcript and preview', 'clear prompt restores default model', 'tabs and keyboard navigation', 'tab switch preserves playback', 'pin shared panel', 'collapse survives caption updates and reload', 'keyboard expand', 'shared key', 'small toggle', 'first playback hint', 'default off', 'save without speech', 'final translation to AudioWorklet consumption', 'stop', 're-enable', 'drain', 'full original', 'full translation', 'stop transcript', 'new run off', 'reload off', 'preview', 'mobile width'] }, null, 2));
 } finally {
   await browser?.close(); await fixture.close();
 }

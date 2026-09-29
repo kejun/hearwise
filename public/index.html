@@ -122,15 +122,16 @@
         <p class="modal-copy tab-hint">语言与识别模式仅在聆听未开始时可修改；开始聆听后会自动锁定，识别模式在下次开始聆听时生效。</p>
       </section>
       <section class="tab-panel" id="tab-speech" role="tabpanel" aria-labelledby="tab-speech-button" hidden>
-        <p class="modal-copy">使用 Qwen3-TTS-Flash-Realtime 朗读实时中文译文，或在停止收听后播报整篇原文与译文。播报需手动开启，保存设置不会开始播报。</p>
         <form id="speech-form">
-          <p class="form-note">语音播报与识别、翻译共用「连接设置」中的 API Key，无需重复填写。</p>
           <div class="speech-config-grid">
             <label class="language-field"><span>服务地域</span><select id="speech-region"><option value="beijing">中国内地（北京）</option><option value="singapore">国际（新加坡）</option></select></label>
             <label class="language-field"><span>音色</span><select id="speech-voice"><option value="Cherry">Cherry · 女声</option><option value="Serena">Serena · 女声</option><option value="Ethan">Ethan · 男声</option><option value="Chelsie">Chelsie · 女声</option></select></label>
             <label class="language-field"><span>语速</span><select id="speech-rate"><option value="1">自然 · 1.0×</option><option value="1.1">稍快 · 1.1×</option><option value="1.2">快速 · 1.2×</option></select></label>
           </div>
-          <p class="form-note">更改音色或语速后保存，会关闭当前播报；手动重新开启后生效。</p>
+          <label class="form-label" for="speech-prompt">语音 Prompt（可选）</label>
+          <textarea class="speech-prompt" id="speech-prompt" rows="3" maxlength="500" placeholder="例如：用自然、温和的语气播报，吐字清楚，句间稍作停顿。" aria-describedby="speech-prompt-hint"></textarea>
+          <p class="form-note" id="speech-prompt-hint">用中文或英文描述语气、情绪和表达方式，最多 500 个字符。留空使用默认风格。</p>
+          <p class="form-note">更改播报设置后保存，会关闭当前播报；手动重新开启后生效。</p>
           <p class="form-note">开启或试听时，待播报文本会发送至所选地域的阿里云服务，可能产生费用。</p>
           <button class="test-button" id="speech-preview" type="button">试听语音</button>
           <p class="form-note" id="speech-result" role="status" aria-live="polite">试听会朗读一段固定的中文短句。</p>

@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
-import { TTS_MODEL, TTS_REGIONS, TTS_SAMPLE_RATE } from './public/speech-protocol.js';
+import { TTS_MODEL, TTS_INSTRUCT_MODEL, TTS_REGIONS, TTS_SAMPLE_RATE } from './public/speech-protocol.js';
 
 // One response at a time per persistent Qwen session. Cancellation closes the transport;
 // Qwen does not document response.cancel for this model.
@@ -18,7 +18,8 @@ export class QwenTts {
     if (this.ready && this.ws?.readyState === WebSocket.OPEN) return;
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
-      const url = this.endpoint || `${TTS_REGIONS[this.config.region]}?model=${TTS_MODEL}`;
+      const url = new URL(this.endpoint || TTS_REGIONS[this.config.region]);
+      url.searchParams.set('model', this.config.prompt ? TTS_INSTRUCT_MODEL : TTS_MODEL);
       const ws = this.ws = new WebSocket(url, {
         headers: { Authorization: `Bearer ${this.config.key}` }, handshakeTimeout: this.timeoutMs,
         maxPayload: 4 * 1024 * 1024
@@ -40,7 +41,8 @@ export class QwenTts {
         let event; try { event = JSON.parse(raw.toString()); } catch { return fail(new Error('语音服务响应无效')); }
         if (event.type === 'session.created') this.send('session.update', { session: {
           mode: 'commit', voice: this.config.voice, language_type: this.config.language || 'Chinese',
-          response_format: 'pcm', sample_rate: TTS_SAMPLE_RATE, speech_rate: this.config.rate
+          response_format: 'pcm', sample_rate: TTS_SAMPLE_RATE, speech_rate: this.config.rate,
+          ...(this.config.prompt ? { instructions: this.config.prompt, optimize_instructions: false } : {})
         } });
         if (event.type === 'session.updated' && !settled) {
           settled = true; clearTimeout(timer); this.ready = true; resolve();
