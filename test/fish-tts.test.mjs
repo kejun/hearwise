@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
-import { FishTts } from '../fish-tts.mjs';
+import { FishTts, FishTtsError } from '../fish-tts.mjs';
 import { speechConfig } from '../public/speech-protocol.js';
 
 const config = { provider: 'fish', key: 'fish-test-key', model: 's2.1-pro-free', referenceId: 'voice-test-123', rate: 1.2, latency: 'balanced', style: 'calm' };
@@ -68,19 +68,54 @@ test('Fish 停止与超时会中止在途请求，不再产生后续音频', { t
   await assert.rejects(q.synthesize('不能重启旧实例', () => {}), /关闭/);
   const timed = new FishTts(config, { endpoint: f.endpoint, connectTimeoutMs: 60 });
   t.after(() => timed.close());
-  await assert.rejects(timed.synthesize('超时', () => {}), /超时/);
+  await assert.rejects(timed.synthesize('超时', () => {}), error => {
+    assert.match(error.message, /超时/); assert.equal(error.diagnostics.code, 'FISH_RESPONSE_TIMEOUT');
+    assert.equal(error.diagnostics.stage, 'response'); assert.equal(error.diagnostics.attempts, 1); return true;
+  });
   assert.equal(f.requests.length, 2);
 });
 test('Fish 认证、额度和限流错误不重试；错误正文不能泄露 Key', { timeout: 5000 }, async t => {
   const statuses = [401, 402, 429, 503];
   const f = await server(t, (_req, res, n) => { res.writeHead(statuses[n - 1], { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ message: config.key })); });
-  for (const message of [/Key 无效/, /额度不足/, /请求过于频繁/, /服务繁忙/]) {
+  for (const [index, message] of [/Key 无效/, /额度不足/, /请求过于频繁/, /服务繁忙/].entries()) {
     const q = new FishTts(config, { endpoint: f.endpoint }); t.after(() => q.close());
     await assert.rejects(q.synthesize('正文', () => assert.fail('Must not emit PCM')), error => {
-      assert.match(error.message, message); assert.ok(!error.message.includes(config.key)); return true;
+      assert.match(error.message, message); assert.ok(!error.message.includes(config.key));
+      assert.equal(error.diagnostics.httpStatus, statuses[index]); assert.equal(error.diagnostics.code, 'FISH_HTTP_ERROR');
+      assert.equal(error.diagnostics.audioReceived, false); assert.equal(error.diagnostics.attempts, 1); return true;
     });
   }
   assert.equal(f.requests.length, 4);
+});
+
+test('Fish 保留 fetch cause / AggregateError 中的安全网络错误码，不输出原始错误或 Key', async t => {
+  for (const code of ['ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ECONNREFUSED', 'UNRECOGNIZED']) {
+    let attempts = 0;
+    const q = new FishTts(config, { fetchImpl: async () => {
+      attempts++;
+      const cause = new AggregateError([Object.assign(new Error(`${config.key}: private text`), { code })]);
+      throw new TypeError(`fetch failed ${config.key}`, { cause });
+    } });
+    t.after(() => q.close());
+    await assert.rejects(q.synthesize('private synthesis text', () => {}), error => {
+      assert.ok(error instanceof FishTtsError); assert.equal(error.diagnostics.code, 'FISH_NETWORK_ERROR');
+      assert.equal(error.diagnostics.networkCode, code === 'UNRECOGNIZED' ? undefined : code);
+      assert.equal(error.diagnostics.stage, 'response'); assert.equal(error.diagnostics.attempts, 2);
+      assert.equal(error.diagnostics.audioReceived, false); assert.ok(error.diagnostics.elapsedMs >= 0);
+      assert.equal(error.cause, undefined); assert.doesNotMatch(error.message + JSON.stringify(error), /fish-test-key|private|UNRECOGNIZED/);
+      return true;
+    });
+    assert.equal(attempts, 2);
+  }
+});
+
+test('Fish 响应已到但音频流挂起，区分生成超时与等待响应超时', { timeout: 5000 }, async t => {
+  const f = await server(t, (_req, res) => { res.writeHead(200, { 'Content-Type': 'audio/pcm' }); res.flushHeaders(); });
+  const q = new FishTts(config, { endpoint: f.endpoint, timeoutMs: 100, connectTimeoutMs: 1000 }); t.after(() => q.close());
+  await assert.rejects(q.synthesize('正文', () => {}), error => {
+    assert.equal(error.diagnostics.code, 'FISH_GENERATION_TIMEOUT'); assert.equal(error.diagnostics.stage, 'audio');
+    assert.equal(error.diagnostics.audioReceived, false); assert.equal(error.diagnostics.attempts, 1); return true;
+  });
 });
 test('Fish 拒绝错误格式、空音频与残缺样本；停止输出后不重试', { timeout: 5000 }, async t => {
   const f = await server(t, (_req, res, n) => {

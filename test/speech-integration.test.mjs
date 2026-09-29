@@ -111,6 +111,26 @@ test('Fish 服务商经 /ws/tts 使用独立 HTTP 流，不访问千问，未知
   assert.equal(f.stats.connections, 0); assert.equal(f.stats.fishRequests.length, 4);
 });
 
+test('Fish 试听失败的页面消息与实际服务端日志保留同一错误原因、HTTP 状态及阶段，不泄露 Key 或正文', { timeout: 10000 }, async t => {
+  const f = await speechFixture({ fishStatus: 401 }); t.after(() => f.close());
+  const client = await socket(f.base.replace('http', 'ws') + '/ws/tts'); t.after(() => client.ws.terminate());
+  client.send({ type: 'speech.preview', epoch: 4, config: { provider: 'fish', key: 'diagnostic-secret-key',
+    model: 's2.1-pro-free', referenceId: 'private-voice-id', rate: 1, latency: 'balanced' } });
+  await once(client.ws, 'close');
+  await waitFor(() => f.logs().includes('"event":"speech.error"'));
+  const event = client.events.at(-1);
+  const log = f.logs().split('\n').filter(line => line.startsWith('speech_event '))
+    .map(line => JSON.parse(line.slice('speech_event '.length))).find(row => row.event === 'speech.error');
+  assert.equal(event.type, 'speech.error'); assert.equal(event.message, log.message);
+  assert.match(log.message, /Key 无效.*HTTP 401/); assert.equal(log.code, 'FISH_HTTP_ERROR');
+  assert.equal(log.httpStatus, 401); assert.equal(log.stage, 'response'); assert.equal(log.attempts, 1);
+  assert.equal(log.provider, 'fish'); assert.equal(log.model, 's2.1-pro-free');
+  assert.equal(log.audioReceived, false); assert.equal(log.bufferedMs, 0); assert.ok(log.elapsedMs >= 0);
+  assert.equal(client.pcm.length, 0); assert.equal(f.stats.fishRequests.length, 1);
+  assert.doesNotMatch(f.logs(), /diagnostic-secret-key|private-voice-id|Upstream echoed/);
+  assert.ok(!f.logs().includes(PREVIEW_TEXT)); assert.ok(!JSON.stringify(event).includes('diagnostic-secret-key'));
+});
+
 test('Qwen reconnects before first audio, never replays after partial audio, and close aborts in-flight work', { timeout: 10000 }, async t => {
   const upstream = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(upstream, 'listening');
   t.after(async () => { for (const c of upstream.clients) c.terminate(); await new Promise(r => upstream.close(r)); });
