@@ -37,7 +37,7 @@
 .live-tabs .tab-button:focus-visible{outline-offset:-3px}
 .live-panel>[role=tabpanel]:focus-visible{outline:3px solid #adbd4b;outline-offset:-4px;border-radius:12px}
 .speech-tab-indicator{width:6px;height:6px;border-radius:50%;background:#326b5b}
-.speech-bar>.speech-options{margin-top:auto;padding-top:18px;border-top:1px solid #e9ece6}
+.speech-bar>.speech-options{margin-top:auto;padding-top:18px}
 .speech-bar>.speech-reading{margin:0;font-size:20px;max-height:6.8em;overflow-wrap:anywhere}
 .pinned-caption>.caption-head{flex-shrink:0;gap:12px}
 .pinned-actions{display:flex;align-items:center;gap:12px}
@@ -133,7 +133,7 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .speech-options { margin-top: 10px; font-size: 12px; color: #74776e; }
 .speech-options label { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .speech-options input { width: 80px; accent-color: var(--speech-accent); }
-.speech-reading { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid #e5e6dd; color: #41594b; font-size: 14px; line-height: 1.7; max-height: 5em; overflow-y: auto; }
+.speech-reading { margin: 12px 0 0; padding-top: 12px; color: #000; font-size: 14px; line-height: 1.7; max-height: 5em; overflow-y: auto; }
 .speech-config-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0; }
 .speech-actions .speech-toggle-small { height: 32px; min-height: 32px; padding: 6px 12px; border-radius: 8px; font-size: 12px; line-height: 18px; }
 .transcript-speech { margin: 16px 0; padding: 14px 16px; background: #f6f8f3; border-radius: 10px; }
