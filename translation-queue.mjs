@@ -16,6 +16,8 @@ export function createTranslationScheduler({ concurrency = TRANSLATION_CONCURREN
   const queuedIds = new Set();
   let realtimeWindow = [];
   let realtimeStreak = 0;
+  const speechHeads = new Map();
+  let speechTurn = true;
 
   function take(task) {
     const index = queue.indexOf(task);
@@ -26,6 +28,7 @@ export function createTranslationScheduler({ concurrency = TRANSLATION_CONCURREN
   }
   return {
     concurrency,
+    setSpeechHead(owner, id) { if (id) speechHeads.set(owner, id); else speechHeads.delete(owner); },
     get length() { return queue.length; },
     has: id => queuedIds.has(id),
     hasListening: listeningId => queue.some(task => task.listeningId === listeningId),
@@ -60,6 +63,10 @@ export function createTranslationScheduler({ concurrency = TRANSLATION_CONCURREN
         realtimeStreak = 0;
         return take(oldestBackground);
       }
+      // Audible head-of-line gets every other available slot, within the existing shared budget.
+      const head = queue.find(task => [...speechHeads.values()].includes(task.segment.id));
+      if (head && speechTurn) { speechTurn = false; realtimeStreak++; return take(head); }
+      speechTurn = true;
       realtimeWindow = realtimeWindow.filter(task => queue.includes(task));
       if (!realtimeWindow.length) {
         const reals = queue.filter(task => task.kind === 'realtime');

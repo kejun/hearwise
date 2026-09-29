@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as translationParams from '../public/translation-params.js';
 import { processingView, createProcessingPoller } from '../public/processing-state.js';
+import { createSpeechController } from '../public/speech-controller.js';
+import { speechConfig } from '../public/speech-protocol.js';
 
 // Execute the actual app and event handlers with a minimal DOM and controllable HTTP responses.
 // Deliberately let aborted requests resolve to exercise the stale-response guards.
@@ -36,11 +38,12 @@ function app(t) {
     close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
   }
   const context = vm.createContext({
-    ...translationParams, processingView, createProcessingPoller, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
+    ...translationParams, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },
     document: { getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
     window: { addEventListener() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+    sessionStorage: { getItem: () => null, setItem() {} },
     fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, body: JSON.parse(options.body), resolve, reject })); }
   });
   const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -60,6 +63,24 @@ function app(t) {
   t.after(() => run('clearTranslationWork()'));
   return { element, requests, storage, run, tick, flush, reply, receive, final };
 }
+
+test('更换音源先结束旧连接再启动新片段，取消选择保留旧流', async t => {
+  const a = app(t);
+  a.run(`
+    phase = 'listening'; els.audioInput.value = 'tab';
+    socket = new WebSocket(); audioContext = {}; processor = {};
+    globalThis.switchEvents = [];
+    globalThis.chosen = { getTracks: () => [{ stop: () => switchEvents.push('discard') }] };
+    chooseTab = async () => chosen;
+    stop = async () => { switchEvents.push('stop'); phase = 'idle'; socket.dispatchEvent(new Event('close')); };
+    start = async selected => { switchEvents.push(selected === chosen ? 'start-selected' : 'wrong-stream'); };
+  `);
+  await a.run('switchTab()');
+  assert.deepEqual(Array.from(a.run('switchEvents')), ['stop', 'start-selected']);
+  a.run(`phase = 'listening'; switchEvents.length = 0; chooseTab = async () => { const error = new Error('cancel'); error.name = 'NotAllowedError'; throw error; };`);
+  await a.run('switchTab()');
+  assert.deepEqual(Array.from(a.run('switchEvents')), []); assert.equal(a.run('phase'), 'listening');
+});
 
 test('超长临时文本保留已有译文且不发送请求；修订为短句后恢复', async t => {
   const a = app(t);

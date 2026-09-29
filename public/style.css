@@ -110,3 +110,16 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .record-panel>.panel-heading{margin-bottom:0}
 .record-panel>.panel-actions{margin:0}
 .record-panel>.panel-actions:has(>button:not([hidden])){margin-top:16px}
+:root { --speech-accent: #326b5b; }
+.speech-bar { margin: 16px 0 24px; padding: 16px 20px; border: 1px solid #deded6; border-radius: 16px; background: #ffffff80; }
+.speech-actions, .speech-options { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.speech-actions > span { flex: 1; font-size: 13px; color: #696d64; }
+.speech-actions .active { background: var(--speech-accent); color: white; border-color: var(--speech-accent); }
+.speech-link { border: 0; padding: 6px 0; background: none; color: var(--speech-accent); cursor: pointer; font: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.speech-options { margin-top: 10px; font-size: 12px; color: #74776e; }
+.speech-options label { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.speech-options input { width: 80px; accent-color: var(--speech-accent); }
+.speech-reading { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid #e5e6dd; color: #41594b; font-size: 14px; line-height: 1.7; max-height: 5em; overflow-y: auto; }
+.speech-config-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0; }
+.speech-remember { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+@media (max-width: 580px) { .speech-bar { padding: 14px; } .speech-actions > span { flex-basis: 55%; } .speech-config-grid { grid-template-columns: 1fr; } }

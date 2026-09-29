@@ -10,6 +10,7 @@ import { extractKnowledge, splitFocusSegments } from './knowledge.mjs';
 import { createTranslationScheduler } from './translation-queue.mjs';
 import { createKnowledgeScheduler } from './knowledge-queue.mjs';
 import { createKnowledgeWorkflow } from './knowledge-workflow.mjs';
+import { createSpeechService } from './speech-service.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -32,6 +33,11 @@ const asrSentenceSilenceMs = Math.min(6000, Math.max(200, Number(process.env.ASR
 const keys = new Map();
 const listeners = new Map();
 const translations = createTranslationScheduler();
+const speech = createSpeechService({ store, setHead: (owner, id) => translations.setSpeechHead(owner, id),
+  onMetric: event => console.info('speech_event', JSON.stringify(event)) });
+for (const file of ['speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js']) {
+  types[`/${file}`] = 'text/javascript; charset=utf-8';
+}
 let translating = 0;
 let interimTranslating = 0;
 const activeTranslations = new Map();
@@ -168,7 +174,7 @@ function queueTranslation(segment, listeningId, target, kind = 'background') {
   if (translations.enqueue({ segment, listeningId, target, kind })) pumpTranslations();
 }
 function pumpTranslations() {
-  while (translating < translations.concurrency) {
+  while (translating + interimTranslating < translations.concurrency) {
     const task = translations.next();
     if (!task) break;
     const key = keys.get(task.listeningId);
@@ -186,6 +192,7 @@ function pumpTranslations() {
         logModelError('translation', error);
       } finally {
         if (updated) broadcast(task.listeningId, { type: 'translation-updated', runId: updated.run_id, segment: updated });
+        speech.notify(task.listeningId);
         translating--;
         activeTranslations.set(task.listeningId, activeTranslations.get(task.listeningId) - 1);
         if (!activeTranslations.get(task.listeningId)) activeTranslations.delete(task.listeningId);
@@ -217,6 +224,7 @@ function resumeProcessing(id, key) {
     if (isSameLanguage(row.source_lang, row.target_lang)) { // 同语言待译句：本地以原文补全，不调翻译模型
       const updated = store.setTranslation(row.id, row.original_text, false);
       if (updated) broadcast(id, { type: 'translation-updated', runId: updated.run_id, segment: updated });
+      speech.notify(id);
       continue;
     }
     queueTranslation(row, id, row.target_lang);
@@ -253,7 +261,7 @@ const server = http.createServer(async (req, res) => {
       }
       interimTranslating++;
       try { return sendJson(res, 200, { text: await translate(key.trim(), text.trim(), target) }); }
-      finally { interimTranslating--; knowledgeScheduler.pump(); }
+      finally { interimTranslating--; pumpTranslations(); knowledgeScheduler.pump(); }
     } catch (error) { return sendJson(res, 502, { code: 'TRANSLATION_FAILED', error: errorMessage(error) }); }
   }
   if (req.method === 'GET' && url.pathname === '/api/listenings') {
@@ -272,6 +280,7 @@ const server = http.createServer(async (req, res) => {
       if (result === 'missing') return sendJson(res, 404, { error: '收听记录不存在' });
       if (result === 'active') return sendJson(res, 409, { error: '请先停止这条收听，再删除记录' });
       translations.remove(match[1]);
+      speech.remove(match[1]);
       keys.delete(match[1]);
       knowledgeScheduler.remove(match[1]);
       return sendJson(res, 200, { ok: true });
@@ -343,9 +352,12 @@ const server = http.createServer(async (req, res) => {
 });
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+const speechWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
+speechWss.on('connection', speech.accept);
 server.on('upgrade', (req, socket, head) => {
-  if (req.url !== '/ws' || !sameOrigin(req)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
-  wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws));
+  if (!['/ws', '/ws/tts'].includes(req.url) || !sameOrigin(req)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
+  const target = req.url === '/ws/tts' ? speechWss : wss;
+  target.handleUpgrade(req, socket, head, ws => target.emit('connection', ws));
 });
 wss.on('connection', client => {
   let upstream, taskId, run, listeningId, key, settings;
@@ -417,6 +429,7 @@ wss.on('connection', client => {
               const passthrough = isSameLanguage(source, targetLang); // 同语言：原文直通写入为最终译文，不进翻译队列
               const finalSegment = passthrough ? store.setTranslation(segment.id, segment.original_text, false) : segment;
               send({ type: 'segment-final', runId: run.runId, segment: finalSegment });
+              speech.notify(listeningId);
               if (!passthrough) queueTranslation(segment, listeningId, targetLang, 'realtime');
               knowledgeScheduler.schedule(listeningId);
             }
@@ -434,6 +447,7 @@ wss.on('connection', client => {
         }
         if (kind === 'task-finished') {
           finished = true; store.finishRun(run?.runId); knowledgeScheduler.schedule(listeningId, true);
+          speech.notify(listeningId);
           send({ type: 'finished' }); ws.close(); client.close();
         }
       });
@@ -450,6 +464,7 @@ wss.on('connection', client => {
   client.on('close', () => {
     unsubscribe(listeningId, client);
     if (run && !finished) { store.finishRun(run.runId, true); knowledgeScheduler.schedule(listeningId, true); }
+    speech.notify(listeningId);
     upstream?.close();
     maybeReleaseKey(listeningId);
   });

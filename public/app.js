@@ -1,5 +1,7 @@
 import { INTERIM_TRANSLATION_MAX_LENGTH, validateInterimTranslation } from './translation-params.js';
 import { processingView, createProcessingPoller } from './processing-state.js';
+import { createSpeechController } from './speech-controller.js';
+import { speechConfig } from './speech-protocol.js';
 
 const $ = id => document.getElementById(id);
 const els = {
@@ -108,6 +110,83 @@ let connectionGeneration = 0; // 每次连接递增；旧连接的事件/定时�
 let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
 
+// Speech is deliberately never restored as enabled. Only preferences may survive a reload.
+const speechEls = Object.fromEntries(['toggle', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'key', 'region', 'voice', 'rate', 'remember', 'form', 'preview', 'result']
+  .map(name => [name, $(`speech-${name}`)]));
+let speechPreview = false;
+let speechCanJump = false;
+const speech = createSpeechController({ onChange(state) {
+  speechPreview = state.preview;
+  speechEls.toggle.textContent = state.enabled ? '关闭播报' : '开启译文播报';
+  speechEls.toggle.setAttribute('aria-pressed', String(state.enabled));
+  speechEls.toggle.classList.toggle('active', state.enabled);
+  speechEls.toggle.disabled = !state.enabled && (phase !== 'listening' || els.target.value !== 'Chinese');
+  speechEls.status.textContent = state.message;
+  speechEls.result.textContent = state.message;
+  if (state.canJump !== undefined) speechCanJump = state.canJump;
+  speechEls.jump.hidden = !state.enabled || state.preview || phase !== 'listening' || !speechCanJump;
+  speechEls.preview.textContent = state.preview ? '停止试听' : '试听语音';
+  if (state.canReplay !== undefined) speechEls.replay.hidden = !state.canReplay;
+  if (state.backlog !== undefined) speechEls.backlog.textContent = state.backlog;
+  if (state.reading !== undefined) {
+    speechEls.reading.textContent = state.reading ? `正在读：${state.reading}` : '';
+    speechEls.reading.hidden = !state.reading;
+  }
+} });
+let speechPreferences;
+try { speechPreferences = JSON.parse(localStorage.getItem('hearwise:speech') || '{}'); } catch { speechPreferences = {}; }
+if (!speechPreferences || typeof speechPreferences !== 'object' || Array.isArray(speechPreferences)) speechPreferences = {};
+speechEls.key.value = sessionStorage.getItem('hearwise:speech-key') || localStorage.getItem('hearwise:speech-key') || '';
+speechEls.remember.checked = Boolean(localStorage.getItem('hearwise:speech-key'));
+speechEls.region.value = speechPreferences.region || 'beijing';
+speechEls.voice.value = speechPreferences.voice || 'Cherry';
+speechEls.rate.value = String(speechPreferences.rate || 1);
+speechEls.volume.value = String(speechPreferences.volume ?? .8);
+function readSpeechConfig() { return speechConfig({ key: speechEls.key.value, region: speechEls.region.value, voice: speechEls.voice.value, rate: Number(speechEls.rate.value) }); }
+function openSpeechSettings() { openSettings(); activateTab(2); speechEls.key.focus(); }
+function enableSpeech(reason) {
+  try { void speech.start(readSpeechConfig(), { volume: Number(speechEls.volume.value), reason }); }
+  catch (error) { openSpeechSettings(); speechEls.result.textContent = error.message; }
+}
+speechEls.toggle.addEventListener('click', () => speech.enabled ? speech.stop() : enableSpeech());
+speechEls.jump.addEventListener('click', () => enableSpeech('skip'));
+speechEls.replay.addEventListener('click', () => {
+  try { void speech.replay(readSpeechConfig(), { volume: Number(speechEls.volume.value) }); }
+  catch (error) { openSpeechSettings(); speechEls.result.textContent = error.message; }
+});
+speechEls.settings.addEventListener('click', openSpeechSettings);
+speechEls.preview.addEventListener('click', () => {
+  if (speechPreview) return speech.stop('试听已停止');
+  try { void speech.start(readSpeechConfig(), { preview: true, volume: Number(speechEls.volume.value) }); }
+  catch (error) { speechEls.result.textContent = error.message; }
+});
+speechEls.volume.addEventListener('input', () => {
+  speech.volume(Number(speechEls.volume.value));
+  speechPreferences.volume = Number(speechEls.volume.value);
+  localStorage.setItem('hearwise:speech', JSON.stringify(speechPreferences));
+});
+speechEls.form.addEventListener('submit', event => {
+  event.preventDefault();
+  try {
+    const config = readSpeechConfig();
+    speech.stop('设置已保存，请手动开启译文播报');
+    sessionStorage.setItem('hearwise:speech-key', config.key);
+    if (speechEls.remember.checked) localStorage.setItem('hearwise:speech-key', config.key);
+    else localStorage.removeItem('hearwise:speech-key');
+    speechPreferences = { region: config.region, voice: config.voice, rate: config.rate, volume: Number(speechEls.volume.value) };
+    localStorage.setItem('hearwise:speech', JSON.stringify(speechPreferences));
+    closeSettings();
+  } catch (error) { speechEls.result.textContent = error.message; }
+});
+function syncSpeechContext() {
+  speech.setContext({ phase, listeningId, runId: activeRunId, target: els.target.value });
+  speechEls.toggle.disabled = !speech.enabled && (phase !== 'listening' || els.target.value !== 'Chinese');
+  speechEls.toggle.title = els.target.value === 'Chinese' ? '开启后从新的完整译文开始播报' : '当前仅支持中文译文播报';
+  speechEls.jump.hidden = !speech.enabled || speechPreview || phase !== 'listening' || !speechCanJump;
+}
+els.target.addEventListener('change', syncSpeechContext);
+syncSpeechContext();
+
 // 限高字幕框内更新文本：仅当更新前已贴近底部才跟随贴底，用户上滚回看时不拽回
 function updateText(el, text) {
   const stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -163,6 +242,7 @@ function setPhase(next, message) {
   els.source.disabled = next !== 'idle';
   els.target.disabled = next !== 'idle';
   els.captionMode.disabled = next !== 'idle';
+  syncSpeechContext();
   els.newListening.disabled = next !== 'idle';
   els.historyListening.disabled = next !== 'idle';
   if (tabInput && !els.hint.classList.contains('error')) els.hint.textContent = active ? '仅所选标签页的声音发送至阿里云' : '选择浏览器标签页，并勾选“共享标签页音频”';
@@ -208,6 +288,7 @@ function resetConnectionTest() {
 }
 
 function closeSettings() {
+  if (speechPreview) speech.stop();
   resetConnectionTest();
   els.modal.hidden = true;
   startAfterSave = false;
@@ -223,7 +304,8 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape' && !e
 // Settings tabs: connection (default) / language
 const settingsTabs = [
   { button: $('tab-connection-button'), panel: $('tab-connection') },
-  { button: $('tab-language-button'), panel: $('tab-language') }
+  { button: $('tab-language-button'), panel: $('tab-language') },
+  { button: $('tab-speech-button'), panel: $('tab-speech') }
 ];
 function activateTab(index, focusButton = false) {
   settingsTabs.forEach((tab, i) => {
@@ -629,6 +711,7 @@ function showListening() {
 }
 async function showHistory() {
   if (phase !== 'idle') return;
+  speech.stop();
   detailPoller.stop(); showListening();
   els.listeningView.hidden = true; els.historyView.hidden = false;
   updatePinnedCaption();
@@ -676,6 +759,7 @@ async function deleteListening(item, button) {
   }
 }
 async function selectListening(id) {
+  speech.stop();
   detailPoller.stop();
   listeningId = id; detail = null; detailPage = 0; liveSegments.clear(); liveKnowledge.clear(); liveProcessing = null;
   await fetchDetail();
@@ -692,6 +776,7 @@ async function selectListening(id) {
   startPolling();
 }
 function resetListening() {
+  speech.stop();
   detailPoller.stop();
   clearInterval(segmentPollTimer);
   listeningId = null; detail = null; detailPage = 0; currentSentenceId = null; currentSegmentId = null;
@@ -764,7 +849,7 @@ async function chooseTab() {
   if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('当前浏览器不支持标签页音频采集，请使用新版 Chrome 或 Edge');
   const selected = await navigator.mediaDevices.getDisplayMedia({
     video: { displaySurface: 'browser' }, audio: true,
-    selfBrowserSurface: 'exclude', surfaceSwitching: 'include'
+    selfBrowserSurface: 'exclude', surfaceSwitching: 'exclude'
   });
   const surface = selected.getVideoTracks()[0]?.getSettings().displaySurface;
   const audioTrack = selected.getAudioTracks()[0];
@@ -787,10 +872,10 @@ function watchTabEnd(selected) {
   selected.getTracks().forEach(track => track.addEventListener('ended', onEnded, { once: true }));
 }
 
-async function prepareAudio() {
+async function prepareAudio(preselected) {
   if (!window.AudioWorkletNode) throw new Error('当前浏览器不支持实时音频采集，请使用新版 Chrome 或 Edge');
   const tabInput = els.audioInput.value === 'tab';
-  if (tabInput) stream = await chooseTab();
+  if (tabInput) stream = preselected || await chooseTab();
   else {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('当前浏览器不支持麦克风实时采集');
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
@@ -828,16 +913,17 @@ async function releaseAudio() {
   if (currentContext && currentContext.state !== 'closed') await currentContext.close().catch(() => {});
 }
 
-async function start() {
+async function start(preselected) {
   if (phase !== 'idle') return;
-  if (!saved.key) { openSettings(true); return; }
+  if (!saved.key) { preselected?.getTracks().forEach(track => track.stop()); openSettings(true); return; }
+  speech.stop();
   detailPoller.stop();
   clearError();
   currentSentenceId = null; currentSegmentId = null;
   clearTranslationWork();
   setPhase('connecting', els.audioInput.value === 'tab' ? '请选择要收听的标签页…' : '正在申请麦克风…');
   try {
-    await prepareAudio();
+    await prepareAudio(preselected);
     if (phase !== 'connecting') return;
     setPhase('connecting', '正在连接千问AI平台…');
     const gen = ++connectionGeneration; // 所有回调绑定 generation，旧 timer/事件不得污染新会话
@@ -845,6 +931,7 @@ async function start() {
     socket = connection;
     connection.addEventListener('open', () => connection.send(JSON.stringify({ type: 'start', key: saved.key, source: els.source.value, targetLang: els.target.value, audioSource: els.audioInput.value, listeningId, captionMode })));
     connection.addEventListener('message', async event => {
+      if (gen !== connectionGeneration || socket !== connection) return;
       const message = JSON.parse(event.data);
       if (message.type === 'listening-ready') {
         listeningId = message.listeningId;
@@ -923,19 +1010,22 @@ async function switchTab() {
   els.switchTab.disabled = true;
   els.switchTab.textContent = '选择中…';
   let selected;
+  const selectedGeneration = connectionGeneration;
   try {
     selected = await chooseTab();
-    if (phase !== 'listening' || !audioContext || !processor) return;
-    const nextSource = audioContext.createMediaStreamSource(selected);
-    nextSource.connect(processor);
-    const oldStream = stream;
-    const oldSource = sourceNode;
-    stream = selected;
-    sourceNode = nextSource;
-    watchTabEnd(selected);
-    oldSource?.disconnect();
-    oldStream?.getTracks().forEach(track => track.stop());
+    if (phase !== 'listening' || selectedGeneration !== connectionGeneration || !audioContext || !processor) return;
+    // A new source is a new run: close the old ASR boundary before reading the new tab.
+    const oldConnection = socket;
+    speech.stop();
+    const closed = new Promise(resolve => oldConnection.addEventListener('close', resolve, { once: true }));
+    await stop();
+    await closed;
+    // The existing close handler releases input resources before returning to idle.
+    if (phase !== 'idle') await releaseAudio();
+    setPhase('idle');
+    const next = selected;
     selected = null;
+    await start(next);
     clearError();
   } catch (error) {
     if (error.name !== 'NotAllowedError') showError(error.message || '无法更换标签页');
@@ -948,6 +1038,8 @@ async function switchTab() {
 
 async function stop() {
   if (phase !== 'listening') return;
+  const stoppingConnection = socket;
+  speech.drain();
   setPhase('stopping');
   // 尾包 flush 确认：有限等待（400ms），超时记录丢尾风险而不是永远卡住
   if (processor && socket?.readyState === WebSocket.OPEN) {
@@ -972,9 +1064,9 @@ async function stop() {
   await releaseAudio();
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
   else setPhase('idle');
-  setTimeout(() => { if (phase === 'stopping') socket?.close(); }, 5000);
+  setTimeout(() => { if (phase === 'stopping' && socket === stoppingConnection) stoppingConnection?.close(); }, 5000);
 }
 
 els.toggle.addEventListener('click', () => phase === 'listening' ? stop() : start());
 els.switchTab.addEventListener('click', switchTab);
-window.addEventListener('beforeunload', () => { stream?.getTracks().forEach(track => track.stop()); socket?.close(); });
+window.addEventListener('beforeunload', () => { speech.stop(); stream?.getTracks().forEach(track => track.stop()); socket?.close(); });

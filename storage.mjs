@@ -184,6 +184,23 @@ export class ListeningStore {
     const processing = this.processing(id);
     return { listening, runs, segments, latestSegment, segmentCount, knowledge, jobs, processing, page, pageSize };
   }
+  speechRun(listeningId, runId) {
+    if (typeof listeningId !== 'string' || typeof runId !== 'string') return null;
+    return this.db.prepare(`SELECT r.*, COALESCE((SELECT MAX(sequence_no) FROM segments WHERE run_id=r.id),0) AS maxSequence
+      FROM listening_runs r WHERE r.id=? AND r.listening_id=?`).get(runId, listeningId) || null;
+  }
+  speechNext(listeningId, runId, afterSequence) {
+    return this.db.prepare(`SELECT * FROM segments WHERE listening_id=? AND run_id=? AND sequence_no>?
+      ORDER BY sequence_no LIMIT 1`).get(listeningId, runId, afterSequence) || null;
+  }
+  speechSegment(listeningId, runId, id) {
+    if (typeof id !== 'string') return null;
+    return this.db.prepare('SELECT * FROM segments WHERE listening_id=? AND run_id=? AND id=?').get(listeningId, runId, id) || null;
+  }
+  speechBacklog(listeningId, runId, afterSequence) {
+    return this.db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(LENGTH(COALESCE(translation_text,original_text))),0) AS characters
+      FROM segments WHERE listening_id=? AND run_id=? AND sequence_no>?`).get(listeningId, runId, afterSequence);
+  }
   processing(id) {
     const translations = this.db.prepare(`SELECT
       COALESCE(SUM(translation_state='failed'),0) AS failedTranslations,

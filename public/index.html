@@ -28,6 +28,21 @@
         <p class="translation placeholder" id="translation">字幕会显示在这里</p>
         <div class="original-wrap"><span class="original-label">原文</span><p class="original placeholder" id="original">开始聆听后，实时识别的文字会出现。</p></div>
       </section>
+      <section class="speech-bar" aria-label="译文语音播报">
+        <div class="speech-actions">
+          <button class="switch-button" id="speech-toggle" type="button" aria-pressed="false" disabled>开启译文播报</button>
+          <span id="speech-status" role="status" aria-live="polite">播报默认关闭，开始收听后可手动开启</span>
+          <button class="speech-link" id="speech-settings" type="button">播报设置</button>
+        </div>
+        <div class="speech-options">
+          <label>播报音量 <input id="speech-volume" type="range" min="0" max="1" step="0.05" value="0.8" /></label>
+          <button class="speech-link" id="speech-jump" type="button" title="停止当前声音，跳过未读内容，从之后的新句子开始" hidden>跳到最新内容</button>
+          <button class="speech-link" id="speech-replay" type="button" title="从头读出中断句，读完后关闭播报" hidden>重播中断句</button>
+          <span id="speech-backlog"></span>
+          <span>麦克风收听时建议佩戴耳机，避免重复识别播报声。</span>
+        </div>
+        <p class="speech-reading" id="speech-reading" hidden></p>
+      </section>
       <div class="pinned-caption" id="pinned-caption" hidden aria-hidden="true">
         <div class="caption-head"><span>译文</span><span class="caption-badge" id="pinned-badge">等待开始</span></div>
         <p class="pinned-translation placeholder" id="pinned-translation">字幕会显示在这里</p>
@@ -61,6 +76,7 @@
       <div class="tab-bar" role="tablist" aria-label="设置分类">
         <button class="tab-button active" id="tab-connection-button" type="button" role="tab" aria-selected="true" aria-controls="tab-connection">连接设置</button>
         <button class="tab-button" id="tab-language-button" type="button" role="tab" aria-selected="false" aria-controls="tab-language">语言设置</button>
+        <button class="tab-button" id="tab-speech-button" type="button" role="tab" aria-selected="false" aria-controls="tab-speech">语音播报</button>
       </div>
       <section class="tab-panel" id="tab-connection" role="tabpanel" aria-labelledby="tab-connection-button">
       <p class="modal-copy">首次使用请填写千问AI平台的通用 API Key。信息只保存在当前浏览器中，不会写入项目文件。</p>
@@ -88,6 +104,25 @@
         </div>
         <label class="language-field mode-field"><span>识别模式</span><select id="caption-mode"><option value="realtime">低延迟断句（默认）</option><option value="classic">标准断句（兼容）</option></select></label>
         <p class="modal-copy tab-hint">语言与识别模式仅在聆听未开始时可修改；开始聆听后会自动锁定，识别模式在下次开始聆听时生效。</p>
+      </section>
+      <section class="tab-panel" id="tab-speech" role="tabpanel" aria-labelledby="tab-speech-button" hidden>
+        <p class="modal-copy">使用 Qwen3-TTS-Flash-Realtime 朗读新的中文译文。每次收听均需手动开启，保存设置不会开始播报。</p>
+        <form id="speech-form">
+          <label class="form-label" for="speech-key">阿里云百炼语音 API Key</label>
+          <div class="key-field"><input id="speech-key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" required /></div>
+          <p class="form-note">语音 Key 与识别、翻译设置独立。请使用所选地域的百炼 Key，并开通语音模型权限。</p>
+          <div class="speech-config-grid">
+            <label class="language-field"><span>服务地域</span><select id="speech-region"><option value="beijing">中国内地（北京）</option><option value="singapore">国际（新加坡）</option></select></label>
+            <label class="language-field"><span>音色</span><select id="speech-voice"><option value="Cherry">Cherry · 女声</option><option value="Serena">Serena · 女声</option><option value="Ethan">Ethan · 男声</option><option value="Chelsie">Chelsie · 女声</option></select></label>
+            <label class="language-field"><span>语速</span><select id="speech-rate"><option value="1">自然 · 1.0×</option><option value="1.1">稍快 · 1.1×</option><option value="1.2">快速 · 1.2×</option></select></label>
+          </div>
+          <p class="form-note">更改音色或语速后保存，会关闭当前播报；手动重新开启后生效。</p>
+          <label class="speech-remember"><input id="speech-remember" type="checkbox" /> 在此浏览器记住语音 Key</label>
+          <p class="form-note">未勾选时仅在当前标签页会话中保留。开启或试听时，译文会发送至所选地域的阿里云服务，可能产生费用。</p>
+          <button class="test-button" id="speech-preview" type="button">试听语音</button>
+          <p class="form-note" id="speech-result" role="status" aria-live="polite">试听会朗读一段固定的中文短句。</p>
+          <button class="save-button" type="submit">保存播报设置</button>
+        </form>
       </section>
     </div>
   </div>
