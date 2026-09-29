@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, audioSamples = 2400 } = {}) {
+export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200 } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
   const stats = { connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
     fishRequests: [], fishAborted: 0, holdFish: false };
@@ -24,6 +24,10 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     stats.fishRequests.push({ authorization: req.headers.authorization, model: req.headers.model, body });
+    if (fishStatus !== 200) {
+      res.writeHead(fishStatus, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ message: `Upstream echoed ${req.headers.authorization} and ${body.text}` }));
+    }
     res.on('close', () => { if (!res.writableFinished) stats.fishAborted++; });
     res.writeHead(200, { 'Content-Type': 'audio/pcm' });
     const pcm = Buffer.alloc(audioSamples * 2);

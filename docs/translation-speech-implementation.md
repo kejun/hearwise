@@ -61,7 +61,16 @@ Fish 独立设置语速（0.5–2.0）、延迟模式（balanced / normal / low�
 
 ## 观测与验证
 
-`speech_event` 日志包含 consumer/run、segment/unit、首包耗时、样本数、response 状态/重试次数、token usage（上游提供时）、缓冲时长、缺样次数和退出原因。日志不含 Key、完整译文和 PCM。待播时长是「未消费 PCM + 未生成文字按 5 字/秒估算」，不是与原声的精确延迟，也不是词级字幕对齐。
+`speech_event` 日志包含 consumer/run、provider/model、segment/unit、首包耗时、样本数、response 状态/重试次数、token usage（上游提供时）、缓冲时长、缺样次数和退出原因。`speech.error` 记录与页面一致的 `message`；Fish 错误额外包含 `code`、`stage`、`elapsedMs`、`attempts`、`audioReceived`，以及适用的 `httpStatus` / `networkCode`。日志不含 Key、音色 ID、完整译文、上游原始错误正文和 PCM。待播时长是「未消费 PCM + 未生成文字按 5 字/秒估算」，不是与原声的精确延迟，也不是词级字幕对齐。
+
+### 试听失败排查
+
+浏览器 `/ws/tts` 的 HTTP 101 表示 WebSocket 握手成功，不代表 Fish 已成功合成音频。先看「试听语音」下方提示，或 WebSocket Messages 中收到的 `speech.error`；也可复制服务端同一 consumer 的错误日志。不要分享发送给服务端的 `speech.preview` 消息，其中包含 Key。
+
+- `FISH_HTTP_ERROR`：Fish 返回非成功 HTTP 状态。401 检查 Fish Key，403 检查权限，402 检查额度，429 等待后重试；400/404/422 检查音色 ID 和设置。页面与日志保留具体 HTTP 状态码。
+- `FISH_NETWORK_ERROR`：运行 Hearwise 的 Node 服务未能完成网络请求。`networkCode` 可区分 DNS、连接、TLS 证书等问题；只保留白名单错误码，不输出 fetch 原始 cause、请求头或代理 URL。浏览器能打开 Fish 网站不能单独证明 Node 服务的网络路径正常。
+- `FISH_RESPONSE_TIMEOUT`：15 秒内尚未收到响应头，可能包括上游排队或生成等待，不能仅据此认定连接失败。`FISH_GENERATION_TIMEOUT` 表示整个生成请求超过 45 秒；`stage=audio` 表示已收到成功响应头、正在接收音频。
+- `audioReceived=false` 表示当前失败的合成请求尚未输出 PCM。旧版本只有 `speech.error`、`bufferedMs`、`underruns` 的日志无法还原错误原因，需更新并重新试听。
 
 ```bash
 npm test

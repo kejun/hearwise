@@ -1,28 +1,39 @@
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { QwenTts } from './qwen-tts.mjs';
-import { FishTts } from './fish-tts.mjs';
+import { FishTts, FishTtsError } from './fish-tts.mjs';
 import { speechUnits } from './speech-scheduler.mjs';
-import { AUDIO_HEADER_BYTES, PREVIEW_TEXT, TTS_SAMPLE_RATE, speechConfig } from './public/speech-protocol.js';
+import { AUDIO_HEADER_BYTES, PREVIEW_TEXT, TTS_MODEL, TTS_INSTRUCT_MODEL, TTS_SAMPLE_RATE, speechConfig } from './public/speech-protocol.js';
 
 export function createSpeechService({ store, setHead = () => {}, createTts = config => config.provider === 'fish' ? new FishTts(config) : new QwenTts(config),
   now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, onMetric = () => {} }) {
   const consumers = new Set();
   function accept(client) {
     const owner = randomUUID();
+    const createdAt = now();
     let consumer, epoch, tts, timer, initialized = false, closed = false, busy = false;
+    let provider, model, activeKey;
     let cursor = 0, throughSequence = null, units = [], segment, unitIndex = 0, playedUnit = 0, sentSamples = 0, consumedSamples = 0;
     let lastProgress = now(), drainAt = null, preview = false, replay = null, lastState = '', lastBacklog = '', underruns = 0;
     let transcript = null, position = 0, waitingTranslation = null;
     const completedSamples = new Map();
-    const metric = (event, extra = {}) => onMetric({ event, consumer: owner, run: consumer?.runId, ...extra });
+    const metric = (event, extra = {}) => onMetric({ event, consumer: owner, run: consumer?.runId, provider, model, ...extra });
     const send = data => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ ...data, epoch })); };
     const dispose = (graceful = false) => {
       if (closed) return;
       closed = true; clearInterval(timer); clearTimeout(initTimeout); tts?.close(graceful); tts = null;
-      consumers.delete(consumer); setHead(owner, null); units = [];
+      consumers.delete(consumer); setHead(owner, null); units = []; activeKey = null;
     };
-    const finish = (type, message) => { send({ type, message }); metric(type, { bufferedMs: Math.round((sentSamples - consumedSamples) / 24), underruns }); dispose(type === 'speech.finished'); client.close(); };
+    const finish = (type, message, error) => {
+      message = String(message || '语音服务暂时不可用');
+      if (activeKey) message = message.replaceAll(activeKey, '[redacted]');
+      message = message.slice(0, 500);
+      const diagnostics = error instanceof FishTtsError ? error.diagnostics : {};
+      send({ type, message, ...(type === 'speech.error' ? diagnostics : {}) });
+      metric(type, { message, elapsedMs: now() - createdAt, ...diagnostics,
+        bufferedMs: Math.round((sentSamples - consumedSamples) / 24), underruns });
+      dispose(type === 'speech.finished'); client.close();
+    };
     const state = (name, message, extra = {}) => {
       const data = JSON.stringify({ name, message, ...extra });
       if (data !== lastState) { lastState = data; send({ type: 'speech.state', state: name, message, ...extra }); }
@@ -126,7 +137,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
           state('playing', drainAt == null ? '正在播报' : '正在读完最后几句', { queuedMs, canJump: queuedMs > 8000 });
         }
       } catch (error) {
-        if (!closed) finish('speech.error', error.message || '语音服务暂时不可用');
+        if (!closed) finish('speech.error', error.message || '语音服务暂时不可用', error);
       } finally { busy = false; }
     };
     client.on('message', (raw, binary) => {
@@ -155,6 +166,8 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
         if (!Number.isInteger(msg.epoch) || msg.epoch < 1 || msg.epoch > 0xffffffff) throw new Error('播报会话无效');
         epoch = msg.epoch; preview = msg.type === 'speech.preview';
         const config = speechConfig(msg.config);
+        provider = config.provider; activeKey = config.key;
+        model = provider === 'fish' ? config.model : config.prompt ? TTS_INSTRUCT_MODEL : TTS_MODEL;
         if (msg.type === 'speech.transcript') {
           if (!['original', 'translation'].includes(msg.kind)) throw new Error('请选择播报原文或译文');
           const snapshot = store.speechTranscript(msg.listeningId);
