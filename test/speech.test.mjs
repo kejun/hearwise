@@ -407,6 +407,10 @@ test('首次等待说明不被缓冲统计覆盖；全文原文允许非中文�
   event({ type: 'speech.state', state: 'waiting', message: '等待新的完整译文' });
   assert.match(states.at(-1).message, /说话人说完一句/);
   event({ type: 'speech.backlog', estimatedSeconds: 0, waiting: 0 }); assert.match(states.at(-1).message, /说话人说完一句/);
+  event({ type: 'speech.ready', incremental: true });
+  event({ type: 'speech.state', state: 'waiting', message: '等待新的完整译文' });
+  event({ type: 'speech.backlog', estimatedSeconds: 0, waiting: 0 });
+  assert.match(states.at(-1).message, /实验性短句/);
   event({ type: 'speech.state', state: 'buffering', message: '正在准备语音' }); assert.match(states.at(-1).message, /第一句语音/);
   event({ type: 'speech.unit', unit: 1, text: '完整译文。' }); players[0].callback({ type: 'started', unit: 1 });
   assert.equal(states.at(-1).message, '正在播报');
