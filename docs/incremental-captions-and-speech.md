@@ -95,10 +95,9 @@ qwen-mt-flash SSE首 token、Fish duplex、原生 Qwen text/stash ASR、LiveTran
 
 ## 7. 实施记录
 
-- `0cd191e` 先提交本文；P0 请求局部取消、预留最终翻译容量、queue/model/capture 观测；P1 source/target frontier 与独立 spans、慢 MT 合并、最多一份修订上下文去抖；P2 实验性结构分句、不可变 source units、消费者 coverage、final 残余、冲突停止
-- 本地 Node 24.19：初次完整回归 221/221；后续精确提交的完整测试、CI 和 Chromium 结果见 PR 的验证记录
+- `0e00a32` 先提交本文；P0 请求局部取消、预留最终翻译容量、queue/model/capture 观测；P1 source/target frontier 与独立 spans、慢 MT 合并、最多一份修订上下文去抖；P2 实验性结构分句、不可变 source units、消费者 coverage、final 残余、冲突停止
+- 本地 Node 24.19：完整回归 228/228；对应代码 tree `68110bf68cb44dbd8c233e4cd5df301f1df481e1`。后续精确提交的 CI 和 Chromium 结果见 PR 的验证记录
 - 新的 production-server/stub-provider 测试确实收到 final 前 PCM，覆盖天气样例、AI 新闻及访谈独立分句；天气/新闻 fixture 文本和时间均为合成输入，绝非供应商延迟测量
 - 可见字符串擦除对照只证明合成 transient rewrite trace 上的改善。正常 mutable tail 仍会变化；持续真实修订会显式 rebase；尚未做真实录音质量/自然度/延迟评价
-- 本地 Playwright Chromium 下载返回损坏/截断文件，不能声称本地真实浏览器通过；使用 CI Chromium fixture 与上传截图进行验证，若 CI 尚未完成必须标明
+- 本地 Playwright Chromium 下载返回损坏/截断文件；已有系统 Chromium 又被沙盒 socket 权限阻止，不能声称本地真实浏览器通过；使用 CI Chromium fixture 与上传截图进行验证，若 CI 尚未完成必须标明
 - 保留 Qwen commit PCM 和 Fish HTTP PCM，不引入 MT SSE/Fish duplex/provider 迁移/真实 key/付费调用；完整 transcript 和手动原文/译文 replay 仍 canonical
-
