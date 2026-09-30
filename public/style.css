@@ -150,3 +150,21 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .transcript-speech .active { background: var(--speech-accent); color: #fff; border-color: var(--speech-accent); }
 #transcript-speech-status { margin: 10px 0 0; color: #69776d; font-size: 12px; line-height: 1.6; }
 @media (max-width: 700px) { .speech-bar { min-height: 310px; padding: 23px 22px 28px; } .speech-actions > span { flex-basis: 100%; order: 1; line-height: 1.6; } .speech-config-grid { grid-template-columns: 1fr; } }
+
+/* Saved listening metadata stays separate from transcripts and speech. */
+#record-title,.history-open strong{overflow-wrap:anywhere;min-width:0}
+.record-actions{gap:10px;flex-wrap:wrap}
+.record-editor,.record-notes{background:#fff;border:1px solid #e5e7df;border-radius:14px;padding:20px 24px;margin:16px 0}
+.record-editor label{display:block;font-size:14px;font-weight:650;margin:12px 0 8px}
+.record-editor label:first-child{margin-top:0}
+.record-editor label span,.record-help{color:#758277;font-size:13px;font-weight:400}
+.record-editor input,.record-editor textarea{display:block;width:100%;font:inherit;line-height:1.6;border:1px solid #cbd8cd;border-radius:8px;padding:10px 12px;background:#fff;color:#263b30}
+.record-editor textarea{resize:vertical;min-height:120px}
+.record-editor textarea:focus-visible{outline:3px solid #adbd4b;outline-offset:3px}
+.record-editor-actions{display:flex;gap:10px;margin-top:16px}
+.record-editor-actions #save-record{background:#315f4d;color:#fff}
+.record-notes h3{margin:0;font-size:14px;color:#536c5d}
+.record-notes p{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7;margin:10px 0 0;font-size:14px}
+.record-feedback{font-size:13px;color:#315f4d;margin:8px 0}
+.record-feedback:empty{display:none}
+@media(max-width:700px){.record-editor,.record-notes{padding:16px}.record-editor input,.record-editor textarea{font-size:16px}}

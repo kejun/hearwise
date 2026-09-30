@@ -44,7 +44,7 @@ function app(t) {
     window: { addEventListener() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
-    fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, body: JSON.parse(options.body), resolve, reject })); }
+    fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, body: options?.body ? JSON.parse(options.body) : null, resolve, reject })); }
   });
   const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   vm.runInContext(source.replace(/^import[^\n]+\n/gm, ''), context);
@@ -248,4 +248,101 @@ test('连接关闭取消临时工作，迟到的响应不能盖掉断线提示',
   await a.reply(0, 429, { code: 'FINAL_TRANSLATION_BUSY' });
   assert.equal(a.element('hint').textContent, '连接已断开，请重试');
   assert.equal(a.element('caption-badge').textContent, '等待开始');
+});
+
+function metadataApp(t) {
+  const a = app(t);
+  a.run(`els.historyView.hidden = true; listeningId = 'record-1'; detail = { listening: { id: 'record-1', title: '原始标题', notes: '' }, runs: [] }; renderRecordMetadata();`);
+  return a;
+}
+test('历史标题备注编辑可取消、重复打开、清空备注，空标题不提交', async t => {
+  const a = metadataApp(t);
+  a.element('edit-record').emit('click');
+  assert.equal(a.element('record-title-input').value, '原始标题');
+  a.element('record-title-input').value = '取消的标题';
+  a.element('record-notes-input').value = '未保存';
+  a.element('cancel-record').emit('click');
+  assert.equal(a.element('record-editor').hidden, true);
+  assert.equal(a.run('detail.listening.title'), '原始标题');
+  a.element('edit-record').emit('click');
+  assert.equal(a.element('record-title-input').value, '原始标题');
+  assert.equal(a.element('record-notes-input').value, '');
+  a.element('record-title-input').value = '   ';
+  a.element('record-editor').emit('submit');
+  assert.equal(a.requests.length, 0);
+  assert.equal(a.element('record-title-input').validationMessage, '请输入标题');
+  a.element('record-title-input').value = ' 新标题 ';
+  a.element('record-title-input').emit('input');
+  a.element('record-notes-input').value = '<script>保持纯文本</script>\n第二行';
+  a.element('record-editor').emit('submit');
+  a.element('record-editor').emit('submit');
+  assert.equal(a.requests.length, 1);
+  assert.equal(a.requests[0].options.method, 'PATCH');
+  assert.equal(a.requests[0].body.title, '新标题');
+  assert.equal(a.element('save-record').disabled, true);
+  await a.reply(0, 200, { listening: { id: 'record-1', title: '新标题', notes: '<script>保持纯文本</script>\n第二行' } });
+  assert.equal(a.element('record-title').textContent, '新标题');
+  assert.equal(a.element('record-notes').textContent, '<script>保持纯文本</script>\n第二行');
+  assert.equal(a.element('record-editor').hidden, true);
+  assert.equal(a.element('record-edit-status').textContent, '标题与备注已保存');
+  a.element('edit-record').emit('click');
+  a.element('record-notes-input').value = '';
+  a.element('record-editor').emit('submit');
+  await a.reply(1, 200, { listening: { id: 'record-1', title: '新标题', notes: '' } });
+  assert.equal(a.element('record-notes-panel').hidden, true);
+});
+test('保存失败保留草稿，可重试；离开记录后的迟到响应不覆盖另一记录', async t => {
+  const a = metadataApp(t);
+  a.element('edit-record').emit('click');
+  a.element('record-title-input').value = '待保存';
+  a.element('record-editor').emit('submit');
+  await a.reply(0, 500, { error: '磁盘不可写' });
+  assert.equal(a.element('record-editor').hidden, false);
+  assert.equal(a.element('record-title-input').value, '待保存');
+  assert.equal(a.element('record-edit-error').textContent, '磁盘不可写');
+  assert.equal(a.element('save-record').disabled, false);
+  a.element('record-editor').emit('submit');
+  a.run(`closeRecordEditor(); listeningId = 'record-2'; detail = { listening: { id: 'record-2', title: '另一记录' }, runs: [] };`);
+  await a.reply(1, 200, { listening: { id: 'record-1', title: '待保存', notes: '' } });
+  assert.equal(a.run('detail.listening.title'), '另一记录');
+  assert.equal(a.element('record-edit-status').textContent, '');
+});
+test('活动收听不可编辑，保存超时后表单恢复并保留输入', async t => {
+  const a = metadataApp(t);
+  a.run(`detail.runs = [{ state: 'active' }]; renderRecordMetadata(); openRecordEditor();`);
+  assert.equal(a.run('editingRecordId'), null);
+  assert.equal(a.element('edit-record').disabled, true);
+  a.run(`detail.runs = []; openRecordEditor();`);
+  a.element('record-editor').emit('submit');
+  const req = a.requests[0];
+  req.options.signal.addEventListener('abort', () => req.reject(new Error('aborted')));
+  await a.tick(10000);
+  assert.match(a.element('record-edit-error').textContent, /保存超时/);
+  assert.equal(a.element('save-record').disabled, false);
+  assert.equal(a.element('record-title-input').value, '原始标题');
+});
+
+
+test('保存时进入历史页，成功后刷新历史列表', async t => {
+  const a = metadataApp(t);
+  a.run(`globalThis.historyReloads = 0; reloadHistory = async () => { historyReloads++; };`);
+  a.element('edit-record').emit('click');
+  a.element('record-title-input').value = '历史新标题';
+  a.element('record-editor').emit('submit');
+  a.run(`closeRecordEditor(); els.historyView.hidden = false;`);
+  await a.reply(0, 200, { listening: { id: 'record-1', title: '历史新标题', notes: '' } });
+  assert.equal(a.run('historyReloads'), 1);
+  assert.equal(a.run('detail.listening.title'), '历史新标题');
+});
+test('保存前发起的详情刷新晚返回，不得覆盖刚保存的标题备注', async t => {
+  const a = metadataApp(t);
+  a.run(`detail.segments = []; renderDetail = renderRecordMetadata; fetchDetail();`);
+  a.element('edit-record').emit('click');
+  a.element('record-title-input').value = '刚保存';
+  a.element('record-notes-input').value = '保留备注';
+  a.element('record-editor').emit('submit');
+  await a.reply(1, 200, { listening: { id: 'record-1', title: '刚保存', notes: '保留备注' } });
+  await a.reply(0, 200, { listening: { id: 'record-1', title: '旧标题', notes: '' }, runs: [], segments: [], knowledge: [], segmentCount: 0 });
+  assert.equal(a.run('detail.listening.title'), '刚保存');
+  assert.equal(a.run('detail.listening.notes'), '保留备注');
 });

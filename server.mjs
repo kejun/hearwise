@@ -82,12 +82,14 @@ function sameOrigin(req) {
   } catch { return false; }
 }
 async function readJson(req) {
-  let body = '';
+  const chunks = [];
+  let bytes = 0;
   for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 32_000) throw new Error('请求内容过长');
+    bytes += chunk.length;
+    if (bytes > 32_000) throw new Error('请求内容过长');
+    chunks.push(chunk);
   }
-  return JSON.parse(body);
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 function broadcast(listeningId, data) {
   for (const ws of listeners.get(listeningId) || []) if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
@@ -236,7 +238,7 @@ function resumeProcessing(id, key) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  if ((req.method === 'POST' || req.method === 'DELETE') && !sameOrigin(req)) return sendJson(res, 403, { error: '仅允许同源请求' });
+  if (['POST', 'PATCH', 'DELETE'].includes(req.method) && !sameOrigin(req)) return sendJson(res, 403, { error: '仅允许同源请求' });
   if (req.method === 'POST' && url.pathname === '/api/test-connection') {
     try {
       const { key } = await readJson(req);
@@ -274,6 +276,19 @@ const server = http.createServer(async (req, res) => {
     const detail = store.detail(match[1], page);
     return detail ? sendJson(res, 200, { ...detail, processingAvailable: keys.has(match[1]) }) : sendJson(res, 404, { error: '收听记录不存在' });
   }
+  if (match && req.method === 'PATCH' && !match[2]) {
+    let input;
+    try { input = await readJson(req); }
+    catch { return sendJson(res, 400, { error: '标题和备注请求格式无效' }); }
+    try {
+      const result = store.updateMetadata(match[1], input);
+      if (result === 'missing') return sendJson(res, 404, { error: '收听记录不存在' });
+      if (result === 'active') return sendJson(res, 409, { error: '请先停止这条收听，再修改标题或备注' });
+      return sendJson(res, 200, { listening: result });
+    } catch (error) {
+      return sendJson(res, error instanceof TypeError ? 400 : 500, { error: errorMessage(error) });
+    }
+  }
   if (match && req.method === 'DELETE' && !match[2]) {
     try {
       const result = store.removeListening(match[1]);
@@ -300,12 +315,13 @@ const server = http.createServer(async (req, res) => {
     if (kind !== 'original' && kind !== 'translation') return sendJson(res, 400, { error: '下载参数无效，仅支持原文或译文' });
     const result = store.exportText(match[1], kind);
     if (!result) return sendJson(res, 404, { error: '收听记录不存在' });
-    if (!result.text.trim()) return sendJson(res, 409, { error: kind === 'original' ? '尚无原文可下载' : '尚无完成翻译的句子可下载' });
+    if (!result.hasBody) return sendJson(res, 409, { error: kind === 'original' ? '尚无原文可下载' : '尚无完成翻译的句子可下载' });
     const label = kind === 'original' ? '原文' : '译文';
-    const safeTitle = result.title.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || '收听记录';
+    const safeTitle = Array.from(result.title.toWellFormed().replace(/[\\/:*?"<>|\s\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]+/g, '-')
+      .replace(/^[-.]+|[-.]+$/g, '')).slice(0, 80).join('') || '收听记录';
     const filename = `${safeTitle}-${label}.txt`;
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store',
-      'Content-Disposition': `attachment; filename="transcript-${kind}.txt"; filename*=UTF-8''${encodeURIComponent(filename)}` });
+      'Content-Disposition': `attachment; filename="transcript-${kind}.txt"; filename*=UTF-8''${encodeURIComponent(filename).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}` });
     return res.end(result.text);
   }
   if (match && match[2] === 'segments' && req.method === 'GET') {

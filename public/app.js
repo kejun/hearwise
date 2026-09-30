@@ -21,6 +21,9 @@ const els = {
   historyView: $('history-view'), historyList: $('history-list'), historyMore: $('history-more'),
   historyError: $('history-error'), back: $('back-to-listening'),
   recordPanel: $('record-panel'), recordTitle: $('record-title'), processingStatus: $('processing-status'),
+  editRecord: $('edit-record'), recordEditor: $('record-editor'), recordTitleInput: $('record-title-input'),
+  recordNotesInput: $('record-notes-input'), recordNotes: $('record-notes'), recordNotesPanel: $('record-notes-panel'),
+  saveRecord: $('save-record'), cancelRecord: $('cancel-record'), recordEditError: $('record-edit-error'), recordEditStatus: $('record-edit-status'),
   retryProcessing: $('retry-processing'), knowledgeList: $('knowledge-list'), knowledgeCount: $('knowledge-count'),
   transcriptList: $('transcript-list'), runsPanel: $('runs-panel'), runsList: $('runs-list'), loadMore: $('load-more'), downloadSelect: $('download-select'),
   knowledgeToggleAll: $('knowledge-toggle-all'), knowledgeTrack: $('knowledge-track'), backToTop: $('back-to-top'),
@@ -72,6 +75,9 @@ let listeningId = null;
 let detail = null;
 let detailPage = 0;
 let historyPage = 0;
+let metadataVersion = 0;
+let editingRecordId = null;
+let savingRecord = false;
 let currentSegmentId = null;
 let liveProcessing = null;
 const detailPoller = createProcessingPoller({
@@ -352,6 +358,8 @@ updateBackToTop();
 
 function setPhase(next, message) {
   phase = next;
+  if (next !== 'idle') closeRecordEditor();
+  renderRecordMetadata();
   const active = next === 'listening';
   const tabInput = els.audioInput.value === 'tab';
   els.liveDot.classList.toggle('active', active);
@@ -792,15 +800,104 @@ function renderProcessing() {
   els.processingStatus.textContent = view.text;
   els.retryProcessing.hidden = !view.canRetry;
 }
+function renderRecordMetadata() {
+  if (!detail) return;
+  els.recordTitle.textContent = detail.listening.title;
+  const notes = detail.listening.notes || '';
+  els.recordNotes.textContent = notes;
+  els.recordNotesPanel.hidden = !notes.trim();
+  els.editRecord.disabled = phase !== 'idle' || detail.runs.some(run => run.state === 'active') || savingRecord;
+}
+function closeRecordEditor() {
+  editingRecordId = null;
+  els.recordEditor.hidden = true;
+  els.editRecord.setAttribute('aria-expanded', 'false');
+  els.recordEditError.hidden = true;
+  els.recordEditStatus.textContent = '';
+}
+function openRecordEditor() {
+  if (!detail || phase !== 'idle' || savingRecord || editingRecordId || detail.runs.some(run => run.state === 'active')) return;
+  editingRecordId = listeningId;
+  els.recordTitleInput.value = detail.listening.title;
+  els.recordTitleInput.setCustomValidity('');
+  els.recordNotesInput.value = detail.listening.notes || '';
+  els.recordEditError.hidden = true;
+  els.recordEditStatus.textContent = '';
+  els.recordEditor.hidden = false;
+  els.editRecord.setAttribute('aria-expanded', 'true');
+  els.recordTitleInput.focus();
+}
+async function saveRecordMetadata(event) {
+  event.preventDefault();
+  if (!editingRecordId || editingRecordId !== listeningId || savingRecord) return;
+  const title = els.recordTitleInput.value.trim();
+  if (!title) {
+    els.recordTitleInput.setCustomValidity('请输入标题');
+    els.recordTitleInput.reportValidity();
+    return;
+  }
+  const requestedId = editingRecordId;
+  savingRecord = true;
+  els.saveRecord.disabled = els.cancelRecord.disabled = true;
+  els.recordTitleInput.disabled = els.recordNotesInput.disabled = true;
+  els.saveRecord.textContent = '保存中…';
+  els.recordEditError.hidden = true;
+  renderRecordMetadata();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(`/api/listenings/${requestedId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({ title, notes: els.recordNotesInput.value })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '保存失败，请稍后重试');
+    if (listeningId !== requestedId || detail?.listening.id !== requestedId) return;
+    metadataVersion++;
+    detail.listening = { ...detail.listening, ...result.listening };
+    renderRecordMetadata();
+    if (!els.historyView.hidden) {
+      reloadHistory().catch(error => {
+        els.historyError.textContent = error.message || '历史列表刷新失败，请重试';
+        els.historyError.hidden = false;
+      });
+    }
+    if (editingRecordId === requestedId) {
+      closeRecordEditor();
+      els.recordEditStatus.textContent = '标题与备注已保存';
+      els.editRecord.focus();
+    }
+  } catch (error) {
+    if (editingRecordId !== requestedId) return;
+    els.recordEditError.textContent = controller.signal.aborted ? '保存超时，请重试；如已保存，重试不会重复创建记录' : (error.message || '保存失败，请稍后重试');
+    els.recordEditError.hidden = false;
+  } finally {
+    clearTimeout(timeout);
+    savingRecord = false;
+    els.saveRecord.disabled = els.cancelRecord.disabled = false;
+    els.recordTitleInput.disabled = els.recordNotesInput.disabled = false;
+    els.saveRecord.textContent = '保存';
+    renderRecordMetadata();
+  }
+}
+els.editRecord.addEventListener('click', openRecordEditor);
+els.recordTitleInput.addEventListener('input', () => els.recordTitleInput.setCustomValidity(''));
+els.recordEditor.addEventListener('submit', saveRecordMetadata);
+els.cancelRecord.addEventListener('click', () => { closeRecordEditor(); els.editRecord.focus(); });
+els.recordEditor.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !savingRecord) { event.preventDefault(); closeRecordEditor(); els.editRecord.focus(); }
+});
+
 function renderDetail() {
   if (!detail) return;
   els.recordPanel.hidden = false;
-  els.recordTitle.textContent = detail.listening.title;
+  renderRecordMetadata();
   renderRuns(); renderTranscript(); renderKnowledge(); renderProcessing();
 }
 async function fetchDetail(page = 1, append = false) {
   if (!listeningId) return;
   const requestedId = listeningId;
+  const metadataAtStart = metadataVersion;
   const processingAtStart = liveProcessing;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
@@ -831,6 +928,9 @@ async function fetchDetail(page = 1, append = false) {
     result.processing = liveProcessing.processing;
     result.processingAvailable = liveProcessing.processingAvailable;
   }
+  if (metadataVersion !== metadataAtStart && detail?.listening.id === requestedId) {
+    result.listening = { ...result.listening, title: detail.listening.title, notes: detail.listening.notes };
+  }
   detail = result; detailPage = append ? page : Math.max(1, detailPage); renderDetail();
 }
 function showListening() {
@@ -838,6 +938,7 @@ function showListening() {
   updatePinnedCaption();
 }
 async function showHistory() {
+  closeRecordEditor();
   if (phase !== 'idle') return;
   speech.stop();
   detailPoller.stop(); showListening();
@@ -887,6 +988,7 @@ async function deleteListening(item, button) {
   }
 }
 async function selectListening(id) {
+  closeRecordEditor();
   speech.stop();
   detailPoller.stop();
   listeningId = id; detail = null; detailPage = 0; liveSegments.clear(); liveKnowledge.clear(); liveProcessing = null;
@@ -904,6 +1006,7 @@ async function selectListening(id) {
   startPolling();
 }
 function resetListening() {
+  closeRecordEditor();
   speech.stop();
   detailPoller.stop();
   clearInterval(segmentPollTimer);
@@ -950,7 +1053,8 @@ async function downloadTranscript(kind) {
     const disposition = response.headers.get('Content-Disposition') || '';
     const marker = "filename*=UTF-8''";
     const start = disposition.indexOf(marker);
-    const fallback = `${detail?.listening.title || '收听记录'}-${kind === 'original' ? '原文' : '译文'}.txt`;
+    const fallbackTitle = Array.from((detail?.listening.title || '收听记录').replace(/[\\/:*?"<>|\s\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]+/g, '-').replace(/^[-.]+|[-.]+$/g, '')).slice(0, 80).join('') || '收听记录';
+    const fallback = `${fallbackTitle}-${kind === 'original' ? '原文' : '译文'}.txt`;
     const name = start >= 0 ? decodeURIComponent(disposition.slice(start + marker.length).split(';')[0]) : fallback;
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
