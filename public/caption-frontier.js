@@ -13,22 +13,29 @@ function displayBoundary(text, retain) {
   return candidate.replace(/[\p{Script=Latin}\d'’-]+$/u, '');
 }
 export function createCaptionFrontier({ mutableCharacters = 12 } = {}) {
-  let committed = '', previous = '', context = '', displayed = '', pending = false;
+  let committed = '', previous = '', context = '', displayed = '', pending = false, revisionContext = null;
   return {
-    reset() { committed = previous = context = displayed = ''; pending = false; },
+    reset() { committed = previous = context = displayed = ''; pending = false; revisionContext = null; },
     update(text, { sourceContext = text, final = false } = {}) {
       text = String(text ?? ''); sourceContext = String(sourceContext ?? '');
       if (final) {
         const corrected = pending || Boolean(committed && !text.startsWith(committed));
-        committed = previous = displayed = text; context = sourceContext; pending = false;
+        committed = previous = displayed = text; context = sourceContext; pending = false; revisionContext = null;
         return { committed: text, tail: '', text, correctionPending: false, corrected };
       }
       let correctionPending = false;
       if (committed && !text.startsWith(committed)) {
-        // Rebase only the affected suffix, visibly. Never freeze a growing utterance until final.
+        // One distinct-context confirmation protects a committed prefix from transient deep rewrites.
+        // It is a display debounce, NOT permission to speak. Never hold through a second new context.
+        if (revisionContext == null || sourceContext === revisionContext) {
+          revisionContext = sourceContext;
+          return { committed, tail: displayed.slice(committed.length), text: displayed, correctionPending: true, corrected: false };
+        }
+        // Rebase only the affected suffix, visibly, and let subsequent context continue immediately.
         committed = displayBoundary(commonPrefix(committed, text), 0);
         previous = ''; context = ''; pending = true; correctionPending = true;
       }
+      revisionContext = null;
       {
         if (context && sourceContext.length > context.length && sourceContext.startsWith(context)) {
           const agreed = displayBoundary(commonPrefix(previous, text), mutableCharacters);
