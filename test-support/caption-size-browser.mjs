@@ -18,18 +18,26 @@ export async function verifyCaptionSizeBrowser(browser) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 950 }, reducedMotion: 'reduce' });
   const page = await context.newPage();
   const errors = [], measurements = [], migrations = [];
+  let expectedSize;
   page.on('pageerror', error => errors.push(error.message));
   const slider = page.getByRole('slider', { name: '译文字号', exact: true });
   const assertSize = async (size, { stored = String(size), mobile = false } = {}) => {
-    await page.waitForFunction(({ size, stored, key }) =>
-      document.querySelector('#translation-size').value === String(size) &&
-      document.documentElement.style.getPropertyValue('--translation-size') === String(size) &&
-      localStorage.getItem(key) === stored, { size, stored, key: SIZE_KEY });
+    const expected = { translation: size * (mobile ? .72 : 1), pinned: size * (mobile ? .5 : .6), original: mobile ? 17 : 22 };
+    expectedSize = { size, stored, mobile, fonts: expected };
+    // Reduced-motion CSS gives every element a .01ms transition with the default
+    // transition-property: all. Wait for rendered font sizes, not only synchronous
+    // input/storage updates: a first style read can still sample the old font size.
+    await page.waitForFunction(({ size, stored, key, expected }) => {
+      if (document.querySelector('#translation-size').value !== String(size) ||
+        document.documentElement.style.getPropertyValue('--translation-size') !== String(size) ||
+        localStorage.getItem(key) !== stored) return false;
+      return Object.entries({ translation: '#translation', pinned: '#pinned-translation', original: '#original' })
+        .every(([name, selector]) => Math.abs(parseFloat(getComputedStyle(document.querySelector(selector)).fontSize) - expected[name]) < .001);
+    }, { size, stored, key: SIZE_KEY, expected }, { timeout: 5000 });
     const actual = await page.evaluate(() => {
       const fontSize = selector => parseFloat(getComputedStyle(document.querySelector(selector)).fontSize);
       return { translation: fontSize('#translation'), pinned: fontSize('#pinned-translation'), original: fontSize('#original') };
     });
-    const expected = { translation: size * (mobile ? .72 : 1), pinned: size * (mobile ? .5 : .6), original: mobile ? 17 : 22 };
     for (const key of Object.keys(expected)) {
       assert.ok(Math.abs(actual[key] - expected[key]) < .001,
         `${mobile ? 'mobile' : 'desktop'} ${key} at ${size}: expected ${expected[key]}px, got ${actual[key]}px`);
@@ -155,7 +163,16 @@ export async function verifyCaptionSizeBrowser(browser) {
       reloadPersistence: true, unrelatedSettingsIndependent: true, migrations, measurements, uiErrors: errors };
   } catch (error) {
     console.error('caption_size_browser_failure', JSON.stringify({ message: error.message,
-      value: await slider.inputValue().catch(() => ''), hint: await page.locator('#hint').textContent().catch(() => '') }));
+      expectedSize, value: await slider.inputValue().catch(() => ''), hint: await page.locator('#hint').textContent().catch(() => ''),
+      styles: await page.evaluate(key => ({ stored: localStorage.getItem(key),
+        rootInlineSize: document.documentElement.style.getPropertyValue('--translation-size'),
+        elements: ['html', '#translation', '#pinned-translation', '#original'].map(selector => {
+          const element = document.querySelector(selector), style = getComputedStyle(element);
+          return { selector, sizeVariable: style.getPropertyValue('--translation-size'), fontSize: style.fontSize,
+            transitionProperty: style.transitionProperty, transitionDuration: style.transitionDuration,
+            contentVisibility: style.contentVisibility, display: style.display, visibility: style.visibility,
+            animations: element.getAnimations().map(animation => ({ playState: animation.playState, currentTime: animation.currentTime })) };
+        }) }), SIZE_KEY).catch(() => null) }));
     throw error;
   } finally {
     await context.close();
