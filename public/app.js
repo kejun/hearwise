@@ -38,14 +38,19 @@ localStorage.removeItem('tongsheng:key');
 localStorage.removeItem('tongsheng:region');
 els.apiKey.value = saved.key;
 
-// 译文字号滑块：范围 30-70，默认 44；用户自定义值保持不变
+// 译文字号滑块：范围 21-64，默认 44；保留范围内的偏好并修正旧值
 const SIZE_KEY = 'tongsheng:translation-size';
 function applyTranslationSize(value) {
-  const size = Math.min(70, Math.max(30, Math.round(Number(value)) || 44));
+  const number = value === null || String(value).trim() === '' ? NaN : Number(value);
+  const size = Number.isFinite(number) ? Math.min(64, Math.max(21, Math.round(number))) : 44;
   els.sizeSlider.value = String(size);
   document.documentElement.style.setProperty('--translation-size', String(size));
 }
-applyTranslationSize(localStorage.getItem(SIZE_KEY));
+const savedTranslationSize = localStorage.getItem(SIZE_KEY);
+applyTranslationSize(savedTranslationSize);
+if (savedTranslationSize !== null && savedTranslationSize !== els.sizeSlider.value) {
+  localStorage.setItem(SIZE_KEY, els.sizeSlider.value);
+}
 els.sizeSlider.addEventListener('input', () => {
   applyTranslationSize(els.sizeSlider.value);
   localStorage.setItem(SIZE_KEY, els.sizeSlider.value);
