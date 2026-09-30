@@ -61,7 +61,18 @@
       </div>
       <section class="secondary-panel" id="record-panel" hidden>
         <div class="panel-heading"><h2 id="record-title">本次收听</h2><span id="processing-status"></span></div>
-        <div class="panel-actions"><button class="switch-button" id="retry-processing" type="button" hidden>继续处理</button></div>
+        <div class="panel-actions record-actions"><button class="switch-button" id="edit-record" type="button" aria-expanded="false" aria-controls="record-editor">编辑标题与备注</button><button class="switch-button" id="retry-processing" type="button" hidden>继续处理</button></div>
+        <section class="record-notes" id="record-notes-panel" aria-label="备注" hidden><h3>备注</h3><p id="record-notes"></p></section>
+        <form class="record-editor" id="record-editor" aria-label="编辑标题与备注" hidden>
+          <label for="record-title-input">标题</label>
+          <input id="record-title-input" type="text" maxlength="200" required autocomplete="off">
+          <label for="record-notes-input">备注 <span>（选填）</span></label>
+          <textarea id="record-notes-input" rows="5" maxlength="10000" placeholder="记下来源、收听心得或待办事项…" aria-describedby="record-notes-help"></textarea>
+          <p class="record-help" id="record-notes-help">最多 10000 字；保存后，下载原文或译文时会把备注放在正文前。</p>
+          <p class="history-error" id="record-edit-error" role="alert" hidden></p>
+          <div class="record-editor-actions"><button class="switch-button" id="save-record" type="submit">保存</button><button class="switch-button" id="cancel-record" type="button">取消</button></div>
+        </form>
+        <p class="record-feedback" id="record-edit-status" role="status" aria-live="polite"></p>
         <details class="knowledge-panel" open><summary>对话知识 <span id="knowledge-count">0</span><button class="toggle-all" id="knowledge-toggle-all" type="button" hidden>全部展开</button><button class="toggle-all knowledge-track" id="knowledge-track" type="button" aria-pressed="false" title="开启后，新知识出现时自动滚动到对应卡片并短暂高亮">追踪新增</button></summary><div id="knowledge-list" class="knowledge-list"></div></details>
         <details class="runs-panel" id="runs-panel" open><summary><h3>收听片段</h3></summary><div id="runs-list"></div></details>
         <details class="transcript-panel" open><summary class="transcript-head"><h3>原文与译文</h3><select class="download-select" id="download-select" aria-label="下载原文或译文"><option value="" selected>下载…</option><option value="original">下载原文</option><option value="translation">下载译文</option></select></summary>

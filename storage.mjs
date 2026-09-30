@@ -24,7 +24,7 @@ export class ListeningStore {
   }
   migrate() {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 4) throw new Error(`不支持的数据库版本：${version}`);
+    if (version > 5) throw new Error(`不支持的数据库版本：${version}`);
     if (version === 0) this.tx(() => {
       this.db.exec(`
         CREATE TABLE listenings (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -106,6 +106,10 @@ export class ListeningStore {
           WHERE prompt_version=2 AND state!='complete';
         PRAGMA user_version = 4;`);
     });
+    if (version < 5) this.tx(() => {
+      this.db.exec(`ALTER TABLE listenings ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+        PRAGMA user_version = 5;`);
+    });
   }
   createRun(listeningId, settings, title) {
     return this.tx(() => {
@@ -163,6 +167,27 @@ export class ListeningStore {
   }
   hasListening(id) {
     return Boolean(this.db.prepare('SELECT 1 FROM listenings WHERE id=?').get(id));
+  }
+  updateMetadata(id, input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('标题和备注请求格式无效');
+    const fields = Object.keys(input);
+    if (!fields.length || fields.some(field => !['title', 'notes'].includes(field))) throw new TypeError('仅支持修改标题或备注');
+    const hasTitle = Object.hasOwn(input, 'title'), hasNotes = Object.hasOwn(input, 'notes');
+    if (hasTitle && (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 200)) {
+      throw new TypeError('标题需为 1–200 字的文本');
+    }
+    if (hasNotes && (typeof input.notes !== 'string' || input.notes.length > 10000)) {
+      throw new TypeError('备注需为不超过 10000 字的文本');
+    }
+    return this.tx(() => {
+      const listening = this.db.prepare('SELECT * FROM listenings WHERE id=?').get(id);
+      if (!listening) return 'missing';
+      if (this.db.prepare("SELECT 1 FROM listening_runs WHERE listening_id=? AND state='active'").get(id)) return 'active';
+      // Metadata edits do not change the time/order of the last listening activity.
+      this.db.prepare('UPDATE listenings SET title=?, notes=? WHERE id=?').run(
+        hasTitle ? input.title.trim() : listening.title, hasNotes ? input.notes : listening.notes, id);
+      return this.db.prepare('SELECT * FROM listenings WHERE id=?').get(id);
+    });
   }
   removeListening(id) {
     return this.tx(() => {
@@ -269,12 +294,15 @@ export class ListeningStore {
     return { items, total, pending };
   }
   exportText(id, kind) {
-    const listening = this.db.prepare('SELECT title FROM listenings WHERE id=?').get(id);
+    const listening = this.db.prepare('SELECT title, notes FROM listenings WHERE id=?').get(id);
     if (!listening) return null;
     const sql = kind === 'translation'
       ? "SELECT translation_text AS text FROM segments WHERE listening_id=? AND translation_text IS NOT NULL AND translation_text<>'' ORDER BY sequence_no"
       : 'SELECT original_text AS text FROM segments WHERE listening_id=? ORDER BY sequence_no';
-    return { title: listening.title, text: this.db.prepare(sql).all(id).map(row => row.text).join('\n') };
+    const body = this.db.prepare(sql).all(id).map(row => row.text).join('\n');
+    const hasBody = Boolean(body.trim());
+    return { title: listening.title, hasBody,
+      text: hasBody && listening.notes.trim() ? `${listening.notes}\n\n${body}` : body };
   }
   knowledge(id) {
     const items = this.db.prepare('SELECT * FROM knowledge_items WHERE listening_id=? ORDER BY created_at, rowid').all(id);

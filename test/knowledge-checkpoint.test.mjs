@@ -139,9 +139,9 @@ test('v3 遗留 v2 包括 attempts=0 的任务隔离，已完成 legacy 不重�
       VALUES (?,?,?,?,?,?,0,?,?)`).run(id, h.run.listeningId, sequence, sequence, policy, state, time, time);
   }
   h.store.applyKnowledgeV2(h.run.listeningId, [entry(h.segment)]); // 旧任务已有部分写入，再被人工重置为 pending/0。
-  h.store.db.exec('DROP TABLE extraction_parts; ALTER TABLE extraction_jobs DROP COLUMN outcome; ALTER TABLE extraction_jobs DROP COLUMN progress_json; PRAGMA user_version=3;');
+  h.store.db.exec('DROP TABLE extraction_parts; ALTER TABLE extraction_jobs DROP COLUMN outcome; ALTER TABLE extraction_jobs DROP COLUMN progress_json; ALTER TABLE listenings DROP COLUMN notes; PRAGMA user_version=3;');
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 5);
   let jobs = h.store.detail(h.run.listeningId).jobs;
   for (const id of [h.job.id, 'old-failed']) {
     const job = jobs.find(value => value.id === id);
