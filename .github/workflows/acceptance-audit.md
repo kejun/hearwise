@@ -17,6 +17,7 @@ permissions:
   pull-requests: read
   actions: read
   checks: read
+checkout: false
 engine: codex
 timeout-minutes: 10
 max-turns: 12
@@ -54,6 +55,7 @@ steps:
       AUDIT_HEAD: ${{ inputs.head_sha }}
     with:
       script: |
+        if (context.payload.inputs?.aw_context) throw new Error('Agent caller context is not supported by this manual pilot.');
         const pr = process.env.AUDIT_PR;
         const head = process.env.AUDIT_HEAD;
         if (!/^[1-9][0-9]*$/.test(pr) || !/^[0-9a-f]{40}$/.test(head)) {
