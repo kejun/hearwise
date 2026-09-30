@@ -56,7 +56,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
   function fail(message) {
     const failedMode = mode, failedKind = kind;
     const target = ['live', 'replay'].includes(mode) && (readingMeta || metadata.values().next().value);
-    const saved = target ? { segmentId: target.segmentId, listeningId: context.listeningId, runId: context.runId } : null;
+    const saved = target?.segmentId ? { segmentId: target.segmentId, listeningId: context.listeningId, runId: context.runId } : null;
     stop(message); replayTarget = saved;
     report(message, { mode: failedMode, kind: failedKind, canReplay: Boolean(saved) });
   }
@@ -103,7 +103,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
           if (data instanceof ArrayBuffer) { output.audio(data, gen); return; }
           const msg = JSON.parse(data);
           if (msg.epoch !== gen) return;
-          if (msg.type === 'speech.ready') total = msg.total || 0;
+          if (msg.type === 'speech.ready') { total = msg.total || 0; if (msg.incremental) report('实验性短句播报已开启；不确定内容仍等待定稿'); }
           if (msg.type === 'speech.unit') { text.set(msg.unit, msg.text); metadata.set(msg.unit, msg); output.begin(msg.unit); }
           if (msg.type === 'speech.unit-end') output.end(msg.unit, msg.samples);
           if (msg.type === 'speech.state') {

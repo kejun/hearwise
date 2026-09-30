@@ -1,3 +1,4 @@
+import { createCaptionFrontier } from '../public/caption-frontier.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -17,7 +18,10 @@ function app(t) {
     if (elements.has(id)) return elements.get(id);
     const classes = new Set(), events = new Map();
     const node = {
-      value: '', textContent: '', hidden: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
+      value: '', _text: '', children: null,
+      get textContent() { return this.children ? this.children.map(child => child.textContent).join('') : this._text; },
+      set textContent(text) { this.children = null; this._text = text; },
+      replaceChildren(...children) { this.children = children; }, hidden: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
       style: { setProperty() {} }, setAttribute() {}, focus() {},
       getBoundingClientRect: () => ({ bottom: 100 }),
       setCustomValidity(message) { this.validationMessage = message; },
@@ -38,9 +42,9 @@ function app(t) {
     close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
   }
   const context = vm.createContext({
-    ...translationParams, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
+    ...translationParams, createCaptionFrontier, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },
-    document: { getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
+    document: { createElement: () => ({ textContent: '', className: '' }), getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
     window: { addEventListener() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
@@ -345,4 +349,20 @@ test('保存前发起的详情刷新晚返回，不得覆盖刚保存的标题�
   await a.reply(0, 200, { listening: { id: 'record-1', title: '旧标题', notes: '' }, runs: [], segments: [], knowledge: [], segmentCount: 0 });
   assert.equal(a.run('detail.listening.title'), '刚保存');
   assert.equal(a.run('detail.listening.notes'), '保留备注');
+});
+
+
+test('slow MT completes instead of being aborted on every preview cadence; latest source coalesces', async t => {
+  const a = app(t);
+  a.receive('The weather is warm'); await a.tick(1);
+  assert.equal(a.requests.length, 1);
+  a.receive('The weather is warm today'); await a.tick(1300);
+  a.receive('The weather is warm today and sunny'); await a.tick(1300);
+  assert.equal(a.requests.length, 1);
+  assert.equal(a.requests[0].options.signal.aborted, false);
+  await a.reply(0, 200, { text: '天气温暖' });
+  assert.equal(a.element('translation').textContent, '天气温暖');
+  await a.tick(1);
+  assert.equal(a.requests.length, 2);
+  assert.equal(a.requests[1].body.text, 'The weather is warm today and sunny');
 });

@@ -33,9 +33,9 @@ const asrSentenceSilenceMs = Math.min(6000, Math.max(200, Number(process.env.ASR
 const keys = new Map();
 const listeners = new Map();
 const translations = createTranslationScheduler();
-const speech = createSpeechService({ store, setHead: (owner, id) => translations.setSpeechHead(owner, id),
+const speech = createSpeechService({ store, incrementalEnabled: process.env.HEARWISE_INCREMENTAL_SPEECH === '1', incrementalClauses: process.env.HEARWISE_INCREMENTAL_BOUNDARY !== 'sentence', translatePhrase: translateSpeechPhrase, onDispose: id => maybeReleaseKey(id), setHead: (owner, id) => translations.setSpeechHead(owner, id),
   onMetric: event => console.info('speech_event', JSON.stringify(event)) });
-for (const file of ['speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js']) {
+for (const file of ['caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js']) {
   types[`/${file}`] = 'text/javascript; charset=utf-8';
 }
 let translating = 0;
@@ -118,17 +118,41 @@ function logModelError(modelName, error) {
   console.warn('model_error', counter, modelErrorCounts.get(counter), message);
 }
 
-async function translate(key, text, target, timeout = 15000) {
+async function translate(key, text, target, timeout = 15000, signal) {
   const response = await fetch(mtEndpoint, { method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'qwen-mt-flash', messages: [{ role: 'user', content: text }],
-      translation_options: { source_lang: 'auto', target_lang: target } }), signal: AbortSignal.timeout(timeout) });
+      translation_options: { source_lang: 'auto', target_lang: target } }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error?.message || result.message || `翻译服务 HTTP ${response.status}`);
   const output = result.choices?.[0]?.message?.content;
   if (typeof output !== 'string' || !output.trim()) throw new Error('翻译服务未返回文字');
   return output.trim();
 }
+async function translateSpeechPhrase({ listeningId, text, signal, final }) {
+  if (signal.aborted) throw signal.reason;
+  const key = keys.get(listeningId);
+  if (!key) throw new Error('收听连接已结束，请从文字记录完整回放');
+  if (final) {
+    // Remainders are final audible work, under the existing scheduler/fairness budget.
+    return new Promise((resolve, reject) => {
+      const id = `speech-remainder:${randomUUID()}`;
+      const abort = () => { translations.cancel(id); reject(signal.reason); pumpTranslations(); };
+      const done = (error, result) => { signal.removeEventListener('abort', abort); error ? reject(error) : resolve(result); };
+      signal.addEventListener('abort', abort, { once: true });
+      translations.enqueue({ segment: { id, original_text: text }, listeningId, target: 'Chinese', kind: 'realtime', signal, done });
+      pumpTranslations();
+    });
+  }
+  // Confirmed early phrases and UI previews share the single optional-work slot.
+  if (translations.length || interimTranslating >= 1 || translating + interimTranslating >= translations.concurrency) {
+    throw Object.assign(new Error('最终译文优先处理'), { code: 'TRANSLATION_BUSY' });
+  }
+  interimTranslating++;
+  try { return await translate(key, text, 'Chinese', 15000, signal); }
+  finally { interimTranslating--; pumpTranslations(); knowledgeScheduler.pump(); }
+}
+
 async function checkTranslation(key) {
   try { await translate(key, 'Hello', 'Chinese', 12000); return { ok: true, message: '翻译模型可用' }; }
   catch (error) { return { ok: false, message: errorMessage(error) }; }
@@ -166,7 +190,7 @@ function checkRecognition(key) {
 }
 
 function maybeReleaseKey(id) {
-  if (!id || listeners.get(id)?.size || knowledgeScheduler.hasWork(id) ||
+  if (!id || listeners.get(id)?.size || speech.hasConsumers(id) || knowledgeScheduler.hasWork(id) ||
       activeTranslations.get(id) || translations.hasListening(id)) return;
   keys.delete(id);
   knowledgeScheduler.pump();
@@ -180,17 +204,21 @@ function pumpTranslations() {
     const task = translations.next();
     if (!task) break;
     const key = keys.get(task.listeningId);
-    if (!key) continue;
+    if (!key) { task.done?.(new Error('收听连接已结束')); continue; }
     translating++;
     activeTranslations.set(task.listeningId, (activeTranslations.get(task.listeningId) || 0) + 1);
     (async () => {
       let updated;
+      const modelStartedAt = performance.now();
+      console.info('translation_stage', JSON.stringify({ stage: 'queue', kind: task.kind, elapsedMs: Date.now() - task.enqueuedAt }));
       try {
-        const text = await translate(key, task.segment.original_text, task.target);
-        updated = store.setTranslation(task.segment.id, text, false);
-        console.info('final_translation_ms', Date.now() - task.enqueuedAt, task.kind);
+        const text = await translate(key, task.segment.original_text, task.target, 15000, task.signal);
+        if (task.done) task.done(null, text);
+        else updated = store.setTranslation(task.segment.id, text, false);
+        console.info('translation_stage', JSON.stringify({ stage: 'model', kind: task.kind, elapsedMs: performance.now() - modelStartedAt }));
       } catch (error) {
-        updated = store.setTranslation(task.segment.id, null, true);
+        if (task.done) task.done(error);
+        else updated = store.setTranslation(task.segment.id, null, true);
         logModelError('translation', error);
       } finally {
         if (updated) broadcast(task.listeningId, { type: 'translation-updated', runId: updated.run_id, segment: updated });
@@ -258,13 +286,25 @@ const server = http.createServer(async (req, res) => {
     const { key, text, target = 'Chinese', source = 'auto' } = input;
     try {
       if (isSameLanguage(source, target)) return sendJson(res, 200, { text: text.trim() });
-      if (translations.length || translating + interimTranslating >= translations.concurrency) {
+      if (translations.length || interimTranslating >= 1 || translating + interimTranslating >= translations.concurrency) {
         return sendJson(res, 429, { code: 'FINAL_TRANSLATION_BUSY', error: '最终译文优先处理' });
       }
+      // Only this HTTP consumer owns this controller; finals and other consumers are independent.
+      const controller = new AbortController();
+      const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+      req.once('aborted', disconnected); res.once('close', disconnected);
+      if (req.aborted || res.destroyed) controller.abort();
+      const modelStartedAt = performance.now();
       interimTranslating++;
-      try { return sendJson(res, 200, { text: await translate(key.trim(), text.trim(), target) }); }
-      finally { interimTranslating--; pumpTranslations(); knowledgeScheduler.pump(); }
-    } catch (error) { return sendJson(res, 502, { code: 'TRANSLATION_FAILED', error: errorMessage(error) }); }
+      try {
+        const textResult = await translate(key.trim(), text.trim(), target, 15000, controller.signal);
+        if (!controller.signal.aborted) return sendJson(res, 200, { text: textResult });
+      } finally {
+        req.off('aborted', disconnected); res.off('close', disconnected);
+        console.info('translation_stage', JSON.stringify({ stage: 'model', kind: 'preview', elapsedMs: performance.now() - modelStartedAt, canceled: controller.signal.aborted }));
+        interimTranslating--; pumpTranslations(); knowledgeScheduler.pump();
+      }
+    } catch (error) { if (!res.destroyed) return sendJson(res, 502, { code: 'TRANSLATION_FAILED', error: errorMessage(error) }); }
   }
   if (req.method === 'GET' && url.pathname === '/api/listenings') {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
@@ -378,11 +418,13 @@ server.on('upgrade', (req, socket, head) => {
 wss.on('connection', client => {
   let upstream, taskId, run, listeningId, key, settings;
   let started = false, stopping = false, finished = false;
+  const receivedAt = performance.now();
+  let receivedSamples = 0;
   const send = data => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(data)); };
   const fail = message => { send({ type: 'error', message }); upstream?.close(); client.close(); };
   client.on('message', (data, isBinary) => {
     if (isBinary) {
-      if (started && !stopping && upstream?.readyState === WebSocket.OPEN) upstream.send(data, { binary: true });
+      if (started && !stopping && upstream?.readyState === WebSocket.OPEN) { receivedSamples += data.length / 2; upstream.send(data, { binary: true }); }
       return;
     }
     let message; try { message = JSON.parse(data.toString()); } catch { fail('消息格式无效'); return; }
@@ -435,13 +477,23 @@ wss.on('connection', client => {
         if (kind === 'result-generated' && started) {
           const sentence = event.payload?.output?.sentence;
           if (!sentence || sentence.heartbeat || typeof sentence.text !== 'string' || !sentence.text.trim()) return;
-          if (!sentence.sentence_end) { send({ type: 'sentence', runId: run.runId, id: sentence.sentence_id, text: sentence.text, final: false }); return; }
+          console.info('asr_stage', JSON.stringify({ runId: run.runId, final: Boolean(sentence.sentence_end), receivedAudioMs: receivedSamples / 16, connectionElapsedMs: performance.now() - receivedAt, sourceBeginMs: sentence.begin_time, sourceEndMs: sentence.end_time }));
+          if (!sentence.sentence_end) {
+            send({ type: 'sentence', runId: run.runId, id: sentence.sentence_id, text: sentence.text, final: false });
+            speech.observe(listeningId, run.runId, sentence.sentence_id, sentence.text); return;
+          }
           if (sentence.sentence_id == null) return;
           try {
             const { segment, inserted } = store.addSegment(listeningId, run.runId, {
               id: sentence.sentence_id, text: sentence.text, beginMs: sentence.begin_time, endMs: sentence.end_time
             });
+            if (!inserted && segment.original_text !== sentence.text) {
+              console.warn('asr_final_conflict', JSON.stringify({ runId: run.runId, sentenceId: sentence.sentence_id }));
+              send({ type: 'caption-correction', runId: run.runId, message: '识别服务返回冲突定稿，已停止播报；文字记录保留首次定稿，请核对原文' });
+              speech.correct(listeningId, run.runId);
+            }
             if (inserted) {
+              speech.final(listeningId, run.runId, segment);
               const passthrough = isSameLanguage(source, targetLang); // 同语言：原文直通写入为最终译文，不进翻译队列
               const finalSegment = passthrough ? store.setTranslation(segment.id, segment.original_text, false) : segment;
               send({ type: 'segment-final', runId: run.runId, segment: finalSegment });

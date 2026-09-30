@@ -8,14 +8,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText } = {}) {
+export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, incremental = false, translationDelay = 0 } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
   const stats = { connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
-    fishRequests: [], fishAborted: 0, holdFish: false };
+    mtRequests: [], mtAborted: 0, fishRequests: [], fishAborted: 0, holdFish: false };
   const mt = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     let body; try { body = JSON.parse(Buffer.concat(chunks).toString()); } catch { res.writeHead(400); return res.end(); }
-    const text = body.model === 'qwen-mt-flash' ? translationText ?? `这是第 ${body.messages[0].content.match(/\d+/)?.[0] || 1} 句中文译文。` : '{"items":[]}';
+    if (body.model === 'qwen-mt-flash') {
+      stats.mtRequests.push(body.messages[0].content);
+      res.on('close', () => { if (!res.writableEnded) stats.mtAborted++; });
+      if (translationDelay) await new Promise(resolve => setTimeout(resolve, translationDelay));
+    }
+    const chosenTranslation = typeof translationText === 'function' ? translationText(body.messages?.[0]?.content) : translationText;
+    const text = body.model === 'qwen-mt-flash' ? chosenTranslation ?? `这是第 ${body.messages[0].content.match(/\d+/)?.[0] || 1} 句中文译文。` : '{"items":[]}';
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));
   });
@@ -44,9 +50,9 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
   const asr = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(asr, 'listening');
   const tts = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(tts, 'listening');
   let sentence = 0;
-  function final(text = `Sentence ${++sentence}.`, end = true) {
+  function final(text = `Sentence ${++sentence}.`, end = true, id = String(++sentence)) {
     for (const ws of stats.asrClients) if (ws.readyState === 1) ws.send(JSON.stringify({ header: { event: 'result-generated' },
-      payload: { output: { sentence: { sentence_id: String(++sentence), text, sentence_end: end, begin_time: 0, end_time: 1500 } } } }));
+      payload: { output: { sentence: { sentence_id: id, text, sentence_end: end, begin_time: 0, end_time: 1500 } } } }));
   }
   asr.on('connection', ws => {
     stats.asrClients.add(ws); let last = Date.now();
@@ -81,7 +87,7 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
     });
   });
   const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(fileURLToPath(new URL('..', import.meta.url))),
-    env: { ...process.env, PORT: '0', LISTENING_DB: path.join(directory, 'test.sqlite'),
+    env: { ...process.env, HEARWISE_INCREMENTAL_SPEECH: incremental ? '1' : '0', PORT: '0', LISTENING_DB: path.join(directory, 'test.sqlite'),
       ASR_ENDPOINT: `ws://127.0.0.1:${asr.address().port}`, MT_ENDPOINT: `http://127.0.0.1:${mt.address().port}`,
       TTS_ENDPOINT: `ws://127.0.0.1:${tts.address().port}`, FISH_TTS_ENDPOINT: `http://127.0.0.1:${fish.address().port}/v1/tts`, EXTRACTION_WAIT_MS: '15000' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; child.stderr.on('data', data => { logs += data; });

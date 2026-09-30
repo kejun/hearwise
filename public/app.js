@@ -1,3 +1,4 @@
+import { createCaptionFrontier } from './caption-frontier.js';
 import { INTERIM_TRANSLATION_MAX_LENGTH, validateInterimTranslation } from './translation-params.js';
 import { processingView, createProcessingPoller } from './processing-state.js';
 import { createSpeechController } from './speech-controller.js';
@@ -68,6 +69,11 @@ let translationTimer;
 let translationRequest;
 let translationVersion = 0;
 let pendingText = '';
+const sourceCaption = createCaptionFrontier();
+const targetCaption = createCaptionFrontier();
+let lastSourceHypothesis = '';
+let lastPreviewInput = '';
+let finalCaptionCorrected = false;
 let lastTranslationAt = 0;
 let startAfterSave = false;
 let testController;
@@ -277,6 +283,20 @@ syncSpeechContext();
 function updateText(el, text) {
   const stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   el.textContent = text;
+  el.captionParts = null;
+  if (stick) el.scrollTop = el.scrollHeight;
+}
+
+function renderCaption(el, caption) {
+  const stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  if (!el.captionParts) {
+    const committed = document.createElement('span'), tail = document.createElement('span');
+    committed.className = 'caption-committed'; tail.className = 'caption-tail';
+    el.replaceChildren(committed, tail); el.captionParts = { committed, tail };
+  }
+  if (el.captionParts.committed.textContent !== caption.committed) el.captionParts.committed.textContent = caption.committed;
+  if (el.captionParts.tail.textContent !== caption.tail) el.captionParts.tail.textContent = caption.tail;
+  el.classList.toggle('caption-review', caption.correctionPending);
   if (stick) el.scrollTop = el.scrollHeight;
 }
 
@@ -542,6 +562,7 @@ function clearTranslationWork() {
   translationRequest?.abort();
   translationRequest = null;
   translationVersion++;
+  lastPreviewInput = '';
 }
 
 // 识别语言=译文语言：不请求翻译，译文区直接显示识别原文（auto 无法判定，仍走翻译）
@@ -563,11 +584,10 @@ function scheduleTranslation(text) {
   if (!text.trim() || isPassthrough()) return;
   pendingText = text.trim();
   if (pendingText.length > INTERIM_TRANSLATION_MAX_LENGTH) { deferLongTranslation(); return; }
-  if (translationTimer) return;
+  if (translationTimer || translationRequest || pendingText === lastPreviewInput) return;
   const delay = Math.max(0, lastTranslationAt + 1200 - Date.now());
   translationTimer = setTimeout(async () => {
     translationTimer = null;
-    translationRequest?.abort();
     const version = ++translationVersion;
     const input = { key: saved.key, text: pendingText, target: els.target.value, source: els.source.value };
     const invalid = validateInterimTranslation(input);
@@ -576,6 +596,7 @@ function scheduleTranslation(text) {
       else showInterimTranslationError(invalid.error);
       return;
     }
+    lastPreviewInput = input.text;
     lastTranslationAt = Date.now();
     const controller = new AbortController();
     translationRequest = controller;
@@ -591,6 +612,7 @@ function scheduleTranslation(text) {
       if (version !== translationVersion) return;
       if (response.status === 429) {
         clearError('interim-translation');
+        lastPreviewInput = '';
         els.badge.textContent = '最终译文优先处理中';
         return;
       }
@@ -598,16 +620,19 @@ function scheduleTranslation(text) {
       if (!response.ok) throw new Error(result?.error || '翻译请求失败');
       if (typeof result?.text !== 'string' || !result.text.trim()) throw new Error('翻译服务未返回文字');
       clearError('interim-translation');
-      updateText(els.translation, result.text.trim());
+      const caption = targetCaption.update(result.text.trim(), { sourceContext: input.text });
+      renderCaption(els.translation, caption);
       els.translation.classList.remove('placeholder');
       els.translation.classList.add('provisional');
       provisionalFor = { sentenceId: String(currentSentenceId) };
-      els.badge.textContent = '临时译文';
+      els.badge.textContent = caption.correctionPending ? '识别有修订，等待完整译文' : '临时译文 · 尾部更新中';
     } catch (error) {
       if (error.name === 'AbortError' || version !== translationVersion) return;
+      lastPreviewInput = '';
       showInterimTranslationError(error.message || '请稍后重试');
     } finally {
       if (translationRequest === controller) translationRequest = null;
+      if (version === translationVersion && pendingText !== input.text) scheduleTranslation(pendingText);
     }
   }, delay);
 }
@@ -620,16 +645,21 @@ function receiveSentence(message) {
     clearError('interim-translation');
     els.badge.textContent = passthrough ? '无需翻译' : '正在识别';
     currentSentenceId = message.id;
+    sourceCaption.reset(); targetCaption.reset(); lastSourceHypothesis = ''; finalCaptionCorrected = false;
     currentSegmentId = null;
     provisionalFor = null;
     if (!passthrough) updateText(els.translation, '正在翻译…');
     els.translation.classList.toggle('placeholder', !passthrough);
     els.translation.classList.remove('provisional');
   }
-  updateText(els.original, message.text);
+  if (message.text === lastSourceHypothesis) return;
+  lastSourceHypothesis = message.text;
+  const sourceState = sourceCaption.update(message.text);
+  renderCaption(els.original, sourceState);
+  if (sourceState.correctionPending) els.badge.textContent = '识别有修订，等待定稿';
   els.original.classList.remove('placeholder');
   if (passthrough) {
-    updateText(els.translation, message.text);
+    renderCaption(els.translation, targetCaption.update(message.text));
     els.translation.classList.remove('placeholder');
     els.badge.textContent = '无需翻译';
   } else if (message.text.trim().length >= 5) scheduleTranslation(message.text);
@@ -638,16 +668,21 @@ function receiveSentence(message) {
 function displayFinal(segment) {
   clearTranslationWork();
   clearError('interim-translation');
+  if (String(currentSentenceId) !== String(segment.asr_sentence_id)) { sourceCaption.reset(); targetCaption.reset(); finalCaptionCorrected = false; }
   currentSentenceId = segment.asr_sentence_id;
   currentSegmentId = segment.id;
-  updateText(els.original, segment.original_text);
+  const sourceFinal = sourceCaption.update(segment.original_text, { final: true });
+  finalCaptionCorrected ||= sourceFinal.corrected;
+  renderCaption(els.original, sourceFinal);
   els.original.classList.remove('placeholder');
   if (segment.translation_text) { // final 译文到达：无缝替换临时译文
     provisionalFor = null;
-    updateText(els.translation, segment.translation_text);
+    const targetFinal = targetCaption.update(segment.translation_text, { final: true });
+    finalCaptionCorrected ||= targetFinal.corrected;
+    renderCaption(els.translation, targetFinal);
     els.translation.classList.remove('placeholder');
     els.translation.classList.remove('provisional');
-    els.badge.textContent = isPassthrough() ? '无需翻译' : '已完成';
+    els.badge.textContent = finalCaptionCorrected ? '已定稿 · 已修正临时字幕' : isPassthrough() ? '无需翻译' : '已完成';
   } else if (segment.translation_state === 'failed') {
     provisionalFor = null;
     updateText(els.translation, '翻译失败，可点击继续处理');
@@ -1122,8 +1157,17 @@ async function prepareAudio(preselected) {
   processor = new AudioWorkletNode(context, 'pcm-processor');
   silenceNode = context.createGain();
   silenceNode.gain.value = 0;
+  const capture = { frames: 0, samples: 0, droppedFrames: 0, droppedSamples: 0 };
   processor.port.onmessage = event => {
-    if (phase === 'listening' && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 512_000) socket.send(event.data);
+    if (phase !== 'listening') return;
+    capture.frames++; capture.samples += event.data.byteLength / 2;
+    if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 512_000) socket.send(event.data);
+    else {
+      capture.droppedFrames++; capture.droppedSamples += event.data.byteLength / 2;
+      if (capture.droppedFrames === 1 || capture.droppedFrames % 50 === 0) {
+        console.warn('audio_capture_drop', { ...capture, audioMs: capture.samples / 16 });
+      }
+    }
   };
   sourceNode.connect(processor);
   processor.connect(silenceNode);
@@ -1171,6 +1215,7 @@ async function start(preselected) {
         setPhase('listening');
         fetchDetail().catch(error => showError(error.message));
       }
+      if (message.type === 'caption-correction' && gen === connectionGeneration) showError(message.message);
       if (message.type === 'sentence' && gen === connectionGeneration) receiveSentence(message);
       if (message.type === 'segment-final') {
         liveSegments.set(message.segment.id, message.segment);

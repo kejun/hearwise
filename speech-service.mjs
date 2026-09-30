@@ -1,3 +1,4 @@
+import { createIncrementalLedger } from './incremental-speech.mjs';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { QwenTts } from './qwen-tts.mjs';
@@ -6,7 +7,7 @@ import { speechUnits, transcriptSpeechUnits } from './speech-scheduler.mjs';
 import { AUDIO_HEADER_BYTES, PREVIEW_TEXT, TTS_MODEL, TTS_INSTRUCT_MODEL, TTS_SAMPLE_RATE, speechConfig } from './public/speech-protocol.js';
 
 export function createSpeechService({ store, setHead = () => {}, createTts = config => config.provider === 'fish' ? new FishTts(config) : new QwenTts(config),
-  now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, pauseTimeoutMs = 300000, onMetric = () => {} }) {
+  incrementalEnabled = false, incrementalClauses = true, translatePhrase, onDispose = () => {}, now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, pauseTimeoutMs = 300000, onMetric = () => {} }) {
   const consumers = new Set();
   function accept(client) {
     const owner = randomUUID();
@@ -17,13 +18,16 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
     let lastProgress = now(), drainAt = null, preview = false, replay = null, lastState = '', lastBacklog = '', underruns = 0;
     let transcript = null, position = 0, parts = 0, waitingTranslation = null;
     let pausedAt = null;
+    let ledger = null, phraseRequest = null;
+    let liveUnit = null;
     const completedSamples = new Map();
     const metric = (event, extra = {}) => onMetric({ event, consumer: owner, run: consumer?.runId, provider, model, ...extra });
     const send = data => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ ...data, epoch })); };
     const dispose = (graceful = false) => {
       if (closed) return;
       closed = true; clearInterval(timer); clearTimeout(initTimeout); tts?.close(graceful); tts = null;
-      consumers.delete(consumer); setHead(owner, null); units = []; activeKey = null;
+      phraseRequest?.abort(); ledger?.close();
+      consumers.delete(consumer); onDispose(consumer?.listeningId); setHead(owner, null); units = []; activeKey = null;
     };
     const finish = (type, message, error) => {
       message = String(message || '语音服务暂时不可用');
@@ -85,6 +89,48 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
               : replay ? (unitIndex ? null : replay)
                 : transcript ? store.speechTranscriptNext(consumer.listeningId, cursor, throughSequence)
                   : store.speechNext(consumer.listeningId, consumer.runId, cursor);
+            liveUnit = null;
+            // Persisted predecessors always win. Early phrases never overtake a pending final.
+            if (ledger && !segment && run.state === 'active') {
+              const candidate = ledger.candidate();
+              if (candidate) {
+                phraseRequest = new AbortController();
+                phraseRequest.sourceUnit = candidate;
+                try {
+                  const translated = await translatePhrase({ listeningId: consumer.listeningId, text: candidate.source,
+                    signal: phraseRequest.signal, final: false });
+                  if (closed) return;
+                  if (pausedAt != null || drainAt != null || store.speechRun(consumer.listeningId, consumer.runId)?.state !== 'active') return;
+                  if (!ledger.commit(candidate)) continue; // Final/revision won the race; never emit stale speech.
+                  liveUnit = candidate;
+                  segment = { id: null, sequence_no: cursor, translation_state: 'complete', translation_text: translated, early: true };
+                  metric('phrase_committed', { sentence: candidate.sentenceId, revision: candidate.revision, sourceEnd: candidate.end, hash: candidate.hash });
+                } catch (error) {
+                  if (closed) return;
+                  if (error.name === 'AbortError' && !ledger.valid(candidate)) continue;
+                  if (error.code === 'TRANSLATION_BUSY') return;
+                  throw error;
+                } finally { phraseRequest = null; }
+              }
+            } else if (ledger && segment) {
+              const remainder = ledger.finalize(segment);
+              if (closed || remainder?.conflict) return;
+              if (remainder) {
+                // Source coverage, never target-string suffix subtraction. Canonical MT stays intact in storage.
+                if (!remainder.source) { cursor = segment.sequence_no; ledger.complete(segment.asr_sentence_id); continue; }
+                phraseRequest = new AbortController();
+                try {
+                  const translated = await translatePhrase({ listeningId: consumer.listeningId, text: remainder.source,
+                    signal: phraseRequest.signal, final: true });
+                  if (closed) return;
+                  liveUnit = remainder;
+                  segment = { ...segment, translation_state: 'complete', translation_text: translated };
+                  units = speechUnits(translated);
+                  if (pausedAt != null) return;
+                  if (drainAt != null && now() - drainAt > drainMs) return finish('speech.error', '收尾等待已结束；未读内容仍保留在文字记录中');
+                } finally { phraseRequest = null; }
+              }
+            }
             if (segment && throughSequence != null && segment.sequence_no > throughSequence) segment = null;
             if (!segment) {
               setHead(owner, null);
@@ -118,6 +164,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
           const requestedAt = now();
           let frame = 0, samples = 0;
           send({ type: 'speech.unit', unit: index, segmentId: segment.id, sequence: segment.sequence_no, text,
+            ...(liveUnit ? { sourceUnit: liveUnit } : {}),
             ...(transcript ? { position, total: transcript.total, kind: transcript.kind, part: parts - units.length, parts } : {}) });
           state('buffering', drainAt == null ? '正在准备语音' : '正在读完最后几句');
           const response = await tts.synthesize(text, pcm => {
@@ -142,7 +189,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
           metric('unit_generated', { segment: segment.id, unit: index, elapsedMs: now() - requestedAt, samples });
           if (response) metric('response', { unit: index, response: response.id, status: response.status, attempts: response.attempts,
             inputTokens: response.usage?.input_tokens, outputTokens: response.usage?.output_tokens });
-          if (!units.length) cursor = segment.sequence_no;
+          if (!units.length && !segment.early) { cursor = segment.sequence_no; ledger?.complete(segment.asr_sentence_id); }
           const queuedMs = Math.round((sentSamples - consumedSamples) / TTS_SAMPLE_RATE * 1000);
           state('playing', drainAt == null ? '正在播报' : '正在读完最后几句', { queuedMs, canJump: queuedMs > 8000 });
         }
@@ -207,13 +254,25 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
           // Snapshot and registration are synchronous. Finals committed after this point cannot fall through a gap.
           cursor = run.maxSequence;
         }
+        if (incrementalEnabled && translatePhrase && msg.type === 'speech.start') {
+          const run = store.speechRun(msg.listeningId, msg.runId);
+          if (run.source_lang === 'en' && run.target_lang === 'Chinese') {
+            ledger = createIncrementalLedger({ epoch, runId: msg.runId, allowClauses: incrementalClauses, onCorrection: detail => {
+              metric('incremental_correction', detail);
+              finish('speech.error', '提前播报的原文已修订，播报已停止；请查看定稿后从文字记录完整回放');
+            } });
+          }
+        }
         consumer = { listeningId: msg.listeningId, runId: msg.runId, pump,
+          observe: (id, text) => { if (ledger && pausedAt == null && drainAt == null) { ledger.observe(id, text); if (phraseRequest?.sourceUnit && !ledger.valid(phraseRequest.sourceUnit)) phraseRequest.abort(); void pump(); } },
+          final: segment => { ledger?.finalize(segment); if (phraseRequest?.sourceUnit && !ledger.valid(phraseRequest.sourceUnit)) phraseRequest.abort(); void pump(); },
+          correct: () => finish('speech.error', '识别定稿出现冲突，播报已停止；请核对文字记录后完整回放'),
           stop: () => finish('speech.error', '收听记录已删除') };
         consumers.add(consumer); tts = createTts(config); initialized = true;
         if (msg.paused === true) pausedAt = now();
         metric(msg.type, { afterSequence: cursor });
         clearTimeout(initTimeout); timer = setInterval(() => { void pump(); }, 1000);
-        send({ type: 'speech.ready', afterSequence: cursor, sampleRate: TTS_SAMPLE_RATE,
+        send({ type: 'speech.ready', afterSequence: cursor, sampleRate: TTS_SAMPLE_RATE, incremental: Boolean(ledger),
           ...(transcript ? { total: transcript.total, kind: transcript.kind } : {}) });
         void pump();
       } catch (error) { finish('speech.error', error.message); }
@@ -221,6 +280,10 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
     client.on('close', () => dispose()); client.on('error', () => dispose());
   }
   return { accept,
+    hasConsumers: id => [...consumers].some(c => c.listeningId === id),
+    observe: (listeningId, runId, id, text) => { for (const c of consumers) if (c.listeningId === listeningId && c.runId === runId) c.observe(id, text); },
+    final: (listeningId, runId, segment) => { for (const c of consumers) if (c.listeningId === listeningId && c.runId === runId) c.final(segment); },
+    correct: (listeningId, runId) => { for (const c of consumers) if (c.listeningId === listeningId && c.runId === runId) c.correct(); },
     notify: id => { for (const c of consumers) if (c.listeningId === id) void c.pump(); },
     remove: id => { for (const c of [...consumers]) if (c.listeningId === id) c.stop(); }
   };
