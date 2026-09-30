@@ -21,7 +21,7 @@ export async function verifyIncrementalBrowser(browser) {
       });
     });
     await page.goto(fixture.base);
-    await page.locator('#source-language').selectOption('en');
+    assert.equal(await page.locator('#source-language').inputValue(), 'en'); // Language settings are intentionally hidden until opened.
     await page.getByRole('button', { name: '开始聆听', exact: true }).click();
     await page.getByRole('button', { name: '停止聆听', exact: true }).waitFor();
     await page.locator('#live-speech-tab').click();
