@@ -12,12 +12,16 @@ test('new growing context commits common prefix, duplicates and time alone do no
   assert.equal(next.committed + next.tail, next.text);
   assert.ok(next.tail.endsWith('and sunny'));
 });
-test('incompatible revision never stitches unrelated suffix; final corrects visibly', () => {
+test('incompatible revision visibly rebases affected suffix and keeps growing without stitching', () => {
   const f = createCaptionFrontier({ mutableCharacters: 3 });
   f.update('The weather is warm today'); f.update('The weather is warm today and sunny');
   const revision = f.update('The weather is not warm today and cloudy');
   assert.equal(revision.correctionPending, true);
-  assert.equal(revision.text, 'The weather is warm today and sunny');
+  assert.equal(revision.text, 'The weather is not warm today and cloudy');
+  const growing = f.update('The weather is not warm today and cloudy outside');
+  assert.equal(growing.correctionPending, false);
+  assert.ok(growing.text.endsWith('outside'));
+  assert.ok(growing.committed.startsWith('The weather is not'));
   const final = f.update('The weather is not warm.', { final: true });
   assert.equal(final.text, 'The weather is not warm.'); assert.equal(final.corrected, true);
 });

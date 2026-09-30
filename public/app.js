@@ -584,11 +584,10 @@ function scheduleTranslation(text) {
   if (!text.trim() || isPassthrough()) return;
   pendingText = text.trim();
   if (pendingText.length > INTERIM_TRANSLATION_MAX_LENGTH) { deferLongTranslation(); return; }
-  if (translationTimer || pendingText === lastPreviewInput) return;
+  if (translationTimer || translationRequest || pendingText === lastPreviewInput) return;
   const delay = Math.max(0, lastTranslationAt + 1200 - Date.now());
   translationTimer = setTimeout(async () => {
     translationTimer = null;
-    translationRequest?.abort();
     const version = ++translationVersion;
     const input = { key: saved.key, text: pendingText, target: els.target.value, source: els.source.value };
     const invalid = validateInterimTranslation(input);
@@ -633,6 +632,7 @@ function scheduleTranslation(text) {
       showInterimTranslationError(error.message || '请稍后重试');
     } finally {
       if (translationRequest === controller) translationRequest = null;
+      if (version === translationVersion && pendingText !== input.text) scheduleTranslation(pendingText);
     }
   }, delay);
 }

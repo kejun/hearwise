@@ -350,3 +350,19 @@ test('保存前发起的详情刷新晚返回，不得覆盖刚保存的标题�
   assert.equal(a.run('detail.listening.title'), '刚保存');
   assert.equal(a.run('detail.listening.notes'), '保留备注');
 });
+
+
+test('slow MT completes instead of being aborted on every preview cadence; latest source coalesces', async t => {
+  const a = app(t);
+  a.receive('The weather is warm'); await a.tick(1);
+  assert.equal(a.requests.length, 1);
+  a.receive('The weather is warm today'); await a.tick(1300);
+  a.receive('The weather is warm today and sunny'); await a.tick(1300);
+  assert.equal(a.requests.length, 1);
+  assert.equal(a.requests[0].options.signal.aborted, false);
+  await a.reply(0, 200, { text: '天气温暖' });
+  assert.equal(a.element('translation').textContent, '天气温暖');
+  await a.tick(1);
+  assert.equal(a.requests.length, 2);
+  assert.equal(a.requests[1].body.text, 'The weather is warm today and sunny');
+});

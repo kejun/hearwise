@@ -23,8 +23,13 @@ export function createCaptionFrontier({ mutableCharacters = 12 } = {}) {
         committed = previous = displayed = text; context = sourceContext; pending = false;
         return { committed: text, tail: '', text, correctionPending: false, corrected };
       }
-      if (committed && !text.startsWith(committed)) pending = true;
-      if (!pending) {
+      let correctionPending = false;
+      if (committed && !text.startsWith(committed)) {
+        // Rebase only the affected suffix, visibly. Never freeze a growing utterance until final.
+        committed = displayBoundary(commonPrefix(committed, text), 0);
+        previous = ''; context = ''; pending = true; correctionPending = true;
+      }
+      {
         if (context && sourceContext.length > context.length && sourceContext.startsWith(context)) {
           const agreed = displayBoundary(commonPrefix(previous, text), mutableCharacters);
           if (agreed.startsWith(committed) && agreed.length > committed.length) committed = agreed;
@@ -32,7 +37,7 @@ export function createCaptionFrontier({ mutableCharacters = 12 } = {}) {
         displayed = text;
       }
       previous = text; context = sourceContext;
-      return { committed, tail: displayed.slice(committed.length), text: displayed, correctionPending: pending, corrected: false };
+      return { committed, tail: displayed.slice(committed.length), text: displayed, correctionPending, corrected: false };
     }
   };
 }
