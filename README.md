@@ -4,7 +4,7 @@
 
 用于收听知识型演讲、播客和视频的个人应用：实时转写与翻译，整理有原文依据的对话知识，保存全文，并按需播报译文或整篇原文。
 
-**应用在本地运行，识别、翻译、知识整理和语音合成调用云端模型 API。** 当前版本：[v1.0.3](https://github.com/kejun/hearwise/releases/tag/v1.0.3)。
+**应用在本地运行，识别、翻译、知识整理和语音合成调用云端模型 API。** 当前代码版本：v1.0.4。版本提交合入 `main` 后，由 GitHub 的「Version tag」工作流自动创建对应 tag。
 
 ## 功能总览
 
@@ -126,7 +126,7 @@ Fish Audio 默认音色 ID 为 `bbfff76fd7c74f35a04a33366574f2d6`；已有自定
 
 ### 本地数据与 Key
 
-历史文本、收听片段、知识和任务检查点保存在 `data/listenings.sqlite`。当前数据库**结构版本为 4**，启动时自动迁移；这与应用版本 v1.0.3 是不同编号。数据库不保存音频和 API Key，`data/` 不纳入版本控制。
+历史文本、收听片段、知识和任务检查点保存在 `data/listenings.sqlite`。当前数据库**结构版本为 4**，启动时自动迁移；这与应用版本 v1.0.4 是不同编号。数据库不保存音频和 API Key，`data/` 不纳入版本控制。
 
 连接 Key 和 Fish Key 保存在当前浏览器的 `localStorage`；服务端仅在处理请求和后台任务期间使用内存中的 Key。清除浏览器数据会清除本地 Key 与偏好，不会删除服务端历史记录。收听音频、待翻译/整理文本和待播报正文会分别发送到对应云端服务。
 
@@ -169,7 +169,7 @@ NODE_USE_ENV_PROXY=1 npm start
 
 ## 主要功能迭代
 
-按已合入主分支、进入正式 tag 的功能整理；实现细节以当前代码为准。
+按功能首次纳入的应用版本整理；实现细节以当前代码为准，发布 tag 以 GitHub 的「Version tag」工作流结果为准。
 
 | 首次包含的版本 | 主要迭代 | 对应记录 |
 | --- | --- | --- |
@@ -181,6 +181,7 @@ NODE_USE_ENV_PROXY=1 npm start
 | v1.0.2 | 语音服务扩展：千问 Prompt、Fish 双模型与独立 Key、默认音色、错误诊断、试听和重播不再误触发实时收尾超时 | [PR #19](https://github.com/kejun/hearwise/pull/19)、[PR #20](https://github.com/kejun/hearwise/pull/20)、[PR #21](https://github.com/kejun/hearwise/pull/21)、[PR #22](https://github.com/kejun/hearwise/pull/22)、[PR #23](https://github.com/kejun/hearwise/pull/23) |
 | v1.0.3 | Media Session 与可恢复播放：锁屏媒体控制、系统中断恢复、暂停保留进度、后台播放适配 | [PR #25](https://github.com/kejun/hearwise/pull/25) |
 | v1.0.3 | 全文长内容分段：按段连续合成、语速相关长度预算、完整保留长原文/译文、分段进度 | [PR #26](https://github.com/kejun/hearwise/pull/26) |
+| v1.0.4 | 收听记录支持编辑标题与备注；渐进式字幕稳定显示、默认关闭的实验性提前播报，以及独立的播报设置开关 | [PR #29](https://github.com/kejun/hearwise/pull/29)、[PR #31](https://github.com/kejun/hearwise/pull/31)、[PR #32](https://github.com/kejun/hearwise/pull/32)、[PR #33](https://github.com/kejun/hearwise/pull/33) |
 
 ## 开发与文档
 
