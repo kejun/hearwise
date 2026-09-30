@@ -202,3 +202,10 @@ npm run check:version
 | [知识条目优化规划](docs/knowledge-items-optimization-plan.md) | 分阶段设计与后续方向，未实现部分不属于当前功能 |
 
 部分设计文档保留了编写当时的基线和规划；当前行为以本 README 和代码为准。云服务接口参考：[千问AI平台兼容接口](https://platform.qianwenai.com/docs/api-reference/toolkitframework/openai-compatible/overview)、[实时语音识别](https://platform.qianwenai.com/docs/developer-guides/speech/asr-realtime)、[Fish 流式语音](https://docs.fish.audio/features/realtime-streaming)。
+
+## 自动化验证与验收证据
+
+PR 的 Node 24 确定性测试与 Chromium 语音 fixture 会自动运行，不需要模型密钥。
+浏览器测试使用本地桩服务和模拟麦克风，截图仅作为人工视觉验收材料，不代表真实设备或付费服务验证。
+另有仅手动触发、只生成预览的 gh-aw 验收证据审查试点；尚未配置/授权模型计费或执行模型。
+配置、验证范围与启用步骤见 [CI 与验收证据试点](docs/acceptance-audit.md)。

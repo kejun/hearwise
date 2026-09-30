@@ -7,9 +7,16 @@
     "dev": "node --watch server.mjs",
     "start": "node server.mjs",
     "test": "node --test",
-    "check:version": "node scripts/check-version.mjs"
+    "check:version": "node scripts/check-version.mjs",
+    "test:browser": "node scripts/verify-speech-browser.mjs"
   },
   "dependencies": {
     "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node 24 deterministic tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check:version
+      - run: npm test
+
+  browser:
+    name: Chromium speech fixture (stub providers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Run browser fixture and capture screenshots
+        shell: bash
+        run: |
+          mkdir -p browser-evidence
+          node scripts/verify-speech-browser.mjs | tee browser-evidence/result.json
+        env:
+          SPEECH_SCREENSHOT: browser-evidence/speech.png
+          PINNED_SCREENSHOT: browser-evidence/pinned-caption.png
+          SPEECH_TRANSCRIPT_SCREENSHOT: browser-evidence/transcript.png
+          CAPTION_PANEL_SCREENSHOT: browser-evidence/caption-panel.png
+          SPEECH_PANEL_SCREENSHOT: browser-evidence/speech-panel.png
+          SPEECH_SETTINGS_SCREENSHOT: browser-evidence/speech-settings.png
+          FISH_SETTINGS_SCREENSHOT: browser-evidence/fish-settings.png
+      - name: Preserve evidence for this tested commit
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-evidence-${{ github.sha }}
+          path: browser-evidence/
+          retention-days: 14
+          if-no-files-found: warn
