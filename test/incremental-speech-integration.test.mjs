@@ -20,13 +20,13 @@ async function connect(t, url) {
   return { ws, events, pcm, send: data => ws.send(JSON.stringify(data)) };
 }
 async function setup(t, options = {}) {
-  const f = await speechFixture({ incremental: true, translationText: translate, ...options }); t.after(() => f.close());
+  const f = await speechFixture({ translationText: translate, ...options }); t.after(() => f.close());
   const asr = await connect(t, f.base.replace('http', 'ws') + '/ws');
   asr.send({ type: 'start', key: 'mock-asr', source: options.source || 'en', targetLang: 'Chinese', audioSource: 'tab' });
   await waitFor(() => asr.events.some(e => e.type === 'listening-ready'));
   const run = asr.events.find(e => e.type === 'listening-ready');
   const speech = await connect(t, f.base.replace('http', 'ws') + '/ws/tts');
-  speech.send({ type: 'speech.start', epoch: 17, listeningId: run.listeningId, runId: run.runId, config });
+  speech.send({ type: 'speech.start', epoch: 17, listeningId: run.listeningId, runId: run.runId, config, incremental: Object.hasOwn(options, 'incremental') ? options.incremental : true });
   let consumed = 0;
   speech.ws.on('message', (raw, binary) => {
     if (binary) return;
@@ -148,4 +148,15 @@ test('later open ASR sentence does not overtake an earlier uncovered suffix', as
   f.final(final, true, 'long');
   await waitFor(() => f.stats.commits.length >= 3);
   assert.equal(f.stats.commits[1], '天空晴朗，我们在外面等车。');
+});
+
+test('legacy process flag cannot opt in a client that omits the session preference', async t => {
+  const { f, speech } = await setup(t, { legacyIncrementalEnv: true, incremental: undefined });
+  assert.equal(speech.events.find(e => e.type === 'speech.ready').incremental, false);
+  f.final(first, false, 'long'); f.final(next, false, 'long');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(f.stats.mtRequests.length, 0); assert.equal(speech.pcm.length, 0);
+  f.final(final, true, 'long');
+  await waitFor(() => f.stats.commits.length === 1);
+  assert.deepEqual(f.stats.commits, [translate(final)]);
 });

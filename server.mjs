@@ -33,7 +33,7 @@ const asrSentenceSilenceMs = Math.min(6000, Math.max(200, Number(process.env.ASR
 const keys = new Map();
 const listeners = new Map();
 const translations = createTranslationScheduler();
-const speech = createSpeechService({ store, incrementalEnabled: process.env.HEARWISE_INCREMENTAL_SPEECH === '1', incrementalClauses: process.env.HEARWISE_INCREMENTAL_BOUNDARY !== 'sentence', translatePhrase: translateSpeechPhrase, onDispose: id => maybeReleaseKey(id), setHead: (owner, id) => translations.setSpeechHead(owner, id),
+const speech = createSpeechService({ store, incrementalClauses: process.env.HEARWISE_INCREMENTAL_BOUNDARY !== 'sentence', translatePhrase: translateSpeechPhrase, onDispose: id => maybeReleaseKey(id), setHead: (owner, id) => translations.setSpeechHead(owner, id),
   onMetric: event => console.info('speech_event', JSON.stringify(event)) });
 for (const file of ['caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js']) {
   types[`/${file}`] = 'text/javascript; charset=utf-8';

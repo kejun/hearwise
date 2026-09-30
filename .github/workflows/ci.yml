@@ -57,6 +57,8 @@ jobs:
           SPEECH_PANEL_SCREENSHOT: browser-evidence/speech-panel.png
           SPEECH_SETTINGS_SCREENSHOT: browser-evidence/speech-settings.png
           FISH_SETTINGS_SCREENSHOT: browser-evidence/fish-settings.png
+          INCREMENTAL_SETTINGS_SCREENSHOT: browser-evidence/incremental-settings.png
+          INCREMENTAL_SETTINGS_MOBILE_SCREENSHOT: browser-evidence/incremental-settings-mobile.png
           INCREMENTAL_SCREENSHOT: browser-evidence/incremental-caption.png
           INCREMENTAL_CORRECTION_SCREENSHOT: browser-evidence/incremental-correction.png
       - name: Preserve evidence for this tested commit

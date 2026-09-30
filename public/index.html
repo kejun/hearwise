@@ -136,6 +136,8 @@
       </section>
       <section class="tab-panel" id="tab-speech" role="tabpanel" aria-labelledby="tab-speech-button" hidden>
         <form id="speech-form">
+          <label class="speech-experiment" for="speech-incremental"><input id="speech-incremental" type="checkbox" aria-describedby="speech-incremental-hint" /><span>提前播报（实验）</span></label>
+          <p class="form-note" id="speech-incremental-hint">默认关闭，仅英语 → 简体中文实时播报。尝试提前读出稳定短句，不确定内容仍等定稿；可能增加翻译费用。仅保存在当前浏览器，保存会停止当前播报，手动重开后生效。</p>
           <label class="form-label" for="speech-provider">语音模型服务商</label>
           <select class="speech-select" id="speech-provider"><option value="qwen" selected>阿里云千问</option><option value="fish">Fish Audio</option></select>
           <fieldset class="speech-provider-fields" id="speech-qwen-fields" aria-label="阿里云千问设置">

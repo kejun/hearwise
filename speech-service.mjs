@@ -7,7 +7,7 @@ import { speechUnits, transcriptSpeechUnits } from './speech-scheduler.mjs';
 import { AUDIO_HEADER_BYTES, PREVIEW_TEXT, TTS_MODEL, TTS_INSTRUCT_MODEL, TTS_SAMPLE_RATE, speechConfig } from './public/speech-protocol.js';
 
 export function createSpeechService({ store, setHead = () => {}, createTts = config => config.provider === 'fish' ? new FishTts(config) : new QwenTts(config),
-  incrementalEnabled = false, incrementalClauses = true, translatePhrase, onDispose = () => {}, now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, pauseTimeoutMs = 300000, onMetric = () => {} }) {
+  incrementalClauses = true, translatePhrase, onDispose = () => {}, now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, pauseTimeoutMs = 300000, onMetric = () => {} }) {
   const consumers = new Set();
   function accept(client) {
     const owner = randomUUID();
@@ -254,7 +254,9 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
           // Snapshot and registration are synchronous. Finals committed after this point cannot fall through a gap.
           cursor = run.maxSequence;
         }
-        if (incrementalEnabled && translatePhrase && msg.type === 'speech.start') {
+        // Opt-in belongs to this consumer epoch, never a process-wide or provider setting.
+        // Missing/malformed values and legacy clients stay final-only. It cannot change mid-session.
+        if (msg.incremental === true && translatePhrase && msg.type === 'speech.start') {
           const run = store.speechRun(msg.listeningId, msg.runId);
           if (run.source_lang === 'en' && run.target_lang === 'Chinese') {
             ledger = createIncrementalLedger({ epoch, runId: msg.runId, allowClauses: incrementalClauses, onCorrection: detail => {
