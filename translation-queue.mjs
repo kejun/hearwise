@@ -47,6 +47,11 @@ export function createTranslationScheduler({ concurrency = TRANSLATION_CONCURREN
       }
       return true;
     },
+    cancel(id) {
+      const task = queue.find(task => task.segment.id === id);
+      if (!task) return false;
+      take(task); realtimeWindow = realtimeWindow.filter(item => item !== task); return true;
+    },
     remove(listeningId) {
       for (let i = queue.length - 1; i >= 0; i--) {
         if (queue[i].listeningId !== listeningId) continue;

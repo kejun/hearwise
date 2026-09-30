@@ -1,6 +1,7 @@
 // Optional end-to-end browser check. Requires a local Playwright installation and Chromium.
 // PLAYWRIGHT_MODULE=/path/to/playwright CHROMIUM_EXECUTABLE=/path/to/chrome node scripts/verify-speech-browser.mjs
 import assert from 'node:assert/strict';
+import { verifyIncrementalBrowser } from '../test-support/incremental-browser.mjs';
 import { createRequire } from 'node:module';
 import { speechFixture } from '../test-support/speech-fixture.mjs';
 const require = createRequire(import.meta.url);
@@ -252,7 +253,8 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   assert.deepEqual(errors, []);
   assert.ok(fixture.stats.authorizations.every(value => value === 'Bearer mock-shared-key'));
-  console.log(JSON.stringify({ ok: true, uiErrors: errors, ttsSessions: fixture.stats.connections,
+  const incremental = await verifyIncrementalBrowser(browser);
+  console.log(JSON.stringify({ ok: true, incremental, uiErrors: errors, ttsSessions: fixture.stats.connections,
     responses: fixture.stats.commits.length, fishRequests: fixture.stats.fishRequests.length,
     mediaChecks: ['platform metadata', 'platform pause/resume', '13s pause retains queue and connection', 'system interruption recovery', 'stop clears media session'],
     fishChecks: ['independent key', 'free and pro models', 'save and reload', 'provider switch aborts', 'live AudioWorklet playback', 'full original and translation', 'switch back to Qwen'],

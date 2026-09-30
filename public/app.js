@@ -1215,6 +1215,7 @@ async function start(preselected) {
         setPhase('listening');
         fetchDetail().catch(error => showError(error.message));
       }
+      if (message.type === 'caption-correction' && gen === connectionGeneration) showError(message.message);
       if (message.type === 'sentence' && gen === connectionGeneration) receiveSentence(message);
       if (message.type === 'segment-final') {
         liveSegments.set(message.segment.id, message.segment);
