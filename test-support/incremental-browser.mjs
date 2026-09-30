@@ -8,6 +8,7 @@ export async function verifyIncrementalBrowser(browser) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
   const errors = [], progress = [], speechEvents = [], sent = [];
   let sockets = 0;
+  const ttsSockets = [], closedSockets = new Set();
   const until = async check => {
     const deadline = Date.now() + 12000;
     while (!check()) { if (Date.now() > deadline) throw new Error('Incremental browser timed out'); await new Promise(resolve => setTimeout(resolve, 30)); }
@@ -16,7 +17,9 @@ export async function verifyIncrementalBrowser(browser) {
     await page.addInitScript(() => localStorage.setItem('tongsheng:qianwen-key', 'mock-incremental-key'));
     page.on('pageerror', error => errors.push(error.message));
     page.on('websocket', ws => {
-      if (ws.url().endsWith('/ws/tts')) sockets++;
+      if (ws.url().endsWith('/ws/tts')) {
+        sockets++; ttsSockets.push(ws); ws.on('close', () => closedSockets.add(ws));
+      }
       if (ws.url().endsWith('/ws/tts')) ws.on('framereceived', ({ payload }) => {
         if (typeof payload === 'string') speechEvents.push(JSON.parse(payload));
       });
@@ -100,11 +103,14 @@ export async function verifyIncrementalBrowser(browser) {
     // Saving OFF during a fresh live epoch stops it; a manual restart uses final-only.
     await page.getByRole('button', { name: '开启译文播报', exact: true }).click();
     await until(() => speechEvents.filter(event => event.type === 'speech.ready').length === 2);
+    const stoppingSocket = ttsSockets.at(-1);
+    const stoppingEpoch = speechEvents.filter(event => event.type === 'speech.ready').at(-1).epoch;
     await openSettings();
     assert.equal(await setting.isChecked(), true);
     await setting.uncheck();
     await saveSettings();
-    await until(() => sent.some(event => event.type === 'speech.stop'));
+    await until(() => sent.some(event => event.type === 'speech.stop' && event.epoch === stoppingEpoch));
+    await until(() => closedSockets.has(stoppingSocket));
     assert.equal(await storedPreference(), false);
     assert.equal(await page.locator('#speech-toggle').getAttribute('aria-pressed'), 'false');
     const stoppedSockets = sockets;
@@ -131,7 +137,7 @@ export async function verifyIncrementalBrowser(browser) {
     await until(() => fixture.stats.commits.length === 2);
     await page.getByRole('button', { name: '关闭播报', exact: true }).click();
     await page.getByRole('button', { name: '停止聆听', exact: true }).click();
-    await page.getByRole('button', { name: '开始聆听', exact: true }).waitFor();
+    await page.getByRole('button', { name: '继续收听', exact: true }).waitFor();
     await page.reload();
     assert.equal(await storedPreference(), false);
     assert.equal(await page.locator('#speech-toggle').getAttribute('aria-pressed'), 'false');
