@@ -10,19 +10,19 @@ import { speechConfig } from '../public/speech-protocol.js';
 
 // Execute the actual app and event handlers with a minimal DOM and controllable HTTP responses.
 // Deliberately let aborted requests resolve to exercise the stale-response guards.
-function app(t) {
+function app(t, preferences = []) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 10000 });
   const elements = new Map(), requests = [];
-  const storage = new Map([['tongsheng:qianwen-key', 'old-test-key'], ['hearwise:speech-key', 'obsolete-tts-key']]);
+  const storage = new Map([['tongsheng:qianwen-key', 'old-test-key'], ['hearwise:speech-key', 'obsolete-tts-key'], ...preferences]);
   function element(id) {
     if (elements.has(id)) return elements.get(id);
-    const classes = new Set(), events = new Map();
+    const classes = new Set(), events = new Map(), styles = new Map();
     const node = {
       value: '', _text: '', children: null,
       get textContent() { return this.children ? this.children.map(child => child.textContent).join('') : this._text; },
       set textContent(text) { this.children = null; this._text = text; },
       replaceChildren(...children) { this.children = children; }, hidden: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
-      style: { setProperty() {} }, setAttribute() {}, focus() {},
+      style: { setProperty: (name, value) => styles.set(name, value), getPropertyValue: name => styles.get(name) }, setAttribute() {}, focus() {},
       getBoundingClientRect: () => ({ bottom: 100 }),
       setCustomValidity(message) { this.validationMessage = message; },
       reportValidity() { this.reported = true; },
@@ -67,6 +67,45 @@ function app(t) {
   t.after(() => run('clearTranslationWork()'));
   return { element, requests, storage, run, tick, flush, reply, receive, final };
 }
+
+for (const [stored, expected] of [
+  [null, 44], ['', 44], ['  ', 44], ['bad', 44], ['NaN', 44], ['Infinity', 44], ['-Infinity', 44],
+  ['0', 21], ['-30', 21], ['20', 21], ['21', 21], ['30', 30], ['44', 44],
+  ['43.5', 44], ['63.6', 64], ['64', 64], ['70', 64], ['999', 64]
+]) test(`译文字号初始化、样式和持久化迁移：${JSON.stringify(stored)} → ${expected}`, t => {
+  const key = 'tongsheng:translation-size';
+  const a = app(t, stored === null ? [] : [[key, stored]]);
+  assert.equal(a.element('translation-size').value, String(expected));
+  assert.equal(a.element('root').style.getPropertyValue('--translation-size'), String(expected));
+  assert.equal(a.storage.get(key), stored === null ? undefined : String(expected));
+});
+
+test('译文字号端点实时保存，重复调整不越界且不受设置的取消或保存影响', t => {
+  const a = app(t);
+  for (const [value, expected] of [['21', '21'], ['64', '64'], ['20', '21'], ['70', '64'], ['44', '44'], ['21', '21']]) {
+    a.element('translation-size').value = value;
+    a.element('translation-size').emit('input');
+    assert.equal(a.element('translation-size').value, expected);
+    assert.equal(a.element('root').style.getPropertyValue('--translation-size'), expected);
+    assert.equal(a.storage.get('tongsheng:translation-size'), expected);
+  }
+  for (const action of ['close-settings', 'settings-form']) {
+    a.element('settings-trigger').emit('click');
+    a.element(action).emit(action === 'settings-form' ? 'submit' : 'click');
+    assert.equal(a.element('translation-size').value, '21');
+    assert.equal(a.element('root').style.getPropertyValue('--translation-size'), '21');
+    assert.equal(a.storage.get('tongsheng:translation-size'), '21');
+  }
+});
+
+test('译文字号 HTML 端点与默认值一致，默认 CSS 保持 44', () => {
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="translation-size"[^>]+min="21"[^>]+max="64"[^>]+step="1"[^>]+value="44"/);
+  const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const fallbacks = [...css.matchAll(/var\(--translation-size,([\d.]+)\)/g)];
+  assert.ok(fallbacks.length > 0);
+  assert.ok(fallbacks.every(match => match[1] === '44'));
+});
 
 test('更换音源先结束旧连接再启动新片段，取消选择保留旧流', async t => {
   const a = app(t);

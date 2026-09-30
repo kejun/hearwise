@@ -61,6 +61,14 @@ jobs:
           INCREMENTAL_SETTINGS_MOBILE_SCREENSHOT: browser-evidence/incremental-settings-mobile.png
           INCREMENTAL_SCREENSHOT: browser-evidence/incremental-caption.png
           INCREMENTAL_CORRECTION_SCREENSHOT: browser-evidence/incremental-correction.png
+          CAPTION_SIZE_DESKTOP_MIN_SCREENSHOT: browser-evidence/caption-size-desktop-min.png
+          CAPTION_SIZE_DESKTOP_MAX_SCREENSHOT: browser-evidence/caption-size-desktop-max.png
+          CAPTION_SIZE_MOBILE_MIN_SCREENSHOT: browser-evidence/caption-size-mobile-min.png
+          CAPTION_SIZE_MOBILE_MAX_SCREENSHOT: browser-evidence/caption-size-mobile-max.png
+          CAPTION_SIZE_PINNED_DESKTOP_MIN_SCREENSHOT: browser-evidence/caption-size-pinned-desktop-min.png
+          CAPTION_SIZE_PINNED_DESKTOP_MAX_SCREENSHOT: browser-evidence/caption-size-pinned-desktop-max.png
+          CAPTION_SIZE_PINNED_MOBILE_MIN_SCREENSHOT: browser-evidence/caption-size-pinned-mobile-min.png
+          CAPTION_SIZE_PINNED_MOBILE_MAX_SCREENSHOT: browser-evidence/caption-size-pinned-mobile-max.png
       - name: Preserve evidence for this tested commit
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
