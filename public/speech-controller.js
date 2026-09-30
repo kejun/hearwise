@@ -61,7 +61,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
     stop(message); replayTarget = saved;
     report(message, { mode: failedMode, kind: failedKind, canReplay: Boolean(saved) });
   }
-  async function start(config, { preview = false, replay = null, transcript = null, volume = .8, reason } = {}) {
+  async function start(config, { preview = false, replay = null, transcript = null, volume = .8, reason, incremental: requestIncremental = false } = {}) {
     stop('正在准备播报', reason);
     if (transcript && (context.phase !== 'idle' || !context.listeningId || !['original', 'translation'].includes(transcript))) {
       report('请先停止收听，再播报全文'); return;
@@ -96,7 +96,8 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
       ws.addEventListener('open', () => {
         if (gen !== epoch) return;
         send({ type: preview ? 'speech.preview' : replay ? 'speech.replay' : transcript ? 'speech.transcript' : 'speech.start', config,
-          listeningId: run.listeningId, runId: run.runId, segmentId: replay?.segmentId, kind: transcript, paused });
+          listeningId: run.listeningId, runId: run.runId, segmentId: replay?.segmentId, kind: transcript, paused,
+          ...(mode === 'live' ? { incremental: requestIncremental === true } : {}) });
       });
       ws.addEventListener('message', ({ data }) => {
         if (gen !== epoch) return;

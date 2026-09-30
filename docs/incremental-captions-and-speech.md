@@ -71,15 +71,24 @@ HTTP preview 的断开/取消传播至该请求自己的 upstream fetch，合并
 
 明确分离 source committed / queued / generated / played；发送中失败不能无条件推进覆盖；防重复与 final race 要有确定性测试。软队列限制不能变成每段固定等候。纯 text speculative 合成以后再议，本次不做。
 
-### 初始上线开关与实际范围
+### 当前用户开关与实际范围
 
-- `HEARWISE_INCREMENTAL_SPEECH=1` 才启用实验路径，默认关闭；UI 仍须用户主动开启播报，`speech.ready` 明示实验状态
+- 「播报设置 → 提前播报（实验）」默认关闭；仅在保存时将严格布尔值写入当前浏览器 `hearwise:speech.incremental`，旧配置、缺字段、字符串/数字等异常值均关闭。刷新只恢复偏好，不会自动开启播报
+- 浏览器仅在 live `speech.start` 顶层携带 `incremental: true/false`；服务端只有严格 `true` 且满足语言及翻译能力条件时为该 consumer 创建 ledger，`speech.ready.incremental` 回报实际生效状态。试听、单句/全文回放忽略此选项；provider config 不增加字段，也不切换模型
+- 不再读取旧 `HEARWISE_INCREMENTAL_SPEECH` 环境开关。没有进程级启用状态、账号级写入或跨消费者联动；相同 run 的不同消费者可独立选择开/关
 - 只适用显式 `en`→`Chinese` 的 live speech，不适用 auto、其他语言、试听或历史回放
 - `HEARWISE_INCREMENTAL_BOUNDARY=sentence` 只允许强句末标点；省略时允许上述保守独立并列分句
 - 用结构启发式而非完整依存句法模型，有限动词集合覆盖部分新闻/访谈；不能保证正确性，不满足筛选的正常长句仍须等 final
 - 已覆盖 prefix 后再做 final 残余 MT 会增加一次请求，并损失全句翻译上下文；完整 canonical MT 不受影响。未覆盖的后续句不能超车
 - early unit 已发出但尚未播放也计入不可重播覆盖，因为客户端可能已播放但尚未回报；TTS/播放失败时停止并提示完整人工回放，不以 guessed played offset 恢复
 - 每个 consumer 独立 ledger；4096 final IDs 上限到达即停止实验播报并提示，避免无界状态或遗忘后重播。关闭清除所有 ledger / queued request；其他消费者不受影响
+
+### 会话中修改与取消
+
+- checkbox 只是草稿，只有「保存播报设置」提交偏好。Escape、关闭按钮或背景关闭会恢复已保存值，保持当前 live consumer 不变；音量的独立持久化也不会保存 checkbox 草稿
+- 保存沿用既有设置生命周期：先本地静音，递增 epoch，清除播放器和 metadata，再发送 stop/关闭 socket；服务端取消该 consumer 的 phrase MT、关闭 TTS、释放 ledger。不会自动重连或开启播报。尚未完成的 unlock、MT、TTS 和旧 socket 事件不能影响新 epoch
+- 手动重开才发送新偏好；已初始化 socket 上再发 start 或修改标志不会改变该 consumer 的模式。切换来源、重连、试听/回放仍遵循原有取消逻辑
+- 去重保证针对连续的单次 consumer/epoch。手动停止再开启是新的会话，水位只包括已持久化 final；若同一句已提前播出一部分但尚未定稿，重开后可能完整再读一次。可等待该句定稿后再开启以避免此情况。不能跨会话猜测已播 coverage，也不能为了避免重复静默丢掉尚未读出的残余；canonical 原译文与人工完整回放始终保留
 
 ### 后续而非本次成果
 
@@ -101,3 +110,9 @@ qwen-mt-flash SSE首 token、Fish duplex、原生 Qwen text/stash ASR、LiveTran
 - 可见字符串擦除对照只证明合成 transient rewrite trace 上的改善。正常 mutable tail 仍会变化；持续真实修订会显式 rebase；尚未做真实录音质量/自然度/延迟评价
 - 本地 Playwright Chromium 下载返回损坏/截断文件；已有系统 Chromium 又被沙盒 socket 权限阻止，不能声称本地真实浏览器通过；使用 CI Chromium fixture 与上传截图进行验证，若 CI 尚未完成必须标明
 - 保留 Qwen commit PCM 和 Fish HTTP PCM，不引入 MT SSE/Fish duplex/provider 迁移/真实 key/付费调用；完整 transcript 和手动原文/译文 replay 仍 canonical
+
+### 播报设置开关补充验收
+
+- 在原有提前 PCM / coverage / canonical / correction / delayed MT / cancel / pause 测试之上，补严格 session opt-in、旧环境 flag 不得隐式启用、不同消费者相反选项隔离、非 live 模式禁止启用、显式语言守卫和旧 epoch 拒绝
+- Chromium stub fixture 通过实际 checkbox 验证默认关闭、取消草稿、保存及刷新保持（无自动播报）、运行中取消不影响旧 consumer、保存关闭后必须手动重开，以及新会话退回 final-only。异常本地偏好必须关闭
+- 本地 Chromium 受执行环境 socket 权限限制无法启动；实际浏览器结果及截图以该 PR 精确提交的 CI 运行记录为准。所有音频测试仍使用合成 ASR/MT/TTS，无真实 provider、付费调用、设备音质或端到端延迟测量

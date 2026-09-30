@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, incremental = false, translationDelay = 0 } = {}) {
+export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0 } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
   const stats = { connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
     mtRequests: [], mtAborted: 0, fishRequests: [], fishAborted: 0, holdFish: false };
@@ -87,7 +87,7 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
     });
   });
   const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(fileURLToPath(new URL('..', import.meta.url))),
-    env: { ...process.env, HEARWISE_INCREMENTAL_SPEECH: incremental ? '1' : '0', PORT: '0', LISTENING_DB: path.join(directory, 'test.sqlite'),
+    env: { ...process.env, HEARWISE_INCREMENTAL_SPEECH: legacyIncrementalEnv ? '1' : '0', PORT: '0', LISTENING_DB: path.join(directory, 'test.sqlite'),
       ASR_ENDPOINT: `ws://127.0.0.1:${asr.address().port}`, MT_ENDPOINT: `http://127.0.0.1:${mt.address().port}`,
       TTS_ENDPOINT: `ws://127.0.0.1:${tts.address().port}`, FISH_TTS_ENDPOINT: `http://127.0.0.1:${fish.address().port}/v1/tts`, EXTRACTION_WAIT_MS: '15000' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; child.stderr.on('data', data => { logs += data; });

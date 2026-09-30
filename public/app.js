@@ -124,7 +124,7 @@ let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
 
 // Speech is deliberately never restored as enabled. Only preferences may survive a reload.
-const speechEls = Object.fromEntries(['toggle', 'pause', 'preview-pause', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'provider', 'region', 'voice', 'rate', 'prompt', 'form', 'preview', 'result']
+const speechEls = Object.fromEntries(['toggle', 'pause', 'preview-pause', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'provider', 'region', 'voice', 'rate', 'prompt', 'incremental', 'form', 'preview', 'result']
   .map(name => [name, $(`speech-${name}`)]));
 const fishEls = Object.fromEntries(['key', 'model', 'voice', 'rate', 'latency', 'style'].map(name => [name, $(`speech-fish-${name}`)]));
 const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translation', 'stop', 'pause', 'status', 'reading']
@@ -176,6 +176,7 @@ speechEls.voice.value = speechPreferences.voice || 'Cherry';
 speechEls.rate.value = String(speechPreferences.rate || 1);
 speechEls.prompt.value = typeof speechPreferences.prompt === 'string' ? speechPreferences.prompt : '';
 speechEls.volume.value = String(speechPreferences.volume ?? .8);
+speechEls.incremental.checked = speechPreferences.incremental === true;
 speechEls.provider.value = speechPreferences.provider === 'fish' ? 'fish' : 'qwen';
 const storedFish = speechPreferences.fish && typeof speechPreferences.fish === 'object' ? speechPreferences.fish : {};
 fishEls.key.value = localStorage.getItem('hearwise:fish-key') || '';
@@ -216,7 +217,7 @@ function speechConfigError(error) {
   speechEls.result.textContent = error.message;
 }
 function enableSpeech(reason) {
-  try { void speech.start(readSpeechConfig(), { volume: Number(speechEls.volume.value), reason }); }
+  try { void speech.start(readSpeechConfig(), { volume: Number(speechEls.volume.value), reason, incremental: speechPreferences.incremental === true }); }
   catch (error) { speechConfigError(error); }
 }
 speechEls.toggle.addEventListener('click', () => speech.enabled ? speech.stop() : enableSpeech());
@@ -244,7 +245,7 @@ speechEls.form.addEventListener('submit', event => {
   try {
     const config = readSpeechConfig();
     speech.stop('设置已保存，请手动开启译文播报');
-    speechPreferences = { ...speechPreferences, provider: config.provider, volume: Number(speechEls.volume.value) };
+    speechPreferences = { ...speechPreferences, provider: config.provider, volume: Number(speechEls.volume.value), incremental: speechEls.incremental.checked };
     if (config.provider === 'fish') {
       const { key, provider, ...preferences } = config;
       speechPreferences.fish = preferences;
@@ -442,6 +443,8 @@ function resetConnectionTest() {
 }
 
 function closeSettings() {
+  // Closing without saving must not turn an experimental path on (or alter a running epoch).
+  speechEls.incremental.checked = speechPreferences.incremental === true;
   if (speechPreview) speech.stop();
   resetConnectionTest();
   els.modal.hidden = true;
