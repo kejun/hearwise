@@ -5,6 +5,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
   media = createSpeechMediaSession(), document = globalThis.document,
   createSocket = () => new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/tts`) }) {
   let epoch = 0, socket, player, enabled = false, context = {}, draining = false, mode = null, kind = null;
+  let incremental = false;
   let firstHeard = false, lastMessage = '', total = 0;
   let paused = false, interrupted = false, resuming = false, playbackRevision = 0;
   let pauseMessage = '';
@@ -21,7 +22,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
     : draining ? '正在读完最后几句' : '正在播报';
   function stop(message = '播报已关闭', reason = 'cancel') {
     const previous = socket, previousEpoch = epoch, stoppedMode = mode, stoppedKind = kind;
-    ++epoch; ++playbackRevision; enabled = paused = interrupted = resuming = false; draining = false; mode = kind = null;
+    ++epoch; ++playbackRevision; incremental = false; enabled = paused = interrupted = resuming = false; draining = false; mode = kind = null;
     player?.close(); player = null; // Local mute first; no server acknowledgement is required.
     media.close(); document?.removeEventListener('visibilitychange', recover);
     try { if (previous?.readyState === 1) previous.send(JSON.stringify({ type: 'speech.stop', reason, epoch: previousEpoch })); } catch { /* Already locally muted. */ }
@@ -103,13 +104,13 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
           if (data instanceof ArrayBuffer) { output.audio(data, gen); return; }
           const msg = JSON.parse(data);
           if (msg.epoch !== gen) return;
-          if (msg.type === 'speech.ready') { total = msg.total || 0; if (msg.incremental) report('实验性短句播报已开启；不确定内容仍等待定稿'); }
+          if (msg.type === 'speech.ready') { total = msg.total || 0; incremental = Boolean(msg.incremental); if (incremental) report('实验性短句播报已开启；不确定内容仍等待定稿'); }
           if (msg.type === 'speech.unit') { text.set(msg.unit, msg.text); metadata.set(msg.unit, msg); output.begin(msg.unit); }
           if (msg.type === 'speech.unit-end') output.end(msg.unit, msg.samples);
           if (msg.type === 'speech.state') {
             let message = msg.message;
             if (!firstHeard && !draining) {
-              if (msg.state === 'waiting') message = '播报已开启，等说话人说完一句并完成翻译后就会开始。';
+              if (msg.state === 'waiting') message = incremental ? '实验性短句播报已开启；不确定内容仍等待定稿' : '播报已开启，等说话人说完一句并完成翻译后就会开始。';
               if (['buffering', 'playing'].includes(msg.state)) message = '正在准备第一句语音，首次播放可能稍慢，请稍候…';
             }
             report(readingMeta ? playingMessage() : message, { canJump: msg.canJump });
