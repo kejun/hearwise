@@ -168,3 +168,7 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .record-feedback{font-size:13px;color:#315f4d;margin:8px 0}
 .record-feedback:empty{display:none}
 @media(max-width:700px){.record-editor,.record-notes{padding:16px}.record-editor input,.record-editor textarea{font-size:16px}}
+
+/* Only the mutable suffix is provisional; committed spans are retained across updates. */
+.caption-tail { opacity: .78; }
+.caption-review { text-decoration: underline dotted; text-underline-offset: .2em; }

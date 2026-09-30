@@ -1,3 +1,4 @@
+import { createCaptionFrontier } from '../public/caption-frontier.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -17,7 +18,10 @@ function app(t) {
     if (elements.has(id)) return elements.get(id);
     const classes = new Set(), events = new Map();
     const node = {
-      value: '', textContent: '', hidden: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
+      value: '', _text: '', children: null,
+      get textContent() { return this.children ? this.children.map(child => child.textContent).join('') : this._text; },
+      set textContent(text) { this.children = null; this._text = text; },
+      replaceChildren(...children) { this.children = children; }, hidden: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
       style: { setProperty() {} }, setAttribute() {}, focus() {},
       getBoundingClientRect: () => ({ bottom: 100 }),
       setCustomValidity(message) { this.validationMessage = message; },
@@ -38,9 +42,9 @@ function app(t) {
     close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
   }
   const context = vm.createContext({
-    ...translationParams, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
+    ...translationParams, createCaptionFrontier, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },
-    document: { getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
+    document: { createElement: () => ({ textContent: '', className: '' }), getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
     window: { addEventListener() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
