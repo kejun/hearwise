@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createIncrementalLedger, eligiblePhrase } from '../incremental-speech.mjs';
@@ -18,7 +19,11 @@ test('growing agreement commits immutable source span before any terminal punctu
   assert.equal(ledger.candidate(), null);
   const remainder = ledger.finalize({ asr_sentence_id: 'sentence', original_text: second + '.' });
   assert.equal(remainder.source, 'and the sky is clear above the quiet city.');
-  assert.equal(remainder.start, unit.end);
+  assert.equal(second.slice(unit.end, remainder.start).trim(), '');
+  assert.equal(remainder.source, (second + '.').slice(remainder.start, remainder.end));
+  assert.equal(remainder.hash, createHash('sha256').update(remainder.source).digest('hex'));
+  assert.equal(Object.isFrozen(remainder), true);
+  assert.equal(ledger.finalize({ asr_sentence_id: 'sentence', original_text: second + '.' }), remainder);
 });
 test('duplicates and non-growing correction do not create agreement', () => {
   const ledger = createIncrementalLedger({ epoch: 1, runId: 'run' });
@@ -58,4 +63,12 @@ test('late partial after canonical completion cannot be admitted again', () => {
 });
 test('sentence-only conservative policy disables comma admission', () => {
   assert.equal(eligiblePhrase(first, first, 0, { allowClauses: false }), null);
+});
+
+
+test('foreign epoch or run cannot advance another ledger coverage', () => {
+  const { ledger } = ready(), unit = ledger.candidate();
+  assert.equal(ledger.commit({ ...unit, epoch: unit.epoch + 1 }), false);
+  assert.equal(ledger.commit({ ...unit, runId: 'other-run' }), false);
+  assert.equal(ledger.commit(unit), true);
 });

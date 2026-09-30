@@ -84,6 +84,7 @@ export function createIncrementalLedger({ epoch, runId, allowClauses = true, onC
       return null;
     },
     valid(unit) {
+      if (unit?.epoch !== epoch || unit?.runId !== runId) return false;
       const s = states.get(unit.sentenceId);
       return !closed && s && !s.final && s.end === unit.start && s.text.slice(unit.start, unit.end) === unit.source;
     },
@@ -98,11 +99,18 @@ export function createIncrementalLedger({ epoch, runId, allowClauses = true, onC
       const s = states.get(String(segment.asr_sentence_id));
       if (!s) return null;
       if (conflict(s, segment.original_text)) return { conflict: true };
+      if (s.final && s.text !== segment.original_text) { closed = true; onCorrection({ sentenceId: s.id, reason: 'final-revised' }); return { conflict: true }; }
       s.final = true; s.text = segment.original_text;
       if (!s.end) return null;
-      return { start: s.end, end: segment.original_text.length, source: segment.original_text.slice(s.end).trim(),
-        epoch, runId, sentenceId: s.id, revision: s.revision, sequence: ++serial,
-        hash: createHash('sha256').update(segment.original_text.slice(s.end)).digest('hex'), preFinal: false };
+      if (!s.finalUnit) {
+        const suffix = segment.original_text.slice(s.end);
+        const start = s.end + suffix.length - suffix.trimStart().length;
+        const end = Math.max(start, segment.original_text.trimEnd().length);
+        const source = segment.original_text.slice(start, end);
+        s.finalUnit = Object.freeze({ start, end, source, epoch, runId, sentenceId: s.id, revision: s.revision,
+          sequence: ++serial, hash: createHash('sha256').update(source).digest('hex'), preFinal: false });
+      }
+      return s.finalUnit;
     },
     complete(id) { states.delete(String(id)); },
     close() { closed = true; states.clear(); finalizedIds.clear(); }
