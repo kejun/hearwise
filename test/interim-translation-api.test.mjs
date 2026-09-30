@@ -30,11 +30,12 @@ test('临时与最终翻译共用两槽，临时请求结束后立即唤醒等�
 });
 async function startServer(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'interim-translation-'));
-  const calls = [], held = [], clients = [], events = [];
+  const calls = [], held = [], clients = [], events = [], canceled = [];
   let paused = false, upstream;
   const modelServer = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks)); calls.push(body);
+    res.on('close', () => { if (!res.writableEnded) canceled.push(body); });
     const respond = () => {
       const content = body.model === 'qwen-mt-flash' ? '模拟完整译文' : '{"items":[]}';
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -86,7 +87,7 @@ async function startServer(t) {
       sentence: { sentence_id: id, text, sentence_end: final }
     } } }));
   }
-  return { base, post, calls, start, events, sentence, held,
+  return { base, post, calls, start, events, sentence, held, canceled,
     pause: () => { paused = true; }, release: () => { paused = false; for (const respond of held.splice(0)) respond(); } };
 }
 
@@ -153,4 +154,25 @@ test('超长临时输入被明确拒绝，最终原文仍完整入库翻译，�
   const stored = await (await fetch(`${s.base}/api/listenings/${ready.listeningId}/segments?ids=${final.id}`)).json();
   assert.equal(stored.items[0].original_text, text); assert.equal(stored.items[0].translation_text, '模拟完整译文');
   assert.equal((await s.post(valid)).status, 200);
+});
+
+
+test('取消临时请求释放自身上游，保留其他最终任务；临时最多占一个槽', async t => {
+  const s = await startServer(t); await s.start(); s.pause();
+  const controller = new AbortController();
+  const request = fetch(`${s.base}/api/translate`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(valid), signal: controller.signal }).catch(error => error.name);
+  await waitFor(() => s.held.length === 1);
+  assert.equal((await s.post({ ...valid, text: 'Another preview' })).status, 429);
+  s.sentence('Independent final.', true, 'one');
+  await waitFor(() => s.held.length === 2);
+  controller.abort();
+  assert.equal(await request, 'AbortError');
+  await waitFor(() => s.canceled.length === 1);
+  assert.equal(s.canceled[0].messages[0].content, valid.text);
+  s.sentence('Next final.', true, 'two');
+  await waitFor(() => s.held.length === 3);
+  assert.equal(s.canceled.length, 1);
+  s.release();
+  await waitFor(() => s.events.filter(e => e.type === 'translation-updated').length === 2);
 });

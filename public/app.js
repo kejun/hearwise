@@ -1122,8 +1122,17 @@ async function prepareAudio(preselected) {
   processor = new AudioWorkletNode(context, 'pcm-processor');
   silenceNode = context.createGain();
   silenceNode.gain.value = 0;
+  const capture = { frames: 0, samples: 0, droppedFrames: 0, droppedSamples: 0 };
   processor.port.onmessage = event => {
-    if (phase === 'listening' && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 512_000) socket.send(event.data);
+    if (phase !== 'listening') return;
+    capture.frames++; capture.samples += event.data.byteLength / 2;
+    if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 512_000) socket.send(event.data);
+    else {
+      capture.droppedFrames++; capture.droppedSamples += event.data.byteLength / 2;
+      if (capture.droppedFrames === 1 || capture.droppedFrames % 50 === 0) {
+        console.warn('audio_capture_drop', { ...capture, audioMs: capture.samples / 16 });
+      }
+    }
   };
   sourceNode.connect(processor);
   processor.connect(silenceNode);

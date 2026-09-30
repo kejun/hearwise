@@ -118,11 +118,11 @@ function logModelError(modelName, error) {
   console.warn('model_error', counter, modelErrorCounts.get(counter), message);
 }
 
-async function translate(key, text, target, timeout = 15000) {
+async function translate(key, text, target, timeout = 15000, signal) {
   const response = await fetch(mtEndpoint, { method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'qwen-mt-flash', messages: [{ role: 'user', content: text }],
-      translation_options: { source_lang: 'auto', target_lang: target } }), signal: AbortSignal.timeout(timeout) });
+      translation_options: { source_lang: 'auto', target_lang: target } }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error?.message || result.message || `翻译服务 HTTP ${response.status}`);
   const output = result.choices?.[0]?.message?.content;
@@ -185,10 +185,12 @@ function pumpTranslations() {
     activeTranslations.set(task.listeningId, (activeTranslations.get(task.listeningId) || 0) + 1);
     (async () => {
       let updated;
+      const modelStartedAt = performance.now();
+      console.info('translation_stage', JSON.stringify({ stage: 'queue', kind: task.kind, elapsedMs: Date.now() - task.enqueuedAt }));
       try {
         const text = await translate(key, task.segment.original_text, task.target);
         updated = store.setTranslation(task.segment.id, text, false);
-        console.info('final_translation_ms', Date.now() - task.enqueuedAt, task.kind);
+        console.info('translation_stage', JSON.stringify({ stage: 'model', kind: task.kind, elapsedMs: performance.now() - modelStartedAt }));
       } catch (error) {
         updated = store.setTranslation(task.segment.id, null, true);
         logModelError('translation', error);
@@ -258,13 +260,25 @@ const server = http.createServer(async (req, res) => {
     const { key, text, target = 'Chinese', source = 'auto' } = input;
     try {
       if (isSameLanguage(source, target)) return sendJson(res, 200, { text: text.trim() });
-      if (translations.length || translating + interimTranslating >= translations.concurrency) {
+      if (translations.length || interimTranslating >= 1 || translating + interimTranslating >= translations.concurrency) {
         return sendJson(res, 429, { code: 'FINAL_TRANSLATION_BUSY', error: '最终译文优先处理' });
       }
+      // Only this HTTP consumer owns this controller; finals and other consumers are independent.
+      const controller = new AbortController();
+      const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+      req.once('aborted', disconnected); res.once('close', disconnected);
+      if (req.aborted || res.destroyed) controller.abort();
+      const modelStartedAt = performance.now();
       interimTranslating++;
-      try { return sendJson(res, 200, { text: await translate(key.trim(), text.trim(), target) }); }
-      finally { interimTranslating--; pumpTranslations(); knowledgeScheduler.pump(); }
-    } catch (error) { return sendJson(res, 502, { code: 'TRANSLATION_FAILED', error: errorMessage(error) }); }
+      try {
+        const textResult = await translate(key.trim(), text.trim(), target, 15000, controller.signal);
+        if (!controller.signal.aborted) return sendJson(res, 200, { text: textResult });
+      } finally {
+        req.off('aborted', disconnected); res.off('close', disconnected);
+        console.info('translation_stage', JSON.stringify({ stage: 'model', kind: 'preview', elapsedMs: performance.now() - modelStartedAt, canceled: controller.signal.aborted }));
+        interimTranslating--; pumpTranslations(); knowledgeScheduler.pump();
+      }
+    } catch (error) { if (!res.destroyed) return sendJson(res, 502, { code: 'TRANSLATION_FAILED', error: errorMessage(error) }); }
   }
   if (req.method === 'GET' && url.pathname === '/api/listenings') {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
