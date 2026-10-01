@@ -1,21 +1,25 @@
-// Stable, compact cells leave clear horizontal and vertical lanes for edges.
-// No simulation runs during polling, filtering or keyboard navigation.
+// Compact cells leave clear horizontal and vertical lanes for edges.
+// Connected nodes occupy the upper group; independent items form a lower grid.
 export const GRAPH_NODE = Object.freeze({ width: 156, height: 40, stepX: 212, stepY: 92, margin: 40 });
 
 export function stableGraphLayout(nodes, relations, previous = new Map(), columns = 5) {
   const ids = new Set(nodes.map(n => n.id));
-  const result = new Map([...previous].filter(([id]) => ids.has(id)));
-  const occupied = new Set([...result.values()].map(p => `${p.col},${p.row}`));
+  columns = Math.max(1, Math.floor(columns) || 1);
   const neighbors = new Map(nodes.map(n => [n.id, new Set()]));
   for (const r of relations) {
-    if (!ids.has(r.subject_item_id) || !ids.has(r.object_item_id) ||
+    if (!ids.has(r.subject_item_id) || !ids.has(r.object_item_id) || r.subject_item_id === r.object_item_id ||
       !(r.assertions || []).some(a => ['active', 'needs_review'].includes(a.status))) continue;
     neighbors.get(r.subject_item_id).add(r.object_item_id);
     neighbors.get(r.object_item_id).add(r.subject_item_id);
   }
+  const connected = new Set([...ids].filter(id => neighbors.get(id).size));
+  // Keep an unchanged upper group stable, but reclaim gaps after nodes leave it.
+  const regroup = [...previous].some(([id, p]) => p.group === 'connected' && !connected.has(id));
+  const result = new Map(regroup ? [] : [...previous].filter(([id, p]) => connected.has(id) && p.group === 'connected' && p.col < columns));
+  const occupied = new Set([...result.values()].map(p => `${p.col},${p.row}`));
   const byDegree = (a, b) => neighbors.get(b).size - neighbors.get(a).size || a.localeCompare(b);
   const order = [], visited = new Set();
-  for (const id of [...ids].sort(byDegree)) {
+  for (const id of [...connected].sort(byDegree)) {
     if (visited.has(id)) continue;
     const queue = [id]; visited.add(id);
     for (let i = 0; i < queue.length; i++) {
@@ -40,9 +44,47 @@ export function stableGraphLayout(nodes, relations, previous = new Map(), column
       if (!occupied.has(`${col},${row}`)) cell = { col, row };
     }
     occupied.add(`${cell.col},${cell.row}`);
-    result.set(id, { ...cell, x: GRAPH_NODE.margin + cell.col * GRAPH_NODE.stepX, y: GRAPH_NODE.margin + cell.row * GRAPH_NODE.stepY });
+    result.set(id, { ...cell, group: 'connected', x: GRAPH_NODE.margin + cell.col * GRAPH_NODE.stepX, y: GRAPH_NODE.margin + cell.row * GRAPH_NODE.stepY });
   }
+  // A clear separator row prevents unrelated items filling holes among edges.
+  const startRow = result.size ? Math.max(...[...result.values()].map(p => p.row)) + 2 : 0;
+  const independent = [...ids].filter(id => !connected.has(id)).sort((a, b) => {
+    const p = previous.get(a), q = previous.get(b);
+    const rank = p => p?.group === 'independent' ? p.row * columns + p.col : Infinity;
+    return rank(p) - rank(q) || a.localeCompare(b);
+  });
+  independent.forEach((id, index) => {
+    const col = index % columns, row = startRow + Math.floor(index / columns);
+    result.set(id, { col, row, group: 'independent', x: GRAPH_NODE.margin + col * GRAPH_NODE.stepX, y: GRAPH_NODE.margin + row * GRAPH_NODE.stepY });
+  });
   return result;
+}
+
+export function graphLayoutBounds(positions) {
+  const values = [...positions.values()], { width, height, margin } = GRAPH_NODE;
+  if (!values.length) return { x: 0, y: 0, width: width + margin * 2, height: height + margin * 2 };
+  const x = Math.min(...values.map(p => p.x)) - margin, y = Math.min(...values.map(p => p.y)) - margin;
+  return { x, y, width: Math.max(...values.map(p => p.x)) + width + margin - x,
+    height: Math.max(...values.map(p => p.y)) + height + margin - y };
+}
+
+// Match both viewport dimensions, rather than a fixed column cap. Prefer the
+// most readable fit, then the layout using more of the available screen area.
+export function graphViewportColumns(nodes, relations, viewportWidth, viewportHeight) {
+  const w = Math.max(1, viewportWidth - 24), h = Math.max(1, viewportHeight - 24);
+  // Include layouts wider than the unscaled viewport: in a short landscape
+  // view, a wider grid can fit more legibly than a tall, heavily reduced one.
+  const balanced = Math.sqrt(nodes.length * w * GRAPH_NODE.stepY / (h * GRAPH_NODE.stepX));
+  const maxColumns = Math.min(nodes.length || 1, Math.max(2, Math.ceil(balanced * 2) + 2));
+  const fits = [];
+  for (let columns = 1; columns <= maxColumns; columns++) {
+    const bounds = graphLayoutBounds(stableGraphLayout(nodes, relations, new Map(), columns));
+    const scale = Math.min(2, w / bounds.width, h / bounds.height), area = bounds.width * bounds.height * scale * scale;
+    fits.push({ columns, scale, area });
+  }
+  const largest = Math.max(...fits.map(fit => fit.scale));
+  // Within 5% of the most readable fit, prefer using more of the screen.
+  return fits.filter(fit => fit.scale >= largest * .95).sort((a, b) => b.area - a.area || b.scale - a.scale || a.columns - b.columns)[0].columns;
 }
 
 function crossesNode(a, b, node) {

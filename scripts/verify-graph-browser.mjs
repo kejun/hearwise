@@ -17,6 +17,29 @@ try {
   const page = await browser.newPage({ viewport: { width: 1360, height: 1000 }, reducedMotion: 'reduce' });
   page.on('pageerror', error => errors.push(error.message));
   const screenshot = async name => { if (directory) await page.screenshot({ path: path.join(directory, name), fullPage: false }); };
+  const assertGroups = async () => {
+    const ready = await page.waitForFunction(() => {
+      const connected = [...document.querySelectorAll('[data-node-group="connected"]:not([hidden])')].map(el => el.getBoundingClientRect().bottom);
+      const independent = [...document.querySelectorAll('[data-node-group="independent"]:not([hidden])')].map(el => el.getBoundingClientRect().top);
+      if (connected.length && independent.length && Math.max(...connected) >= Math.min(...independent)) return false;
+      return { connected: connected.length, independent: independent.length, separated: true };
+    });
+    return ready.jsonValue();
+  };
+  const assertFullscreenFit = async () => {
+    await page.waitForFunction(() => {
+      const viewport = document.querySelector('#graph-viewport'), rect = viewport.getBoundingClientRect();
+      const nodes = [...document.querySelectorAll('.graph-node:not([hidden])')].map(el => el.getBoundingClientRect());
+      if (!nodes.length) return false;
+      const left = Math.min(...nodes.map(r => r.left)), right = Math.max(...nodes.map(r => r.right));
+      const top = Math.min(...nodes.map(r => r.top)), bottom = Math.max(...nodes.map(r => r.bottom));
+      return Math.abs((left + right - rect.left - rect.right) / 2) < 2 && Math.abs((top + bottom - rect.top - rect.bottom) / 2) < 2 &&
+        left >= rect.left && right <= rect.right && top >= rect.top && bottom <= rect.bottom &&
+        Math.max((right - left) / rect.width, (bottom - top) / rect.height) > .7 &&
+        viewport.scrollWidth <= viewport.clientWidth + 1 && viewport.scrollHeight <= viewport.clientHeight + 1;
+    });
+    await assertGroups();
+  };
   const select = async title => {
     await page.locator('#history-listening').click();
     await page.getByRole('button', { name: `查看“${title}”`, exact: true }).click();
@@ -60,6 +83,8 @@ try {
   assert.equal(await page.locator('#graph-fullscreen-dialog').evaluate(el => el.open && el.matches(':modal')), true);
   assert.equal(await page.locator('#graph-fullscreen').getAttribute('aria-pressed'), 'true');
   assert.ok((await page.locator('#graph-viewport').boundingBox()).height > 600);
+  await assertFullscreenFit();
+  assert.ok(await page.locator('.graph-world').evaluate(el => new DOMMatrix(getComputedStyle(el).transform).a > 1), 'fullscreen can enlarge a small map beyond the old 100% cap');
   assert.equal(await page.locator('.graph-job-panel').evaluate(el => el.closest('dialog') === null), true);
   await source.focus(); await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
   assert.equal(await page.locator('#graph-details').isHidden(), true);
@@ -78,6 +103,9 @@ try {
   await page.locator('#graph-generate').click();
   await page.locator('[data-relation-id]').first().waitFor({ timeout: 20000 });
   const edge = page.locator('[data-relation-id]').first();
+  const generatedGroups = await assertGroups();
+  assert.equal(generatedGroups.connected, 2); assert.equal(generatedGroups.independent, 9);
+  assert.match(await page.locator('[data-graph-group="independent"]').textContent(), /独立条目 · 9/);
   await page.locator('#graph-viewport').scrollIntoViewIfNeeded();
   await screenshot('graph-desktop-overview.png');
   await edge.click();
@@ -101,7 +129,20 @@ try {
   assert.equal(mobileFull.width, 390); assert.equal(mobileFull.height, 844);
   assert.ok((await page.locator('#graph-viewport').boundingBox()).height > 450);
   assert.ok(await page.locator('#graph-fullscreen-dialog').evaluate(el => el.scrollWidth <= el.clientWidth));
+  await assertFullscreenFit();
   await screenshot('graph-mobile-fullscreen.png');
+  await page.setViewportSize({ width: 844, height: 390 });
+  await assertFullscreenFit();
+  assert.ok((await page.locator('#graph-viewport').boundingBox()).height > 180);
+  await screenshot('graph-mobile-landscape-fullscreen.png');
+  const beforeManualZoom = await page.locator('.graph-world').evaluate(el => new DOMMatrix(getComputedStyle(el).transform).a);
+  await page.locator('#graph-zoom-in').click();
+  await page.waitForFunction(previous => new DOMMatrix(getComputedStyle(document.querySelector('.graph-world')).transform).a > previous, beforeManualZoom);
+  const manualScale = await page.locator('.graph-world').evaluate(el => new DOMMatrix(getComputedStyle(el).transform).a);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await page.locator('.graph-world').evaluate(el => new DOMMatrix(getComputedStyle(el).transform).a), manualScale, 'resizing must preserve manual zoom');
+  await page.locator('#graph-fit').click(); await assertFullscreenFit();
   await page.locator('#graph-fullscreen').click();
 
   // Semantic node list provides full-size keyboard/touch controls even at low zoom.
@@ -138,11 +179,21 @@ try {
     predicate: 'uses', assertions: [{ id: `stress-assertion-${i}`, statement: 'Synthetic relation for layout only.',
       status: 'needs_review', polarity: i % 4 ? 'positive' : 'negative', modality: i % 3 ? 'asserted' : 'planned', supports: [] }] }))
     .filter(r => r.subject_item_id !== r.object_item_id);
-  await page.route(`**/api/listenings/${fixture.seeded.second.listeningId}/graph`, route => route.fulfill({ status: 200,
-    contentType: 'application/json', body: JSON.stringify({ listeningId: fixture.seeded.second.listeningId,
-      graphRevision: 999999, nodes: stressNodes, relations: stressRelations, status: { enabled: true, state: 'complete' } }) }));
+  let releaseSnapshot;
+  const delayedSnapshot = new Promise(resolve => { releaseSnapshot = resolve; });
+  await page.route(`**/api/listenings/${fixture.seeded.second.listeningId}/graph`, async route => {
+    await delayedSnapshot;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ listeningId: fixture.seeded.second.listeningId,
+      graphRevision: 999999, nodes: stressNodes, relations: stressRelations, status: { enabled: true, state: 'complete' } }) });
+  });
   await page.locator('#graph-refresh').click();
+  await page.setViewportSize({ width: 1360, height: 1000 });
+  await page.locator('#graph-fullscreen').click();
+  releaseSnapshot();
   await page.waitForFunction(() => document.querySelectorAll('[data-node-id]').length >= 36);
+  await assertFullscreenFit();
+  await page.locator('#graph-fullscreen').click();
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('#graph-search').fill('特别长');
   assert.match(await page.locator('#graph-count').textContent(), /1 \/ /);
   const longName = page.locator('[data-node-id="stress-0"]');
@@ -173,11 +224,28 @@ try {
   assert.equal(nodeCrossings, 0, 'no edge crosses a node in the dense fixture');
   await screenshot('graph-desktop-dense-fixture.png');
   await page.locator('#graph-fullscreen').click();
+  await assertFullscreenFit();
   await screenshot('graph-desktop-dense-fullscreen.png');
+  await page.setViewportSize({ width: 2560, height: 1100 });
+  await assertFullscreenFit();
+  await screenshot('graph-wide-fullscreen.png');
   await page.locator('#graph-fullscreen').click();
 
+  checks.push('Connected and independent groups update automatically; fullscreen content is centered and fits desktop, wide, portrait and landscape viewports, including late snapshots and manual zoom');
   checks.push('Synthetic dense map and long names stay searchable, keyboard accessible and within viewport; qualifiers remain visible');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: true, checks, screenshots: directory || null,
     provider: 'local stub only; no live-model quality or latency benchmark' }, null, 2));
+} catch (error) {
+  const page = browser?.contexts()[0]?.pages()[0];
+  if (page) {
+    if (directory) await page.screenshot({ path: path.join(directory, 'graph-failure.png') });
+    console.error(JSON.stringify(await page.evaluate(() => ({
+      viewport: document.querySelector('#graph-viewport')?.getBoundingClientRect().toJSON(),
+      world: document.querySelector('.graph-world')?.style.cssText,
+      canvas: document.querySelector('.graph-canvas')?.style.cssText,
+      nodes: [...document.querySelectorAll('.graph-node:not([hidden])')].map(el => el.getBoundingClientRect().toJSON())
+    })), null, 2));
+  }
+  throw error;
 } finally { await browser?.close(); await fixture.close(); }

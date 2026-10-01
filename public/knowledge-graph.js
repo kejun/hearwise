@@ -1,4 +1,4 @@
-import { GRAPH_NODE, stableGraphLayout, routeGraphRelation } from './knowledge-graph-layout.js';
+import { GRAPH_NODE, stableGraphLayout, routeGraphRelation, graphLayoutBounds, graphViewportColumns } from './knowledge-graph-layout.js';
 export { stableGraphLayout } from './knowledge-graph-layout.js';
 
 // The graph is a presentation of persisted knowledge, never a source of new facts.
@@ -228,6 +228,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   }
   let listeningId = null, nodes = [], relations = [], positions = new Map(), snapshotStatus = {}, selected = null;
   let scale = 1, width = 800, height = 420, columns = 5, active = false, generation = 0, detailGeneration = 0, trigger = null;
+  let originX = 0, originY = 0, offsetX = 0, offsetY = 0, autoFit = false, fullscreenLayoutKey = '';
   let generated = false, generating = false, cancelling = false, recovering = false, progressTimer = null, localId = null, panelFingerprint = '', updates = 0;
   let terminalSyncing = false, lastTerminalSignature = null, retryIntent = null;
   const nodeElements = new Map(), edgeElements = new Map(), resultElements = new Map(), evidenceControllers = new Set();
@@ -250,6 +251,9 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const viewport = element('div', 'graph-viewport'); viewport.id = 'graph-viewport'; viewport.tabIndex = 0;
   viewport.setAttribute('aria-label', '知识图谱，可滚动浏览。使用缩放按钮或下方节点列表');
   const canvas = element('div', 'graph-canvas'), world = element('div', 'graph-world');
+  const groupLabels = new Map(['connected', 'independent'].map(group => {
+    const label = element('h3', 'graph-group-label'); label.dataset.graphGroup = group; world.append(label); return [group, label];
+  }));
   const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.classList.add('graph-edges'); svg.setAttribute('aria-hidden', 'true');
   const defs = doc.createElementNS(svg.namespaceURI, 'defs');
   const marker = doc.createElementNS(svg.namespaceURI, 'marker');
@@ -296,22 +300,28 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const fullscreenDialog = element('dialog', 'graph-fullscreen-dialog'); fullscreenDialog.id = 'graph-fullscreen-dialog';
   fullscreenDialog.setAttribute('aria-label', '全屏知识图谱');
   let savedView = null;
+  function layoutKey() {
+    return JSON.stringify([nodes.map(n => n.id).sort(), relations.filter(r => visibleAssertions(r).length)
+      .map(r => [r.subject_item_id, r.object_item_id].sort().join('\0')).sort()]);
+  }
   function arrangeForViewport() {
-    columns = Math.max(2, Math.min(7, Math.floor((viewport.clientWidth - GRAPH_NODE.margin * 2 + GRAPH_NODE.stepX - GRAPH_NODE.width) / GRAPH_NODE.stepX) || 5));
+    columns = savedView ? graphViewportColumns(nodes, relations, viewport.clientWidth, viewport.clientHeight)
+      : Math.max(1, Math.floor((viewport.clientWidth - GRAPH_NODE.margin * 2 + GRAPH_NODE.stepX - GRAPH_NODE.width) / GRAPH_NODE.stepX) || 5);
+    fullscreenLayoutKey = layoutKey();
     positions = new Map();
   }
   function setFullscreen(value, restoreFocus = true) {
     if (value === Boolean(savedView)) return;
     if (value) {
-      savedView = { scale, columns, positions, left: viewport.scrollLeft, top: viewport.scrollTop, overflow: doc.body.style.overflow };
+      savedView = { scale, columns, positions, autoFit, left: viewport.scrollLeft, top: viewport.scrollTop, overflow: doc.body.style.overflow };
       fullscreenDialog.append(explorer); fullscreenDialog.showModal(); doc.body.style.overflow = 'hidden';
       fullscreen.textContent = '退出全屏'; fullscreen.setAttribute('aria-label', '退出全屏图谱');
-      fullscreen.setAttribute('aria-pressed', 'true'); arrangeForViewport(); render(); fitView(); fullscreen.focus({ preventScroll: true });
+      fullscreen.setAttribute('aria-pressed', 'true'); autoFit = true; arrangeForViewport(); render(); fullscreen.focus({ preventScroll: true });
     } else {
       const previous = savedView; savedView = null;
       fullscreenDialog.close(); root.append(explorer); doc.body.style.overflow = previous.overflow;
       fullscreen.textContent = '全屏'; fullscreen.setAttribute('aria-label', '全屏查看图谱'); fullscreen.setAttribute('aria-pressed', 'false');
-      columns = previous.columns; positions = previous.positions; scale = previous.scale; render();
+      columns = previous.columns; positions = previous.positions; scale = previous.scale; autoFit = previous.autoFit; render();
       viewport.scrollLeft = previous.left; viewport.scrollTop = previous.top;
       if (restoreFocus) fullscreen.focus({ preventScroll: true });
     }
@@ -356,16 +366,29 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     nodes = [...all.values()];
   }
   function syncScale() {
-    world.style.transform = `scale(${scale})`; canvas.style.width = `${Math.ceil(width * scale)}px`; canvas.style.height = `${Math.ceil(height * scale)}px`;
+    const viewportWidth = viewport.clientWidth || 0, viewportHeight = viewport.clientHeight || 0;
+    offsetX = Math.max(0, (viewportWidth - width * scale) / 2);
+    offsetY = Math.max(0, (viewportHeight - height * scale) / 2);
+    world.style.transform = `translate(${offsetX - originX * scale}px, ${offsetY - originY * scale}px) scale(${scale})`;
+    canvas.style.width = `${Math.ceil(Math.max(viewportWidth, width * scale))}px`;
+    canvas.style.height = `${Math.ceil(Math.max(viewportHeight, height * scale))}px`;
     root.classList.toggle('graph-zoom-small', scale < .6);
   }
   function zoom(next) {
-    const old = scale, centerX = viewport.scrollLeft + viewport.clientWidth / 2, centerY = viewport.scrollTop + viewport.clientHeight / 2;
+    autoFit = false;
+    const old = scale, centerX = viewport.scrollLeft + viewport.clientWidth / 2 - offsetX, centerY = viewport.scrollTop + viewport.clientHeight / 2 - offsetY;
     scale = Math.min(2, Math.max(.01, next)); syncScale();
-    viewport.scrollLeft = centerX / old * scale - viewport.clientWidth / 2; viewport.scrollTop = centerY / old * scale - viewport.clientHeight / 2;
+    viewport.scrollLeft = centerX / old * scale + offsetX - viewport.clientWidth / 2;
+    viewport.scrollTop = centerY / old * scale + offsetY - viewport.clientHeight / 2;
   }
   function fitView() {
-    scale = Math.min(1, Math.max(.01, Math.min((viewport.clientWidth - 24) / width, (viewport.clientHeight - 24) / height)));
+    autoFit = true;
+    if (savedView) { arrangeForViewport(); render(); }
+    else applyFit();
+  }
+  function applyFit() {
+    if (!viewport.clientWidth || !viewport.clientHeight) return;
+    scale = Math.min(savedView ? 2 : 1, Math.max(.01, Math.min((viewport.clientWidth - 24) / width, (viewport.clientHeight - 24) / height)));
     syncScale(); viewport.scrollLeft = 0; viewport.scrollTop = 0;
   }
   function abortEvidence() { for (const c of evidenceControllers) c.abort(); evidenceControllers.clear(); }
@@ -462,15 +485,25 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   }
   function render() {
     const filtered = filterGraph(nodes, relations, { query: search.value, type: type.value, localId });
+    if (savedView && autoFit && fullscreenLayoutKey !== layoutKey()) arrangeForViewport();
     positions = stableGraphLayout(nodes, relations, positions, columns);
     const options = ['全部类型', ...new Set(nodes.map(knowledgeType).sort())];
     if (JSON.stringify([...type.options].map(o => o.textContent)) !== JSON.stringify(options)) {
       const value = type.value; type.replaceChildren(...options.map((label, index) => { const option = element('option', '', label); option.value = index ? label : ''; return option; })); type.value = value;
     }
     const shown = new Set(filtered.nodes.map(n => n.id));
-    width = Math.max(320, ...filtered.nodes.map(n => positions.get(n.id).x + GRAPH_NODE.width + GRAPH_NODE.margin));
-    height = Math.max(260, ...filtered.nodes.map(n => positions.get(n.id).y + GRAPH_NODE.height + GRAPH_NODE.margin));
-    world.style.width = `${width}px`; world.style.height = `${height}px`; svg.setAttribute('width', String(width)); svg.setAttribute('height', String(height));
+    const bounds = graphLayoutBounds(new Map(filtered.nodes.map(n => [n.id, positions.get(n.id)])));
+    ({ width, height, x: originX, y: originY } = bounds);
+    world.style.width = `${width + originX}px`; world.style.height = `${height + originY}px`;
+    svg.setAttribute('width', String(width + originX)); svg.setAttribute('height', String(height + originY));
+    for (const [group, label] of groupLabels) {
+      const items = filtered.nodes.map(n => positions.get(n.id)).filter(p => p.group === group);
+      label.hidden = !items.length;
+      if (items.length) {
+        label.textContent = `${group === 'connected' ? '有关联的条目' : '独立条目'} · ${items.length}`;
+        label.style.left = `${Math.min(...items.map(p => p.x))}px`; label.style.top = `${Math.min(...items.map(p => p.y)) - 28}px`;
+      }
+    }
     const pendingEdges = relations.filter(r => visibleAssertions(r).length && (!nodes.some(n => n.id === r.subject_item_id) || !nodes.some(n => n.id === r.object_item_id))).length;
     count.textContent = `正在显示 ${filtered.nodes.length} / ${nodes.length} 个节点 · ${terminalSyncing ? '正在读取最新关系数量…' : `${filtered.relations.length} 条关系`}${localId ? ' · 一跳邻居' : ''}${pendingEdges ? ' · 部分关系等待节点同步' : ''}`;
     noNodes.hidden = filtered.nodes.length > 0;
@@ -484,6 +517,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
         entry = element('li'); const b = button('', '', event => openDetails('node', node.id, event.currentTarget), 'graph-result-button'); b.dataset.resultNodeId = node.id; entry.append(b); resultList.append(entry); resultElements.set(node.id, entry);
       }
       const p = positions.get(node.id); nodeButton.style.left = `${p.x}px`; nodeButton.style.top = `${p.y}px`;
+      nodeButton.dataset.nodeGroup = p.group;
       nodeButton.firstChild.textContent = node.canonical_name; nodeButton.lastChild.textContent = knowledgeType(node);
       nodeButton.title = `${node.canonical_name} · ${knowledgeType(node)}`;
       nodeButton.setAttribute('aria-label', `查看${knowledgeType(node)}：${node.canonical_name}`);
@@ -535,7 +569,8 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     generate.textContent = generating ? '正在启动…' : recovering ? '正在确认服务器状态…' : ['failed', 'invalid'].includes(snapshotStatus.state) ? '重试未完成的关系' : snapshotStatus.state === 'partial' ? '检查新增或变化的内容' : generated ? '继续关系整理' : '生成本次收听的关系';
     loader.setPolling(!generating && !cancelling && graphWorkActive(snapshotStatus) && snapshotStatus.state !== 'waiting_key' && snapshotStatus.waitReason !== 'waiting_key' && snapshotStatus.keyAvailable !== false);
     renderProgress();
-    syncScale(); renderDetails();
+    if (savedView && autoFit) applyFit(); else syncScale();
+    renderDetails();
   }
   function renderProgress() {
     clearTimeout(progressTimer); progressTimer = null;
@@ -609,6 +644,20 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const reconcile = () => { if (doc.visibilityState !== 'hidden') void loader.refresh(); };
   doc.defaultView?.addEventListener('online', reconcile);
   doc.addEventListener?.('visibilitychange', reconcile);
+  let resizeFrame = null, lastViewportSize = '';
+  const viewportObserver = doc.defaultView?.ResizeObserver ? new doc.defaultView.ResizeObserver(() => {
+    if (resizeFrame != null) doc.defaultView.cancelAnimationFrame(resizeFrame);
+    resizeFrame = doc.defaultView.requestAnimationFrame(() => {
+      resizeFrame = null;
+      if (!active || !viewport.clientWidth || !viewport.clientHeight) return;
+      const size = `${viewport.clientWidth},${viewport.clientHeight}`;
+      if (size === lastViewportSize) return;
+      lastViewportSize = size;
+      if (savedView && autoFit) { arrangeForViewport(); render(); }
+      else syncScale();
+    });
+  }) : null;
+  viewportObserver?.observe(viewport);
   render();
   return {
     select(id) {
@@ -616,7 +665,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       setFullscreen(false, false); generation++; actionNotice.textContent = ''; terminalSyncing = false; lastTerminalSignature = null; retryIntent = null; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = recovering = false;
       for (const b of nodeElements.values()) b.remove(); nodeElements.clear();
       for (const e of resultElements.values()) e.remove(); resultElements.clear();
-      search.value = ''; type.value = ''; localId = null; scale = 1; updates = 0; notice.textContent = ''; status.textContent = graphStatusText();
+      search.value = ''; type.value = ''; localId = null; scale = 1; autoFit = false; updates = 0; notice.textContent = ''; status.textContent = graphStatusText();
       viewport.scrollLeft = viewport.scrollTop = 0; loader.select(id); render();
     },
     setNodes(items) { mergeNodes(items); render(); return [...nodes]; },
@@ -640,9 +689,9 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     },
     highlight(id, follow) {
       if (!active) return;
-      updates++; notice.textContent = `已收到 ${updates} 次知识更新，当前视图位置保持不变`;
+      updates++; notice.textContent = `已收到 ${updates} 次知识更新`;
       if (follow) { const node = nodeElements.get(id); node?.classList.remove('graph-node-updated'); if (node) { void node.offsetWidth; node.classList.add('graph-node-updated'); } }
     },
-    destroy() { setFullscreen(false, false); generation++; doc.defaultView?.removeEventListener('online', reconcile); doc.removeEventListener?.('visibilitychange', reconcile); clearTimeout(progressTimer); abortEvidence(); loader.stop(); root.replaceChildren(); }
+    destroy() { setFullscreen(false, false); generation++; viewportObserver?.disconnect(); if (resizeFrame != null) doc.defaultView.cancelAnimationFrame(resizeFrame); doc.defaultView?.removeEventListener('online', reconcile); doc.removeEventListener?.('visibilitychange', reconcile); clearTimeout(progressTimer); abortEvidence(); loader.stop(); root.replaceChildren(); }
   };
 }

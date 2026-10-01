@@ -1,5 +1,5 @@
 import { test } from 'node:test';
-import { GRAPH_NODE, routeGraphRelation } from '../public/knowledge-graph-layout.js';
+import { GRAPH_NODE, routeGraphRelation, graphLayoutBounds, graphViewportColumns } from '../public/knowledge-graph-layout.js';
 import assert from 'node:assert/strict';
 import { readKnowledgeView, saveKnowledgeView, filterGraph, stableGraphLayout, relationLabel, assertionQualifiers,
   createGraphSnapshotLoader, graphStatusText, graphWorkActive, graphProgressText, graphUsageText, graphCostText, graphDiagnosticsText, acceptGraphProcessing } from '../public/knowledge-graph.js';
@@ -37,10 +37,10 @@ test('filters preserve isolated nodes, never invent dangling edges and report to
   assert.equal(filterGraph(nodes, [{ ...relation, assertions: [{ status: 'superseded' }] }]).relations.length, 0);
 });
 
-test('stable layout retains all positions through arrivals, rename, filtering and relation changes', () => {
+test('stable layout retains positions within unchanged groups through arrivals and renaming', () => {
   const first = stableGraphLayout(nodes, [relation]);
   const later = [...nodes.map(n => n.id === 'a' ? { ...n, canonical_name: 'Renamed' } : n), { id: 'aa' }, { id: 'd' }];
-  const second = stableGraphLayout(later, [{ ...relation, subject_item_id: 'aa' }], first);
+  const second = stableGraphLayout(later, [relation], first);
   for (const n of nodes) assert.deepEqual(second.get(n.id), first.get(n.id));
   assert.equal(new Set([...second.values()].map(p => `${p.x},${p.y}`)).size, later.length);
   assert.deepEqual(stableGraphLayout(nodes.slice().reverse(), [relation]), first);
@@ -49,6 +49,49 @@ test('stable layout retains all positions through arrivals, rename, filtering an
   assert.ok([...narrow.values()].every(p => p.col < 2));
   assert.equal(large.size, 250);
   assert.equal(new Set([...large.values()].map(p => `${p.col},${p.row}`)).size, 250);
+});
+
+test('new and removed relations automatically regroup nodes above a separate independent grid', () => {
+  const many = Array.from({ length: 13 }, (_, i) => ({ id: String(i).padStart(2, '0') }));
+  const initial = stableGraphLayout(many, [], new Map(), 4);
+  const edge = { ...relation, subject_item_id: '10', object_item_id: '12' };
+  const assertGroups = (positions, connectedIds) => {
+    const connected = [...positions].filter(([id]) => connectedIds.includes(id)).map(([, p]) => p);
+    const independent = [...positions].filter(([id]) => !connectedIds.includes(id)).map(([, p]) => p);
+    assert.equal(positions.size, many.length);
+    assert.ok(connected.every(p => p.group === 'connected'));
+    assert.ok(independent.every(p => p.group === 'independent'));
+    if (connected.length && independent.length) assert.ok(Math.max(...connected.map(p => p.y + GRAPH_NODE.height)) < Math.min(...independent.map(p => p.y)));
+    assert.equal(new Set([...positions.values()].map(p => `${p.col},${p.row}`)).size, many.length);
+    const firstRow = Math.min(...independent.map(p => p.row));
+    assert.deepEqual(independent.map(p => (p.row - firstRow) * 4 + p.col).sort((a, b) => a - b), independent.map((_, i) => i));
+  };
+  assertGroups(initial, []);
+  const updated = stableGraphLayout(many, [edge], initial, 4);
+  assertGroups(updated, ['10', '12']);
+  assert.ok(updated.get('10').y < initial.get('10').y, 'late relations promote lower nodes without a relayout click');
+  const expanded = stableGraphLayout(many, [edge, { ...edge, subject_item_id: '01' }], updated, 4);
+  assertGroups(expanded, ['01', '10', '12']);
+  const inactive = ['stale', 'superseded'].map(status => ({ ...edge, assertions: [{ status }] }));
+  const removed = stableGraphLayout(many, [...inactive, { ...edge, object_item_id: 'missing' }, { ...edge, object_item_id: '10' }], expanded, 4);
+  assertGroups(removed, []);
+  assert.equal(Math.min(...[...removed.values()].map(p => p.row)), 0, 'an empty connected group leaves no blank upper section');
+});
+
+test('fullscreen column choice responds to both dimensions and visible bounds exclude hidden space', () => {
+  const many = Array.from({ length: 100 }, (_, i) => ({ id: `n${i}` }));
+  const wide = graphViewportColumns(many, [], 2560, 900), narrow = graphViewportColumns(many, [], 390, 800);
+  assert.ok(wide > 7, 'wide displays are not limited to seven columns');
+  assert.ok(narrow < wide);
+  assert.ok(graphViewportColumns(many, [], 1360, 400) > graphViewportColumns(many, [], 1360, 1100));
+  const shortMap = Array.from({ length: 11 }, (_, i) => ({ id: String(i) }));
+  assert.ok(graphViewportColumns(shortMap, [{ ...relation, subject_item_id: '0', object_item_id: '1' }], 810, 189) > Math.ceil(810 / GRAPH_NODE.width),
+    'landscape fits may use more columns than the unscaled viewport can hold');
+  const positions = stableGraphLayout(many, []);
+  const isolated = graphLayoutBounds(new Map([['last', [...positions.values()].at(-1)]]));
+  assert.equal(isolated.width, GRAPH_NODE.width + GRAPH_NODE.margin * 2);
+  assert.equal(isolated.height, GRAPH_NODE.height + GRAPH_NODE.margin * 2);
+  assert.ok(isolated.y > 0);
 });
 
 test('compact routing avoids unrelated nodes in a dense map, including parallel edges', () => {

@@ -252,12 +252,16 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .graph-edges>path{stroke-linejoin:round;stroke-linecap:round}
 .graph-edges>path.graph-edge-adjacent{stroke:#315f4d;stroke-width:2.5}
 .graph-explorer{min-width:0}
-.graph-fullscreen-dialog{inset:0;box-sizing:border-box;width:100vw;max-width:none;height:100dvh;max-height:none;margin:0;padding:20px;border:0;background:#f8faf6;color:#263b30;overflow:auto}
+.graph-fullscreen-dialog{position:fixed;inset:0;box-sizing:border-box;width:100vw;max-width:none;height:100vh;height:100dvh;max-height:none;margin:0;padding:16px;border:0;background:#f8faf6;color:#263b30;overflow:hidden}
 .graph-fullscreen-dialog::backdrop{background:#f8faf6}
 .graph-fullscreen-dialog[open]{display:flex}
-.graph-fullscreen-dialog .graph-explorer{display:flex;flex:1;min-height:0;flex-direction:column}
+.graph-fullscreen-dialog .graph-explorer{display:flex;flex:1;width:100%;min-width:0;min-height:0;flex-direction:column}
 .graph-fullscreen-dialog .graph-toolbar,.graph-fullscreen-dialog .graph-count,.graph-fullscreen-dialog .graph-disclaimer{flex-shrink:0}
-.graph-fullscreen-dialog .graph-viewport{flex:1;min-height:150px;height:auto;max-height:none}
+.graph-fullscreen-dialog .graph-viewport{flex:1 1 0;min-height:0;height:auto;max-height:none}
 .graph-fullscreen-dialog .graph-results{flex-shrink:0;margin:8px 0}
 .graph-fullscreen-dialog .graph-results ul{max-height:18vh}
 @media(max-width:700px){.graph-fullscreen-dialog{padding:12px;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(12px,env(safe-area-inset-bottom))}.graph-toolbar .graph-button{min-height:40px;padding:7px 10px}}
+
+.graph-group-label{position:absolute;z-index:1;margin:0;color:#718375;font-size:11px;line-height:18px;font-weight:600;pointer-events:none;white-space:nowrap}
+.graph-fullscreen-dialog .graph-disclaimer{margin:5px 0;font-size:10px;line-height:1.5}
+@media(max-width:700px){.graph-fullscreen-dialog .graph-toolbar{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px 4px}.graph-fullscreen-dialog .graph-search-label{grid-column:1/5;min-width:0}.graph-fullscreen-dialog .graph-type-label{grid-column:5/7;width:auto;min-width:0}.graph-fullscreen-dialog .graph-button{min-width:0;padding:6px 3px;font-size:11px}.graph-fullscreen-dialog .graph-count{margin:8px 0}}
