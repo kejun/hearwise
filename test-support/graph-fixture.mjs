@@ -1,5 +1,5 @@
 import { speechFixture } from './speech-fixture.mjs';
-import { relationWireEnvelope, relationWireRow } from './relation-wire-fixture.mjs';
+import { relationWireEnvelope, relationWireRow, relationSource } from './relation-wire-fixture.mjs';
 
 // Deterministic archived transcript; relation evidence is deliberately beyond page 1.
 export function seedGraphListening(store, { title = '柯达相机的故事', extraNodes = 9 } = {}) {
@@ -41,11 +41,11 @@ export async function graphFixture({ modelResponse, ...options } = {}) {
       if (!input.candidates) return { items: [] };
       const subject = input.candidates.find(item => item.canonical_name === 'Eastman Kodak');
       const object = input.candidates.find(item => item.canonical_name === 'Brownie camera');
-      const segment = input.focus_segments.find(item => item.text.includes('Eastman Kodak released'));
+      const segment = input.focus_segments.find(item => relationSource(input, item.id).includes('Eastman Kodak released'));
       if (!subject || !object || !segment) return relationWireEnvelope(input);
       return relationWireEnvelope(input, [relationWireRow(input, { subject_item_id: subject.id, object_item_id: object.id, predicate: 'released',
         statement: 'Eastman Kodak released the Brownie camera in 1900.', polarity: 'positive', modality: 'asserted',
         conditions: null, time_scope: '1900', attribution: null, status: 'active', correction_of: null,
-        supports: [{ segment_id: segment.id, quote: segment.text, role: 'relation' }] })]);
+        supports: [{ segment_id: segment.id, quote: relationSource(input, segment.id), role: 'relation' }] })]);
     }) });
 }

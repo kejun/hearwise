@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { graphFixture } from '../test-support/graph-fixture.mjs';
-import { relationWireEnvelope, relationWireRow } from '../test-support/relation-wire-fixture.mjs';
+import { relationWireEnvelope, relationWireRow, relationSource } from '../test-support/relation-wire-fixture.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(read, condition, timeout = 18000) {
@@ -75,12 +75,12 @@ test('graph DELETE cancels an in-flight request, preserves nodes and allows expl
     began(); await blocked;
     const subject = input.candidates.find(item => item.canonical_name === 'Eastman Kodak');
     const object = input.candidates.find(item => item.canonical_name === 'Brownie camera');
-    const segment = input.focus_segments.find(item => item.text.includes('Eastman Kodak released'));
+    const segment = input.focus_segments.find(item => relationSource(input, item.id).includes('Eastman Kodak released'));
     return !subject || !object || !segment ? relationWireEnvelope(input) : relationWireEnvelope(input, [relationWireRow(input, {
       subject_item_id: subject.id, object_item_id: object.id, predicate: 'released',
       statement: 'Eastman Kodak released the Brownie camera in 1900.', polarity: 'positive', modality: 'asserted',
       conditions: null, time_scope: '1900', attribution: null, status: 'active', correction_of: null,
-      supports: [{ segment_id: segment.id, quote: segment.text, role: 'relation' }]
+      supports: [{ segment_id: segment.id, quote: relationSource(input, segment.id), role: 'relation' }]
     })]);
   } });
   t.after(async () => { release(); await fixture.close(); });
@@ -136,7 +136,7 @@ test('server startup keeps recovered runs waiting for a key without paid request
   assert.equal(graph.status.round.requestCount, 0); assert.equal(fixture.stats.providerRequests.length, 0);
 });
 
-test('explicit problem-window retry recovers rejected output and diagnostics without replay on GET or stale POST', { timeout: 25000 }, async t => {
+test('filtered proposals settle through the HTTP API and repeated reads/starts cannot force new relations', { timeout: 25000 }, async t => {
   let responses = 0;
   const fixture = await graphFixture({ modelResponse: body => {
     if (body.model === 'qwen-mt-flash') return undefined;
@@ -144,25 +144,25 @@ test('explicit problem-window retry recovers rejected output and diagnostics wit
     if (!input.candidates) return { items: [] };
     const subject = input.candidates.find(c => c.canonical_name === 'Eastman Kodak');
     const object = input.candidates.find(c => c.canonical_name === 'Brownie camera');
-    const segment = input.focus_segments.find(s => s.text.includes('Eastman Kodak released'));
+    const segment = input.focus_segments.find(s => relationSource(input, s.id).includes('Eastman Kodak released'));
     if (!subject || !object || !segment) return relationWireEnvelope(input);
     responses++;
     return relationWireEnvelope(input, [relationWireRow(input, { subject_item_id: subject.id, object_item_id: object.id, predicate: 'released',
       statement: 'Eastman Kodak released Brownie camera in 1900.', polarity: responses === 1 ? undefined : 'positive',
       modality: 'asserted', status: 'active', time_scope: '1900',
-      supports: [{ segment_id: segment.id, quote: segment.text, role: 'relation' }] })]);
+      supports: [{ segment_id: segment.id, quote: relationSource(input, segment.id), role: 'relation' }] })]);
   } });
   t.after(() => fixture.close());
   const url = `${fixture.base}/api/listenings/${fixture.seeded.first.listeningId}/graph`;
   const read = async () => (await fetch(url)).json();
   const post = body => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   assert.equal((await post({ key: 'mock-selective-key' })).status, 202);
-  const rejected = await until(read, graph => graph.status.state === 'partial');
+  const rejected = await until(read, graph => graph.status.state === 'empty');
   const { diagnostics } = rejected.status;
   assert.equal(rejected.relations.length, 0); assert.equal(diagnostics.returnedCount, 1);
   assert.equal(diagnostics.acceptedCount, 0); assert.equal(diagnostics.rejectedCount, 1);
   assert.equal(diagnostics.rejectionReasons[0].code, 'QUALIFICATION_INVALID');
-  assert.equal(rejected.status.canRetryProblems, true);
+  assert.equal(rejected.status.canRetryProblems, false);
   const requests = fixture.stats.providerRequests.length;
   await read(); await read(); await sleep(100);
   assert.equal(fixture.stats.providerRequests.length, requests, 'read-only refresh never repeats model work');
@@ -170,12 +170,13 @@ test('explicit problem-window retry recovers rejected output and diagnostics wit
   assert.equal((await post({ key: 'mock-selective-key', retry: 'failed_partial' })).status, 400);
   assert.equal((await post({ key: 'mock-selective-key', retry: 'all', expectedEpoch: epoch })).status, 400);
   assert.equal((await post({ key: 'mock-selective-key', retry: 'failed_partial', expectedEpoch: epoch })).status, 202);
-  assert.equal((await post({ key: 'mock-selective-key', retry: 'failed_partial', expectedEpoch: epoch })).status, 409);
-  const recovered = await until(read, graph => graph.relations.length === 1);
-  assert.equal(responses, 2); assert.equal(recovered.status.diagnostics.acceptedCount, 1);
-  assert.equal(recovered.status.diagnostics.rejectedCount, 0, 'latest-window results replace historical rejection totals');
-  assert.equal(recovered.status.diagnostics.visibleRelationCount, 1);
-  assert.equal(recovered.status.diagnostics.storedRelationCount, 1);
-  assert.equal(recovered.status.retryableWindows, 0);
-  assert.doesNotMatch(JSON.stringify(recovered.status.diagnostics), /mock-selective-key|Bearer|Kodak|Brownie/);
+  assert.equal((await post({ key: 'mock-selective-key', retry: 'failed_partial', expectedEpoch: epoch })).status, 202);
+  assert.equal((await post({ key: 'mock-selective-key' })).status, 202);
+  await sleep(100);
+  const settled = await read();
+  assert.equal(responses, 1); assert.ok(settled.status.round.epoch >= epoch);
+  assert.equal(settled.status.diagnostics.acceptedCount, 0); assert.equal(settled.status.diagnostics.rejectedCount, 1);
+  assert.equal(settled.status.retryableWindows, 0); assert.equal(settled.status.failedJobs, 0);
+  assert.equal(fixture.stats.providerRequests.length, requests);
+  assert.doesNotMatch(JSON.stringify(settled.status.diagnostics), /mock-selective-key|Bearer|Kodak|Brownie/);
 });

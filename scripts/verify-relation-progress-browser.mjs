@@ -318,10 +318,15 @@ try {
   assert.equal(counters.POST, beforeFinalSnapshotPosts);
   await assertReadPollingStopped();
   checks.push('Terminal detail triggers authoritative graph GET, fences a delayed zero-edge response and displays a real stored edge without generation or SSE');
+  assert.equal(await page.locator('#graph-diagnostics').getAttribute('open'), null, 'diagnostics are collapsed by default');
+  await page.locator('#graph-diagnostics>summary').click();
+  assert.notEqual(await page.locator('#graph-diagnostics').getAttribute('open'), null);
+  await page.locator('#graph-diagnostics>summary').click();
+
   await updateStatus({ state: 'partial', partialJobs: 1, canRetryProblems: true, retryableWindows: 1,
     progress: { totalWindows: 2, completedWindows: 2, partialWindows: 1, remainingWindows: 0 } });
   await page.locator('#graph-retry').waitFor();
-  assert.match(await page.locator('#graph-diagnostics').textContent(), /模型返回 3 项.*最终接收 1 项.*拒绝 2 项/);
+  assert.match(await page.locator('#graph-diagnostics').textContent(), /模型返回 3 项.*最终接收 1 项.*已忽略候选 2 项/);
   assert.match(await page.locator('#graph-diagnostics').textContent(), /缺少跨句指代依据.*CROSS_SENTENCE_REFERENCE_REQUIRED/);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile diagnostics must not overflow');

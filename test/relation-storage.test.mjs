@@ -106,7 +106,7 @@ test('request reservation is durable across crashes; three network attempts exha
 
 test('waiting_nodes resumes on late V1 nodes, V2 repeat mentions, confirmed aliases and candidate promotion', t => {
   const h = fixture(t); const acme = h.addNode('Acme'); h.store.enableRelations(h.run.listeningId);
-  assert.equal(h.job(), null); assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'waiting_nodes');
+  assert.equal(h.job(), null); assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'empty');
   assert.equal(h.store.relationHasWork(h.run.listeningId), false);
   h.addNode('Camera');
   let job = h.reserve(); h.store.commitRelationJob(job.id, { relations: [] });
@@ -550,7 +550,7 @@ test('selective retry is explicit, epoch fenced, limited to problem windows and 
   for (let i = 2; i <= 18; i++) h.store.addSegment(h.run.listeningId, h.run.runId, { id: `selective-${i}`, text: 'Acme released Camera.' });
   h.store.enableRelations(h.run.listeningId);
   const complete = h.reserve(); h.store.commitRelationJob(complete.id, { relations: [relation(complete)] });
-  const partial = h.reserve(); h.store.commitRelationJob(partial.id, { relations: [], rejected: [{ code: 'SEMANTIC_PLAN_DROPPED' }] });
+  const partial = h.reserve(); h.store.commitRelationJob(partial.id, { relations: [], coverageLimited: true });
   const failed = h.reserve(); h.store.failRelationJob(failed.id, { code: 'REQUEST_FAILED', terminal: true });
   const before = h.store.graph(h.run.listeningId), epoch = before.status.round.epoch;
   assert.equal(before.status.retryableWindows, 2); assert.equal(before.status.canRetryProblems, true);
@@ -576,7 +576,7 @@ test('selective retry is explicit, epoch fenced, limited to problem windows and 
 
 test('a selective retry cannot reopen a cancelled late-result fence', t => {
   const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
-  const first = h.reserve(); h.store.commitRelationJob(first.id, { relations: [], rejected: [{ code: 'FIELD_INVALID' }] });
+  const first = h.reserve(); h.store.commitRelationJob(first.id, { relations: [], coverageLimited: true });
   h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: first.epoch });
   const retry = h.reserve(); h.store.cancelRelations(h.run.listeningId);
   assert.equal(h.store.commitRelationJob(retry.id, { relations: [relation(retry)] }).stale, true);
@@ -615,7 +615,7 @@ test('v2 registry clipping is persisted as partial coverage without an automatic
   assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 1);
 });
 
-test('v1 pending and interrupted requests are fenced without another attempt, explicit retry creates v2 only for problems', t => {
+test('v1 pending and interrupted requests are fenced without another attempt, explicit retry creates v3 only for problems', t => {
   const h = fixture(t); h.seed();
   for (let i = 2; i <= 18; i++) h.store.addSegment(h.run.listeningId, h.run.runId, { id: `protocol-${i}`, text: 'Acme released Camera.' });
   h.store.enableRelations(h.run.listeningId);
@@ -642,9 +642,9 @@ test('v1 pending and interrupted requests are fenced without another attempt, ex
   const status = h.store.relationProcessing(h.run.listeningId);
   assert.equal(status.diagnostics.failureReasons[0].code, 'RELATION_CONTRACT_CHANGED');
   h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: status.round.epoch });
-  const retry = h.reserve(); assert.equal(retry.prompt_version, 'relations-v2'); assert.equal(retry.window_id, running.window_id);
+  const retry = h.reserve(); assert.equal(retry.prompt_version, 'relations-v3'); assert.equal(retry.window_id, running.window_id);
   h.store.commitRelationJob(retry.id, { relations: [] });
-  const next = h.reserve(); assert.equal(next.window_id, pending.window_id); assert.equal(next.prompt_version, 'relations-v2');
+  const next = h.reserve(); assert.equal(next.window_id, pending.window_id); assert.equal(next.prompt_version, 'relations-v3');
   h.store.commitRelationJob(next.id, { relations: [] });
   assert.equal(h.job(), null); assert.equal(h.store.getRelationJob(completed.id).request_count, 1);
 });
@@ -667,24 +667,23 @@ test('terminal legacy cache survives upgrade, restart and redundant mention dirt
   assert.equal(h.store.graph(h.run.listeningId).relations.length, 1);
 });
 
-test('v2 storage budgets the actual evidence wire before reserving a paid attempt', async t => {
+test('compact v3 wire avoids clipping source that v2 duplicated beyond the byte budget', async t => {
   const { buildRelationRequest } = await import('../relations.mjs');
   const text = 'Acme released Camera. ' + '甲'.repeat(13970);
   const h = fixture(t, text); h.seed(); h.store.enableRelations(h.run.listeningId);
   const job = h.job();
-  assert.equal(job.request_count, 0); assert.equal(job.input.coverage_limited, true);
+  assert.equal(job.request_count, 0); assert.equal(job.input.coverage_limited, false);
   assert.ok(Buffer.byteLength(JSON.stringify(buildRelationRequest(job.input).body)) <= RELATION_LIMITS.requestBytes);
-  assert.ok(job.input.focus_segments[0].text.length < text.length);
+  assert.equal(job.input.focus_segments[0].text, text);
   assert.equal(job.input.focus_segments[0].source_revision, hash(text), 'full original revision remains the storage fence');
   assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 0);
 });
 
-test('v2 workflow rejects an oversized wire envelope before reservation, even when normalized input fits', async () => {
+test('workflow rejects oversized input before reservation', async () => {
   const { buildRelationRequest, RELATION_CONTRACT_VERSION } = await import('../relations.mjs');
   const { createRelationWorkflow } = await import('../relation-workflow.mjs');
-  const input = { listening_id: 'local', focus_segments: [{ id: 's1', text: 'Acme launched Camera. ' + '甲'.repeat(13970) }],
+  const input = { listening_id: 'local', focus_segments: [{ id: 's1', text: 'Acme launched Camera. ' + '甲'.repeat(14001) }],
     context_segments: [], candidates: [{ id: 'a', canonical_name: 'Acme', type: 'other' }, { id: 'b', canonical_name: 'Camera', type: 'other' }], existing_assertions: [] };
-  assert.ok(Buffer.byteLength(JSON.stringify(buildRelationInput(input))) < RELATION_LIMITS.requestBytes);
   assert.throws(() => buildRelationRequest(input), error => error.reason === 'INPUT_BUDGET_EXCEEDED');
   let requests = 0, calls = 0, failure;
   const store = { hasListening: () => true, relationProcessing: () => ({ state: 'running' }),
@@ -695,7 +694,7 @@ test('v2 workflow rejects an oversized wire envelope before reservation, even wh
   assert.equal(requests, 0); assert.equal(calls, 0);
 });
 
-test('v2 workflow forwards registry coverage and preserves precise root protocol failure codes', async t => {
+test('v3 workflow forwards registry coverage and preserves precise root protocol failure codes', async t => {
   const { createRelationWorkflow } = await import('../relation-workflow.mjs');
   const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
   const workflow = createRelationWorkflow({ store: h.store, extract: async () => ({ relations: [], rejected: [], returnedCount: 0, coverageLimited: true }) });
@@ -719,4 +718,64 @@ test('an obsolete in-flight protocol cannot commit or reopen its window and late
   assert.equal(h.store.getRelationJob(job.id).request_count, 1);
   assert.equal(h.store.getRelationJob(job.id).last_error, 'RELATION_CONTRACT_CHANGED');
   assert.equal(h.store.relationProcessing(h.run.listeningId).usageLastHour.totalTokens, 13);
+});
+
+test('all-filtered windows complete normally, keep diagnostics and cannot be retried as failures', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const job = h.reserve();
+  const result = h.store.commitRelationJob(job.id, { relations: [], returnedCount: 3,
+    rejected: [{ code: 'IDENTITY_REFERENCE_UNANCHORED' }, { code: 'ENDPOINT_INVALID' }, { code: 'QUALIFIER_NOT_IN_SOURCE' }] });
+  assert.equal(result.state, 'complete');
+  let status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.state, 'empty'); assert.equal(status.partialJobs, 0); assert.equal(status.failedJobs, 0);
+  assert.equal(status.canRetryProblems, false); assert.equal(status.diagnostics.rejectedCount, 3);
+  h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: job.epoch });
+  assert.equal(h.job(), null); h.reopen(); assert.equal(h.job(), null);
+  status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.requestCount, 1); assert.equal(status.round.epoch, job.epoch);
+});
+
+test('v9 candidate-only partial history is settled locally without replaying or losing edges/counts', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const job = h.reserve(); h.store.commitRelationJob(job.id, { relations: [relation(job)], rejected: [{ code: 'SEMANTIC_PREDICATE_UNSUPPORTED' }] });
+  const before = h.store.graph(h.run.listeningId);
+  h.store.db.prepare("UPDATE relation_jobs SET state='partial',prompt_version='relations-v2',returned_count=NULL,accepted_count=NULL WHERE id=?").run(job.id);
+  h.store.db.prepare("UPDATE relation_windows SET state='partial' WHERE id=?").run(job.window_id);
+  h.reopen();
+  const after = h.store.graph(h.run.listeningId), saved = h.store.getRelationJob(job.id);
+  assert.equal(saved.state, 'complete'); assert.equal(saved.prompt_version, 'relations-v2');
+  assert.equal(after.status.state, 'complete'); assert.equal(after.status.canRetryProblems, false);
+  assert.equal(after.status.requestCount, 1); assert.equal(after.status.round.epoch, job.epoch);
+  assert.equal(after.status.diagnostics.returnedCount, null); assert.equal(after.status.diagnostics.acceptedCount, null);
+  assert.equal(after.status.diagnostics.rejectionReasons[0].code, 'SEMANTIC_PREDICATE_UNSUPPORTED');
+  assert.deepEqual(after.relations, before.relations); assert.equal(h.job(), null);
+  h.reopen(); assert.equal(h.job(), null); assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 1);
+});
+
+test('migration preserves real coverage/storage problems and windows changed after an old partial result', t => {
+  for (const kind of ['coverage', 'storage', 'changed']) {
+    const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId); const job = h.reserve();
+    h.store.commitRelationJob(job.id, { relations: [], coverageLimited: kind === 'coverage',
+      rejected: [{ code: kind === 'storage' ? 'INVALID_SUPPORT' : 'FIELD_INVALID' }] });
+    h.store.db.prepare("UPDATE relation_jobs SET state='partial',prompt_version='relations-v2' WHERE id=?").run(job.id);
+    h.store.db.prepare("UPDATE relation_windows SET state='partial' WHERE id=?").run(job.window_id);
+    if (kind === 'changed') h.store.db.prepare("UPDATE segments SET original_text='Acme did not release Camera.' WHERE id=?").run(h.segment.id);
+    h.reopen();
+    if (kind === 'changed') {
+      assert.equal(h.store.db.prepare('SELECT state FROM relation_windows WHERE id=?').get(job.window_id).state, 'dirty');
+    } else {
+      assert.equal(h.store.getRelationJob(job.id).state, 'partial');
+      assert.equal(h.store.relationProcessing(h.run.listeningId).canRetryProblems, true);
+    }
+    assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 1);
+  }
+});
+
+test('fewer than two candidate nodes settles the current window without a model request', t => {
+  const h = fixture(t); h.addNode('Acme'); h.store.enableRelations(h.run.listeningId);
+  assert.equal(h.job(), null);
+  const status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.state, 'empty'); assert.equal(status.requestCount, 0);
+  assert.equal(status.progress.completedWindows, 1); assert.equal(status.progress.remainingWindows, 0);
+  assert.equal(status.canRetryProblems, false);
 });

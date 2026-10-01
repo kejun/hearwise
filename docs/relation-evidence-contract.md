@@ -1,54 +1,45 @@
-# Relation evidence contract v2
+# Relation evidence contract v3
 
-## Why this changes the contract
+## Product behavior
 
-The knowledge parser and relation validator previously used different identity matching rules. A canonical node named `Atlas` could be created from `atlas`, while the relation validator required a case-sensitive literal name. The relation model also had to regenerate quotes, offsets, support roles and IDs. A limited verb vocabulary was treated as universal semantic proof, rejecting valid synonyms and same-ASR-segment references.
+Knowledge items are allowed to remain independent. One model pass reads each eligible window and returns only relations supported by the source. An empty array or filtered proposals are normal completed results, including when every proposed relation is filtered. They do not trigger retries, a partial-failure banner, or a requirement to create more edges.
 
-V2 separates source grounding, transport validation and semantic uncertainty. It is not a claim that a language model or a finite local recognizer can prove every natural-language relation.
+Actual HTTP/timeouts, invalid response envelopes and truncated output remain failures with bounded retries. Incomplete input coverage or storage validation problems remain partial. Both preserve previously saved relations. Windows with fewer than two candidate nodes finish without a model call; new nodes can make them eligible later.
 
-## Server evidence registry
+## Semantic responsibility
 
-- `identity-grounding.mjs` is the shared name-equivalence implementation for knowledge identity acceptance and relation evidence. NFKC, case, whitespace and supported quotation/dash variants affect matching only. Evidence always retains original UTF-16 positions and exact original text
-- Word boundaries, Unicode grapheme expansion, shared aliases and overlapping different identities are guarded. Similar-looking names are never fuzzy-merged
-- `knowledge_mentions` is preserved as source provenance. Its often sentence-sized `surface_text` is never promoted to an entity alias
-- `relation-evidence.mjs` creates immutable sentence/clause spans and exclusive identity mentions. IDs bind source identity, source revision and exact positions; mention IDs also bind the candidate. The registry version binds the source/candidate/scope snapshot
-- Focus/context scope is explicit. Prefix/suffix source frames remain visible. Fragmented or uncertain frames are review-only; capped coverage is partial, never silently complete
+The model decides predicates, direction, negation, plans, conditions, attribution and pronoun resolution from the full original context. It is instructed to omit unsupported/co-occurring or ambiguous relationships, use translations only as auxiliary context, and preserve qualifications. Synonyms, non-English wording and same-segment references no longer have to satisfy an English/Chinese verb dictionary or a second, heuristic coreference validator.
 
-## Model output
+The server does **not** independently prove that a natural-language claim follows from its selected text. Source integrity and model semantic accuracy are separate. The tests with constructed provider responses verify parsing, source preservation and lifecycle behavior; they do not demonstrate live-model precision or recall. A semantically wrong but structurally valid model decision remains a model error, inspectable through its saved original evidence. This replaces the former regex-based semantic gate rather than adding another model call.
 
-The request continues to use `qwen3.8-flash`, `enable_thinking:false`, a JSON object response, 6,000 output tokens, two concurrent requests, a 30-second per-request timeout and bounded attempts. No whole-history request/token/time pause is added.
+## Compact wire format
 
-A response echoes `contract_version: relations-v2` and the exact `evidence_version`. Each row selects:
+The current model and dispatch limits are unchanged: `qwen3.8-flash`, thinking disabled, up to two concurrent requests, 30 seconds per request, three attempts per window, and 6,000 output tokens. There is no whole-history quota.
 
-- Candidate `subject_item_id`, `object_item_id`, supported `predicate`
-- One to ten `evidence_ids` for assertion spans, including genuine focus evidence
-- `subject_mention_id` and `object_mention_id`; context identity anchors are selected here, not padded into assertion evidence
-- Explicit polarity, modality, status, optional conditions/time_scope/attribution and correction target
+- `focus_segments` / `context_segments` carry short IDs, sequence and optional final translations. Original source appears once, in `evidence`.
+- Evidence is a complete ASR segment, split only when required by the 2,000-character evidence bound. The model sees the whole segment, including surrounding qualifications; it does not select an artificially shortened affirmative clause.
+- The model selects short candidate IDs (`n0`), evidence IDs (`e0`) and optional correction IDs (`a0`). It no longer emits mention IDs, quotes, offsets, support roles or display statements.
+- The envelope binds `contract_version: relations-v3` and the request's `evidence_version`. Each row requires endpoints, predicate, polarity, modality, status and 1–12 evidence IDs. Optional conditions/time/attribution/correction fields may be omitted. `relations: []` is valid.
+- Source/evidence revisions and exact UTF-16 offsets stay server-owned. Model-provided extra prose/fields cannot become stored facts. Statements are generated from canonical structured fields.
 
-The model does not generate quotes, offsets, support roles or revisions. The server restores those from the registry. Unknown IDs, stale versions, wrong mention owners, malformed fields and cross-listening identities are rejected. Legacy quote-shaped output is not silently accepted by the v2 provider path. Legacy parsing remains available for historical diagnostics/tests.
+## Remaining integrity checks
 
-Display statements are generated from canonical endpoints, predicate and truth qualifiers. Optional model prose cannot inject extra or reversed facts into a stored statement. Conditions, time and attribution remain separate persisted/displayed fields and must be grounded in the related source frame.
+Endpoints must be distinct, real candidates in this listening. Selected evidence must exist in this request and include focus text. Each endpoint must have an unambiguous approved name/alias in the selected evidence; include context evidence when it supplies identity. There is no per-sentence mention-ID matching, position-order proof or competing-pronoun heuristic.
 
-## Grounding and semantics
+Name matching uses the shared NFKC/case/whitespace/quotation/dash equivalence while retaining original source slices. Shared aliases and overlapping different identities remain ambiguous, not fuzzy-merged. Protocol tokens tolerate case, width and surrounding whitespace. Provided qualifier strings are matched with the same formatting tolerance and stored in the source spelling. Arbitrary invented qualifiers are filtered.
 
-Every selected assertion span must ground its endpoints with exclusive registry mentions or an earlier explicit reference. Cross-sentence order uses segment sequence plus character position, including multiple sentences inside one ASR segment. A named counterpart is not automatically a competing antecedent, but another plausible antecedent is not guessed. A prior identity mention cannot replace a different explicit source endpoint.
+Existing explicit-correction protection, source/identity fingerprint checks, cross-listening isolation, deterministic relation keys, cancellation fences and saved support invalidation remain. A correction must target the same endpoints/predicate and have explicit source correction wording. Uncertain endpoint identity or fragmented evidence stays `needs_review`.
 
-An irrelevant focus span cannot make an old context-only fact new. Shared aliases cannot become unambiguous merely by appending an earlier unique-name sentence. Source qualifiers cannot be stripped by selecting an embedded affirmative clause. Wrong direction, known contradictory predicate, co-occurrence, negation/plan/condition/attribution/time omissions and invalid qualifier contents remain guarded.
+## Upgrade and UI
 
-Known simple lexical cases may be active; unknown wording, unfamiliar languages, complex syntax, uncertain identities, source/translation conflicts and cross-reference proposals are explicitly `needs_review`. This state is visible as 待核对 and does not mean independently confirmed fact. Unknown phrasing is handled consistently across languages; `built` and `shipped` are not rejected merely because they are absent from a verb list. Conversely, review status is not permission to ignore structural or known contradiction failures.
+On startup, historical partial jobs caused only by candidate filtering become complete locally. Existing edges, rejected-reason diagnostics, unknown legacy counts, original protocol versions, epochs and paid-attempt journals are preserved. Clipped inputs, storage failures, unknown rejection types, and changed source windows are not marked complete. This status migration never starts paid work.
 
-Finite lexical checks cannot certify general semantic entailment, complete multilingual scope, or pronoun resolution. The fixtures establish implementation invariants, not real-provider accuracy, acceptance rate or latency.
+Pending old-protocol requests cannot commit or be retried silently under the new contract. They retain the existing explicit recovery path; settled historical windows remain cached. There is no automatic re-extraction of previously filtered history.
 
-## Recovery, retry and diagnostics
+The primary UI says “关系整理完成” or “关系整理完成，未发现有充分依据的关系；知识条目可独立查看”. Counts and candidate filtering details are in a collapsed “整理详情” disclosure. Only genuine unfinished work offers “重试未完成窗口”. Unknown historical counts remain unknown in diagnostics.
 
-- Terminal successful windows and already stored edges survive the upgrade. Updating this contract never automatically starts paid work or replays successful windows
-- Interrupted/pending old-protocol jobs are fenced before reservation/commit and require explicit retry. The existing failed/partial selective retry is the upgrade route for problematic windows
-- Source/translation/candidate identity changes remain revision/fingerprint fences; redundant mention provenance and protocol changes alone do not invalidate a terminal semantic cache
-- Reject samples retain only bounded enums, booleans and counts: schema, validation stage, row shape, known endpoint/mention flags, evidence counts and legacy-shape flag. No raw rejected model text, transcript, candidate ID, credentials or error body is added to diagnostic logs
-- Diagnostics distinguish review counts, protocol/identity/semantic rejection stages and unknown legacy information. Existing legacy rejected rows cannot be reconstructed retrospectively
+## Validation
 
-## Verification and live-provider boundary
+Regression coverage includes the real knowledge parser → SQLite → compact provider wire → relation decoder → storage → graph path, normalized identities and qualifiers, synonyms/multilingual fixtures, empty outputs, mixed valid/filtered candidates, exact source revisions, cancellation and stale responses, HTTP retries, historical-state migration, and no replay after reads/restarts/repeated starts.
 
-`test/relation-evidence-e2e.test.mjs` uses independently authored semantic proposals through real `parseKnowledgeV2 → SQLite knowledge mentions → request wire → provider-shaped response → relation validation → SQLite → graph filtering`. It covers canonical case/space/punctuation differences, multilingual source/translation, synonyms, same-segment references, collisions, repeated text, stale IDs, context/focus laundering, wrong facts, direction, qualifiers and malicious statements. Registry unit tests cover exact positions, collisions, stable IDs, frame provenance and caps. Transport, scheduler, cancellation, retry and graph/browser fixtures remain separate.
-
-No paid provider call or private transcript was used to develop these changes. A separately approved, capped real-provider evaluation remains necessary to measure model compliance, recall and precision on actual listening content. Historical rejected raw model rows were not stored, so past rejection accuracy cannot be recovered or claimed from aggregate codes alone.
+A 32-window / 92-filtered-proposal fixture verifies 32 requests, 32 completed windows, zero failed/partial windows and no retry eligibility. This is lifecycle verification, not a real-provider latency or accuracy measurement.

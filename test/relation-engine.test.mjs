@@ -6,7 +6,7 @@ import path from 'node:path';
 import { ListeningStore } from '../storage.mjs';
 import { createRelationWorkflow, relationRetryDelay } from '../relation-workflow.mjs';
 import { createRelationScheduler } from '../relation-queue.mjs';
-import { parseRelations, extractRelations } from '../relations.mjs';
+import { buildRelationRequest, extractRelations } from '../relations.mjs';
 import { createProviderAdmission } from '../provider-admission.mjs';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((r, j) => { resolve = r; reject = j; }); return { promise, resolve, reject }; };
@@ -24,9 +24,13 @@ function fixture(t, { limits } = {}) {
   }
   store.enableRelations(run.listeningId, { limits });
   const job = () => store.nextRelationJob(run.listeningId, { quietMs: 0, now: Date.now() });
-  const result = input => parseRelations(JSON.stringify({ relations: [{ subject_item_id: 'atlas', object_item_id: 'nova', predicate: 'released',
-    statement: 'Atlas 推出了 Nova', polarity: 'positive', modality: 'asserted', conditions: null, time_scope: null, attribution: null,
-    status: 'active', correction_of: null, supports: [{ segment_id: seg.id, quote: 'Atlas launched Nova.', role: 'relation' }] }] }), input);
+  const result = input => {
+    const request = buildRelationRequest(input), wire = JSON.parse(request.body.messages[1].content);
+    return request.parse(JSON.stringify({ contract_version: wire.contract_version, evidence_version: wire.evidence_version,
+      relations: [{ subject_item_id: wire.candidates.find(c => c.canonical_name === 'Atlas').id,
+        object_item_id: wire.candidates.find(c => c.canonical_name === 'Nova').id, predicate: 'released',
+        polarity: 'positive', modality: 'asserted', status: 'active', evidence_ids: [wire.evidence[0].id] }] }));
+  };
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   return { get store() { return store; }, run, seg, job, result, restart() { store.close(); store = new ListeningStore(file); } };
 }

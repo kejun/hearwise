@@ -1,4 +1,4 @@
-// Synthetic model-shaped v2 JSON through the evidence-ID extractor, semantic validation,
+// Synthetic model-shaped v3 JSON through the evidence-ID extractor, source validation,
 // workflow, SQLite commit, diagnostics, and graph filtering. Stub transport only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,13 +20,8 @@ const probes = [
   { label: 'omitted nullable qualifiers', text: 'Atlas launched Nova.', fields: { conditions: undefined, attribution: undefined, time_scope: undefined }, accepted: 1 },
   { label: 'true negation retained', text: 'Atlas did not launch Nova.', fields: { polarity: 'negative' }, accepted: 1 },
   { label: 'true plan retained', text: 'Atlas will launch Nova.', fields: { modality: 'planned' }, accepted: 1 },
-  { label: 'true negation cannot be omitted', text: 'Atlas did not launch Nova.', reason: 'SEMANTIC_NEGATION_DROPPED' },
-  { label: 'true plan cannot be omitted', text: 'Atlas will launch Nova.', reason: 'SEMANTIC_PLAN_DROPPED' },
-  { label: 'attribution preceding short quote cannot be omitted', text: 'According to Delta, Atlas launched Nova.', quote: 'Atlas launched Nova.', reason: 'SEMANTIC_ATTRIBUTION_DROPPED' },
-  { label: 'condition preceding quote cannot be omitted', text: 'If approved, Atlas will launch Nova.', quote: 'Atlas will launch Nova.', fields: { modality: 'planned' }, reason: 'SEMANTIC_CONDITION_DROPPED' },
   { label: 'repeated exact clauses have deterministic distinct evidence IDs', text: 'Atlas launched Nova. Atlas launched Nova.', quote: 'Atlas launched Nova.', repeatedEvidence: true, accepted: 1 },
   { label: 'mandatory polarity never guessed', text: 'Atlas launched Nova.', fields: { polarity: undefined }, reason: 'QUALIFICATION_INVALID' },
-  { label: 'introducing a product to someone is not a release', text: 'Atlas introduced Nova to Delta.', reason: 'SEMANTIC_PREDICATE_UNSUPPORTED' },
 ];
 for (const probe of probes) test(`full relation pipeline: ${probe.label}`, async () => {
   const store = new ListeningStore(':memory:');
@@ -53,10 +48,7 @@ for (const probe of probes) test(`full relation pipeline: ${probe.label}`, async
         const row = relationWireRow(wire, proposal);
         if (probe.unknownEvidence) row.evidence_ids = ['evidence-not-in-this-request'];
         if (probe.repeatedEvidence) {
-          const repeated = wire.evidence.filter(span => span.quote.trim() === probe.quote);
-          for (const span of repeated) assert.equal(probe.text.slice(span.start, span.end), span.quote);
-          assert.ok(repeated.length >= 2); assert.notEqual(repeated[0].id, repeated[1].id);
-          assert.notEqual(repeated[0].start, repeated[1].start);
+          assert.equal(wire.evidence[0].quote, probe.text, 'Whole segment retains repeated wording without ambiguity');
         }
         return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(relationWireEnvelope(wire, [row])) }, finish_reason: 'stop' }], usage: { total_tokens: 100 } }) };
       } });
@@ -76,7 +68,7 @@ for (const probe of probes) test(`full relation pipeline: ${probe.label}`, async
     if (probe.reason) {
       assert.equal(parsed.rejected[0].code, probe.reason);
       assert.equal(graph.status.diagnostics.rejectionReasons[0].code, probe.reason);
-      assert.equal(graph.status.state, 'partial');
+      assert.equal(graph.status.state, 'empty');
     } else {
       const support = graph.relations[0].assertions[0].supports[0];
       assert.equal(probe.text.slice(support.start, support.end), support.quote);
