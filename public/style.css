@@ -238,3 +238,10 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 @media(max-width:700px){.graph-job-panel{padding:12px}.graph-actions .graph-button{min-height:44px}.graph-job-panel .graph-cost{font-size:12px}}
 
 .graph-progress-bar[hidden]{display:none}
+
+.graph-diagnostics{margin-top:12px;padding:10px 12px;border:1px solid #dce5d9;border-radius:8px;background:#fff;font-size:12px;line-height:1.75;color:#435d49;overflow-wrap:anywhere}
+.graph-diagnostics p{margin:0}.graph-diagnostics p+p{margin-top:5px}
+.graph-retry-panel{margin-top:12px;padding:12px;border:1px solid #d4be99;border-radius:8px;background:#fff8ea;color:#755c34;font-size:12px;line-height:1.75;overflow-wrap:anywhere}
+.graph-retry-panel p{margin:0}.graph-retry-panel .graph-button{white-space:normal}
+#graph-retry{border-color:#c5b08c;color:#75582d;background:#fff8ea}
+.graph-retry-panel[hidden],.graph-diagnostics[hidden]{display:none}

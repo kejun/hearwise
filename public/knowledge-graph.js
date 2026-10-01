@@ -150,11 +150,15 @@ export function createGraphSnapshotLoader({ read, onSnapshot, onError = () => {}
     select(next) { if (id === next) return; stop(); id = next; revision = wanted = -1; if (id) schedule(0); },
     invalidate(selected, next) { if (selected !== id) return; const value = Number(next) || 0; if (value <= revision && value <= wanted) return; wanted = Math.max(wanted, value); if (flight) queued = true; else schedule(); },
     refresh,
+    reconcile() { const wasPolling = polling; stop(); polling = wasPolling; return refresh(); },
     setPolling,
     stop() { stop(); id = null; revision = wanted = -1; }
   };
 }
 
+const GRAPH_TERMINAL = new Set(['paused', 'cancelled', 'complete', 'empty', 'ok', 'failed', 'invalid', 'partial', 'waiting_nodes']);
+const terminalSignature = status => GRAPH_TERMINAL.has(status.state) ? JSON.stringify([status.round?.id, status.round?.epoch, status.state, status.requestCount, status.progress, status.failedJobs, status.partialJobs]) : null;
+const retryableGraph = status => status.canRetryProblems === true;
 const RELATION_STOPPED = new Set(['paused', 'cancelled', 'complete', 'empty', 'ok', 'failed', 'invalid', 'partial', 'waiting_nodes', 'not_generated']);
 export function graphWorkActive(status = {}) {
   if (status.enabled === false || RELATION_STOPPED.has(status.state)) return false;
@@ -192,9 +196,17 @@ export function graphStatusText(status = {}, hasRelations = false) {
     return '正在整理关系…字幕与条目可继续使用';
   }
   if (status.failedJobs || ['failed', 'invalid'].includes(state)) return '关系整理失败，已有条目与关系仍可查看；可手动重试未完成内容';
-  if (status.partialJobs || state === 'partial') return '关系部分完成，仍有未能确认的内容；已有结果保留，内容变化后可继续检查';
+  if (status.partialJobs || state === 'partial') return '关系部分完成，仍有未能确认的内容；已有结果保留，可手动重试失败和部分窗口';
   if (status.waitingNodes || status.waitingNodesJobs || state === 'waiting_nodes') return '等待更多已确认知识条目';
-  if (['complete', 'empty', 'ok'].includes(state) || status.completedJobs || status.completeJobs) return hasRelations ? '关系整理完成' : '整理完成，暂无有明确依据的关系';
+  if (['complete', 'empty', 'ok'].includes(state) || status.completedJobs || status.completeJobs) {
+    if (hasRelations) return '关系整理完成';
+    const diagnostics = status.diagnostics;
+    if (!diagnostics || diagnostics.returnedCount == null || diagnostics.unknownJobs) return '整理已结束，当前没有可展示的关系；返回与校验数量未记录或尚未取得，请查看诊断';
+    if (diagnostics.resultJobs === 0) return '整理已结束，尚无已记录的窗口结果，不能判断模型是否返回过关系';
+    if (diagnostics.returnedCount === 0) return '整理已结束，模型未返回关系候选';
+    if (diagnostics.acceptedCount === 0 && diagnostics.rejectedCount > 0) return '整理已结束，返回的关系候选未通过校验；请查看拒绝原因';
+    return '整理已结束，当前没有可展示的关系；候选与校验结果见下方';
+  }
   if (hasRelations) return '已保存的对话关系';
   return '尚未生成关系，知识条目可先独立查看';
 }
@@ -221,9 +233,30 @@ export function graphUsageText(hour) {
   const unknown = Math.max(0, (Number(hour.requests) || 0) - (Number(hour.measuredRequests) || 0));
   return `本次收听过去 1 小时：${numberText(hour.requests)} 次关系请求；${numberText(hour.measuredRequests)} 次返回用量，共 ${numberText(hour.totalTokens)} tokens（输入 ${numberText(hour.inputTokens)} / 输出 ${numberText(hour.outputTokens)}）。${unknown ? `${numberText(unknown)} 次请求用量未知，未计入 token 合计，仍可能产生费用。` : ''}费用以服务商账单为准。`;
 }
+export function graphDiagnosticsText(status = {}) {
+  const d = status.diagnostics;
+  if (status.state === 'not_generated') return [];
+  if (!d) return status.state && status.state !== 'not_generated' ? ['诊断暂不可用；不能根据空图谱判断模型是否返回了关系候选。'] : [];
+  const lines = [
+    `服务端关系：当前可见 ${numberText(d.visibleRelationCount)} 条 · 已保存 ${numberText(d.storedRelationCount)} 条（含已失效关系）`,
+    `各窗口最近一次已记录结果（不是本轮累计）：模型返回 ${numberText(d.returnedCount)} 项 · 通过校验 ${numberText(d.validatorAcceptedCount)} 项 · 最终接收 ${numberText(d.acceptedCount)} 项 · 拒绝 ${numberText(d.rejectedCount)} 项`,
+    `写入新关系 ${numberText(d.insertedRelationCount)} 条 · 复用已有关系 ${numberText(d.deduplicatedCount)} 项（可能新增表述或依据）`,
+    `已完成或部分完成的窗口结果：${numberText(d.resultJobs)} 个，其中 ${numberText(d.measuredJobs)} 个有完整数量记录 · ${numberText(d.coverageLimitedWindows)} 个窗口存在输入覆盖限制`
+  ];
+  if (d.resultJobs === 0) lines.push('尚无已完成或部分完成的窗口结果；请求失败原因及当前已保存关系仍可在此查看。');
+  if (d.unknownJobs || ['returnedCount', 'validatorAcceptedCount', 'acceptedCount', 'insertedRelationCount', 'deduplicatedCount'].some(key => d[key] == null)) {
+    lines.push(`有 ${numberText(d.unknownJobs)} 个窗口的数量未记录或尚未取得（可能是历史记录、等待处理或解析失败）；未知不等于 0，也不能据此认定模型没有返回关系。`);
+  }
+  for (const [field, title] of [['rejectionReasons', '拒绝原因'], ['failureReasons', '请求失败原因']]) {
+    const reasons = Array.isArray(d[field]) ? d[field] : [];
+    if (reasons.length) lines.push(`${title}：${reasons.map(reason => `${reason.label || reason.code || '原因未记录'}（${numberText(reason.count)} 项${reason.label && reason.code ? `，${reason.code}` : ''}）`).join('；')}`);
+  }
+  return lines;
+}
+
 export function graphCostText(status = {}) {
   const limits = status.limits || {};
-  return `点击后持续处理本次收听全部尚未完成或已变化的文本窗口，保留已有关系，不设整轮 token、请求数或处理时长上限。每个窗口最多尝试 ${numberText(limits.maxWindowRequests ?? 3)} 次，单次请求最长 ${durationText(limits.requestTimeoutMs ?? 30000)}，最多 ${numberText(limits.maxConcurrent ?? 2)} 个并行请求；失败后可手动重试；部分完成会保留已有结果，内容变化后可继续检查。会使用连接设置中的千问 API Key 发送相关最终原文、已完成译文和已有知识条目，产生额外模型费用。可随时取消；取消后已发出的请求仍可能计费。`;
+  return `点击后持续处理本次收听全部尚未完成或已变化的文本窗口，保留已有关系，不设整轮 token、请求数或处理时长上限。每个窗口最多尝试 ${numberText(limits.maxWindowRequests ?? 3)} 次，单次请求最长 ${durationText(limits.requestTimeoutMs ?? 30000)}，最多 ${numberText(limits.maxConcurrent ?? 2)} 个并行请求；失败和部分完成可选择重试，保留已有结果与成功窗口。会使用连接设置中的千问 API Key 发送相关最终原文、已完成译文和已有知识条目，产生额外模型费用。可随时取消；取消后已发出的请求仍可能计费。`;
 }
 
 export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, runNumber = () => '?' }) {
@@ -240,6 +273,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   let listeningId = null, nodes = [], relations = [], positions = new Map(), snapshotStatus = {}, selected = null;
   let scale = 1, width = 800, height = 420, active = false, generation = 0, detailGeneration = 0, trigger = null;
   let generated = false, generating = false, cancelling = false, recovering = false, progressTimer = null, localId = null, panelFingerprint = '', updates = 0;
+  let terminalSyncing = false, lastTerminalSignature = null, retryIntent = null;
   const nodeElements = new Map(), edgeElements = new Map(), resultElements = new Map(), evidenceControllers = new Set();
   const toolbar = element('div', 'graph-toolbar');
   const searchLabel = element('label', 'graph-search-label', '搜索知识');
@@ -272,13 +306,23 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const status = element('p', 'graph-status'); status.id = 'graph-status'; status.setAttribute('role', 'status');
   const notice = element('p', 'graph-notice'); notice.id = 'graph-updates'; notice.setAttribute('role', 'status');
   const generate = button('生成本次收听的关系', 'graph-generate', () => { void startGeneration(); });
+  const retry = button('重试失败和部分窗口', 'graph-retry', () => showRetryConfirmation());
   const cancel = button('取消关系整理', 'graph-cancel', () => { void cancelGeneration(); });
   const costs = element('p', 'graph-cost'); costs.id = 'graph-cost'; generate.setAttribute('aria-describedby', 'graph-cost'); cancel.setAttribute('aria-describedby', 'graph-cost');
   const progress = element('p', 'graph-progress'); progress.id = 'graph-progress'; progress.setAttribute('role', 'status');
   const progressBar = element('progress', 'graph-progress-bar'); progressBar.setAttribute('aria-label', '关系文本窗口完成进度');
   const round = element('p', 'graph-round'); round.id = 'graph-round';
-  const actions = element('div', 'graph-actions'); actions.append(generate, cancel, refresh);
+  const actions = element('div', 'graph-actions'); actions.append(generate, retry, cancel, refresh);
+  const actionNotice = element('p', 'graph-notice'); actionNotice.id = 'graph-action-notice'; actionNotice.setAttribute('role', 'status');
+  const retryPanel = element('section', 'graph-retry-panel'); retryPanel.id = 'graph-retry-panel'; retryPanel.hidden = true;
+  retryPanel.setAttribute('aria-label', '重试关系确认');
+  const retryWarning = element('p', '', '仅重新处理失败和部分完成的文本窗口；成功窗口和已保存关系保留。会再次发送相关原文、译文及知识条目给千问，可能产生额外模型费用。');
+  retryWarning.id = 'graph-retry-warning'; retry.setAttribute('aria-describedby', retryWarning.id);
+  const confirmRetry = button('确认重试，可能产生费用', 'graph-retry-confirm', () => { void confirmSelectiveRetry(); });
+  const dismissRetry = button('暂不重试', 'graph-retry-dismiss', () => { retryIntent = null; retryPanel.hidden = true; retry.focus({ preventScroll: true }); });
+  const retryActions = element('div', 'graph-actions'); retryActions.append(confirmRetry, dismissRetry); retryPanel.append(retryWarning, retryActions);
   const jobPanel = element('section', 'graph-job-panel'); jobPanel.setAttribute('aria-label', '关系整理进度与费用');
+  const diagnostics = element('section', 'graph-diagnostics'); diagnostics.id = 'graph-diagnostics'; diagnostics.setAttribute('aria-label', '关系生成诊断');
   const usage = element('p', 'graph-cost'); usage.id = 'graph-usage';
   const disclaimer = element('p', 'graph-disclaimer', '连线表示对话中有这样的表述，不代表已经外部事实核查。计划、否定、推测和时间条件会保留。');
   const panel = element('section', 'graph-details'); panel.id = 'graph-details'; panel.hidden = true;
@@ -287,7 +331,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const panelTitle = element('h3'); panelTitle.id = 'graph-detail-title'; panel.setAttribute('aria-labelledby', panelTitle.id);
   const close = button('关闭', 'graph-close', () => closeDetails()); panelHeader.append(panelTitle, close);
   const panelBody = element('div', 'graph-details-body'); panel.append(panelHeader, panelBody);
-  jobPanel.append(status, progress, progressBar, round, actions, costs, usage);
+  jobPanel.append(status, progress, progressBar, round, actions, actionNotice, retryPanel, diagnostics, costs, usage);
   root.append(jobPanel, toolbar, count, viewport, noNodes, notice, resultDetails, disclaimer, panel);
   const loader = createGraphSnapshotLoader({
     read: async (id, signal) => {
@@ -302,7 +346,9 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     },
     onSnapshot(data) {
       if (data.listeningId !== listeningId) return;
-      recovering = false;
+      if (!acceptGraphProcessing(snapshotStatus, data.status || {})) { render(); return; }
+      recovering = terminalSyncing = false;
+      lastTerminalSignature = terminalSignature(data.status || {});
       const previousNodes = JSON.stringify(nodes);
       mergeNodes(data.nodes || []); relations = data.relations || [];
       if (acceptGraphProcessing(snapshotStatus, data.status || {})) snapshotStatus = data.status || {};
@@ -311,7 +357,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       render();
       if (JSON.stringify(nodes) !== previousNodes) onNodes([...nodes]);
     },
-    onError(error) { status.textContent = `${error.message || '关系暂时无法读取'}；知识条目仍可查看${recovering ? '。服务器操作状态尚未确认，请刷新关系后再继续' : ''}`; }
+    onError(error) { status.textContent = `${error.message || '关系暂时无法读取'}；知识条目仍可查看${recovering ? '。服务器操作状态尚未确认，请刷新关系后再继续' : terminalSyncing ? '。最终图谱尚未同步，请刷新关系；当前连线数量不是最终结果' : ''}`; }
   });
   function mergeNodes(incoming) {
     const all = new Map(nodes.map(n => [n.id, n]));
@@ -440,7 +486,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     height = Math.max(260, ...filtered.nodes.map(n => positions.get(n.id).y + 128));
     world.style.width = `${width}px`; world.style.height = `${height}px`; svg.setAttribute('width', String(width)); svg.setAttribute('height', String(height));
     const pendingEdges = relations.filter(r => visibleAssertions(r).length && (!nodes.some(n => n.id === r.subject_item_id) || !nodes.some(n => n.id === r.object_item_id))).length;
-    count.textContent = `正在显示 ${filtered.nodes.length} / ${nodes.length} 个节点 · ${filtered.relations.length} 条关系${localId ? ' · 一跳邻居' : ''}${pendingEdges ? ' · 部分关系等待节点同步' : ''}`;
+    count.textContent = `正在显示 ${filtered.nodes.length} / ${nodes.length} 个节点 · ${terminalSyncing ? '正在读取最新关系数量…' : `${filtered.relations.length} 条关系`}${localId ? ' · 一跳邻居' : ''}${pendingEdges ? ' · 部分关系等待节点同步' : ''}`;
     noNodes.hidden = filtered.nodes.length > 0;
     noNodes.textContent = nodes.length ? '没有符合筛选的知识。可清空搜索、选择全部类型或退出一跳视图。' : '尚无知识条目，最终原文出现后会持续整理。';
     local.disabled = !localId && selected?.kind !== 'node'; local.setAttribute('aria-pressed', String(Boolean(localId))); local.textContent = localId ? '退出一跳视图' : '一跳邻居';
@@ -476,12 +522,21 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       entry.button.title = relationLabel(relation); entry.button.setAttribute('aria-label', `查看关系依据：${nodes.find(n => n.id === relation.subject_item_id)?.canonical_name}，${relationLabel(relation)}，${nodes.find(n => n.id === relation.object_item_id)?.canonical_name}`);
       entry.button.classList.toggle('graph-adjacent', selected?.kind === 'node' && [relation.subject_item_id, relation.object_item_id].includes(selected.id));
     }
-    generate.disabled = generating || cancelling || recovering || !listeningId || snapshotStatus.state !== 'waiting_key' && graphWorkActive(snapshotStatus);
+    generate.disabled = generating || cancelling || recovering || terminalSyncing || !listeningId || snapshotStatus.state !== 'waiting_key' && graphWorkActive(snapshotStatus);
+    generate.hidden = ['failed', 'partial', 'invalid'].includes(snapshotStatus.state);
+    retry.hidden = !retryableGraph(snapshotStatus) || graphWorkActive(snapshotStatus);
+    retry.textContent = `重试失败和部分窗口${snapshotStatus.retryableWindows ? `（${numberText(snapshotStatus.retryableWindows)} 个）` : ''}`;
+    retry.disabled = generating || cancelling || recovering || terminalSyncing || !Number.isInteger(snapshotStatus.round?.epoch);
+    if (retryIntent && (retryIntent.id !== listeningId || retryIntent.gen !== generation || retryIntent.expectedEpoch !== snapshotStatus.round?.epoch || graphWorkActive(snapshotStatus))) retryIntent = null;
+    retryPanel.hidden = !retryIntent;
+    confirmRetry.disabled = generating || cancelling || recovering || terminalSyncing;
     cancel.hidden = !graphWorkActive(snapshotStatus) && !cancelling;
     cancel.disabled = generating || cancelling || recovering;
     cancel.textContent = cancelling ? '正在取消…' : '取消关系整理';
     usage.textContent = graphUsageText(snapshotStatus.usageLastHour);
     costs.textContent = graphCostText(snapshotStatus);
+    const diagnosticLines = graphDiagnosticsText(snapshotStatus);
+    diagnostics.replaceChildren(...diagnosticLines.map(text => element('p', '', text))); diagnostics.hidden = diagnosticLines.length === 0;
     generate.textContent = generating ? '正在启动…' : recovering ? '正在确认服务器状态…' : ['failed', 'invalid'].includes(snapshotStatus.state) ? '重试未完成的关系' : snapshotStatus.state === 'partial' ? '检查新增或变化的内容' : generated ? '继续关系整理' : '生成本次收听的关系';
     loader.setPolling(!generating && !cancelling && graphWorkActive(snapshotStatus) && snapshotStatus.state !== 'waiting_key' && snapshotStatus.waitReason !== 'waiting_key' && snapshotStatus.keyAvailable !== false);
     renderProgress();
@@ -498,27 +553,41 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     progressBar.value = Math.max(0, Number(values?.completedWindows) || 0);
     if (active && graphWorkActive(snapshotStatus) && snapshotStatus.round) progressTimer = setTimeout(renderProgress, 1000);
   }
-  async function changeGeneration(method) {
-    if (!listeningId || generating || cancelling || recovering) return;
+  function showRetryConfirmation() {
+    if (retry.disabled || retry.hidden || !listeningId) return;
+    retryIntent = { id: listeningId, gen: generation, expectedEpoch: snapshotStatus.round.epoch };
+    retryPanel.hidden = false; confirmRetry.focus({ preventScroll: true });
+  }
+  function confirmSelectiveRetry() {
+    const intent = retryIntent;
+    if (!intent || generating || cancelling || recovering || terminalSyncing) return;
+    retryIntent = null; retryPanel.hidden = true;
+    if (intent.id !== listeningId || intent.gen !== generation || intent.expectedEpoch !== snapshotStatus.round?.epoch || graphWorkActive(snapshotStatus)) return;
+    return changeGeneration('POST', { retry: 'failed_partial', expectedEpoch: intent.expectedEpoch });
+  }
+  async function changeGeneration(method, options = {}) {
+    if (!listeningId || generating || cancelling || recovering || terminalSyncing) return;
     const starting = method === 'POST';
     if (starting && snapshotStatus.state !== 'waiting_key' && graphWorkActive(snapshotStatus)) return;
     if (!starting && !graphWorkActive(snapshotStatus)) return;
     const key = getKey()?.trim();
     if (starting && !key) { status.textContent = '请先在连接设置填写 API Key，再点击生成关系'; onRequireKey(); return; }
     const id = listeningId, gen = generation;
+    actionNotice.textContent = '';
     // An older GET must not replace the result of a start/cancel action.
-    loader.stop(); recovering = false; generating = starting; cancelling = !starting; render();
+    loader.stop(); recovering = terminalSyncing = false; retryIntent = null; generating = starting; cancelling = !starting; render();
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
     try {
       const response = await fetch(`/api/listenings/${encodeURIComponent(id)}/graph`, { method, signal: controller.signal,
-        ...(starting ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) } : {}) });
+        ...(starting ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, ...options }) } : {}) });
       const data = await response.json();
       if (gen !== generation || id !== listeningId) return;
-      if (!response.ok) throw new Error(data.error || (starting ? '启动关系整理失败' : '取消失败，请重试'));
+      if (!response.ok) throw Object.assign(new Error(data.error || (starting ? '启动关系整理失败' : '取消失败，请重试')), { status: response.status, code: data.code });
       generated = true; snapshotStatus = data.status || { ...snapshotStatus, state: starting ? 'queued' : 'cancelled' };
       status.textContent = graphStatusText(snapshotStatus, relations.some(r => visibleAssertions(r).length));
       onStarted(id);
     } catch (error) {
+      if (gen === generation && error.status) actionNotice.textContent = error.message;
       if (gen === generation) status.textContent = controller.signal.aborted
         ? '操作响应超时，正在重新读取服务器状态；已发出的请求仍可能执行'
         : `${error.message || (starting ? '启动关系整理失败' : '取消失败，请重试')}；正在重新读取服务器状态`;
@@ -534,7 +603,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       }
     }
   }
-  function startGeneration() { return changeGeneration('POST'); }
+  function startGeneration() { if (!generate.hidden) return changeGeneration('POST'); }
   function cancelGeneration() { return changeGeneration('DELETE'); }
   search.addEventListener('input', render); type.addEventListener('change', render);
   viewport.addEventListener('click', event => { if ([viewport, canvas, world, svg].includes(event.target)) closeDetails(); });
@@ -549,7 +618,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   return {
     select(id) {
       if (id === listeningId) return;
-      generation++; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = recovering = false;
+      generation++; actionNotice.textContent = ''; terminalSyncing = false; lastTerminalSignature = null; retryIntent = null; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = recovering = false;
       for (const b of nodeElements.values()) b.remove(); nodeElements.clear();
       for (const e of resultElements.values()) e.remove(); resultElements.clear();
       search.value = ''; type.value = ''; localId = null; scale = 1; updates = 0; notice.textContent = ''; status.textContent = graphStatusText();
@@ -563,9 +632,16 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       if (!value || !Object.keys(value).length || generating || cancelling) return;
       // A delayed detail poll from this round cannot resurrect a stopped round.
       if (!acceptGraphProcessing(snapshotStatus, value)) return;
+      const signature = terminalSignature(value);
+      const needsFinalSnapshot = signature && signature !== lastTerminalSignature;
       snapshotStatus = { ...snapshotStatus, ...value };
       generated = generated || Boolean(snapshotStatus.state && snapshotStatus.state !== 'not_generated');
-      status.textContent = graphStatusText(snapshotStatus, relations.some(r => visibleAssertions(r).length)); render();
+      if (needsFinalSnapshot) { terminalSyncing = true; lastTerminalSignature = signature; }
+      else if (!signature) { terminalSyncing = false; lastTerminalSignature = null; }
+      status.textContent = terminalSyncing ? '关系处理已结束，正在读取最新图谱…' : graphStatusText(snapshotStatus, relations.some(r => visibleAssertions(r).length)); render();
+      // Terminal detail/SSE can arrive before the final graph invalidation. Read
+      // authoritative edges once, fencing any older request still in flight.
+      if (needsFinalSnapshot) void loader.reconcile();
     },
     highlight(id, follow) {
       if (!active) return;

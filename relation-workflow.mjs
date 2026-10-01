@@ -90,7 +90,7 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
       if (!store.hasListening(id) || requestSignal.aborted) return { kind: 'discarded' };
       if (stopped(store.relationProcessing?.(id))) return { kind: 'discarded' };
       const result = store.commitRelationJob(job.id, { relations: parsed.relations,
-        rejected: parsed.rejected || [], usage: parsed.usage || null });
+        rejected: parsed.rejected || [], returnedCount: parsed.returnedCount, usage: parsed.usage || null });
       if (result?.stale) return { kind: 'discarded', reason: 'stale' };
       notify(onChange, id, result);
       return { kind: 'terminal', outcome: parsed.rejected?.length || input.coverage_limited ? 'partial' :

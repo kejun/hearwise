@@ -39,14 +39,14 @@ function relation(job, extra = {}) {
     supports: [{ segment_id: s.id, source_revision: s.source_revision, start: 0, end: s.text.length, quote: s.text, role: 'relation' }], ...extra };
 }
 
-test('schema 5→8 preserves legacy data; migrations and read-only snapshots never backfill or enable other histories', t => {
+test('schema 5→9 preserves legacy data; migrations and read-only snapshots never backfill or enable other histories', t => {
   const h = fixture(t); h.seed();
   for (const row of h.store.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'relation_%'").all()) h.store.db.exec(`DROP TRIGGER ${row.name}`);
   h.store.db.exec('DROP TABLE relation_revisions; DROP TABLE relation_supports; DROP TABLE relation_assertions; DROP TABLE relations; DROP TABLE relation_requests; DROP TABLE relation_jobs; DROP TABLE relation_windows;');
   for (const column of ['relation_enabled', 'relation_epoch', 'relation_waiting_key', 'graph_revision']) h.store.db.exec(`ALTER TABLE listenings DROP COLUMN ${column}`);
   h.store.db.exec('PRAGMA user_version=5');
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 9);
   assert.equal(h.store.graph(h.run.listeningId).nodes.length, 2);
   assert.equal(h.store.graph(h.run.listeningId).status.state, 'not_generated');
   assert.equal(h.store.db.prepare('SELECT COUNT(*) n FROM relation_windows').get().n, 0);
@@ -440,7 +440,7 @@ test('v7 token-paused migration preserves results and resumes remaining history 
     ALTER TABLE relation_requests ADD COLUMN estimated_tokens INTEGER NOT NULL DEFAULT 21000;
     UPDATE relation_rounds SET state='paused',stop_reason='ROUND_TOKEN_LIMIT'; PRAGMA user_version=7;`);
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 9);
   assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'paused'); assert.equal(h.job(), null);
   assert.equal(h.store.graph(h.run.listeningId).relations.length, before.relations.length);
   assert.equal(h.store.relationProcessing(h.run.listeningId).usageLastHour.totalTokens, 20815);
@@ -507,4 +507,79 @@ test('unchanged clipped partial windows are terminal and do not starve later win
   for (let i = 0; i < 3; i++) { h.store.enableRelations(h.run.listeningId, { retry: true }); assert.equal(h.job(), null); }
   const status = h.store.relationProcessing(h.run.listeningId);
   assert.equal(status.state, 'partial'); assert.equal(status.partialJobs, 14); assert.equal(status.requestCount, 14);
+});
+
+test('diagnostics persist exact row counts, distinguish unique edges and sanitize rejection text', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const job = h.reserve(), valid = relation(job);
+  h.store.commitRelationJob(job.id, { relations: [valid, valid, { ...valid, object_item_id: 'missing' }],
+    rejected: [{ code: 'SEMANTIC_NEGATION_DROPPED' }, { code: 'SECRET model text Bearer private-key' }], returnedCount: 5 });
+  const expected = { scope: 'latest_result_per_window', resultJobs: 1, measuredJobs: 1, unknownJobs: 0,
+    returnedCount: 5, validatorAcceptedCount: 3, acceptedCount: 2, rejectedCount: 3,
+    insertedRelationCount: 1, deduplicatedCount: 1, storedRelationCount: 1, visibleRelationCount: 1,
+    coverageLimitedWindows: 0 };
+  const diagnostics = h.store.graph(h.run.listeningId).status.diagnostics;
+  for (const [key, value] of Object.entries(expected)) assert.equal(diagnostics[key], value, key);
+  assert.deepEqual(diagnostics.rejectionReasons.map(r => r.code).sort(), ['INVALID_ENDPOINT_OR_PREDICATE', 'SEMANTIC_NEGATION_DROPPED', 'UNKNOWN_REASON']);
+  assert.ok(diagnostics.rejectionReasons.every(r => typeof r.label === 'string' && r.count === 1));
+  assert.doesNotMatch(JSON.stringify(diagnostics), /SECRET|Bearer|private-key|Acme|Camera/);
+  assert.doesNotMatch(h.store.db.prepare('SELECT rejected_json FROM relation_jobs WHERE id=?').get(job.id).rejected_json, /SECRET|Bearer|private-key/);
+  h.reopen(); assert.deepEqual(h.store.graph(h.run.listeningId).status.diagnostics, diagnostics);
+  assert.equal(h.store.commitRelationJob(job.id, { relations: [] }).duplicate, true);
+  assert.deepEqual(h.store.graph(h.run.listeningId).status.diagnostics, diagnostics);
+});
+
+test('v8 migration preserves unknown counts and rejection reasons without replaying partial results', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const job = h.reserve(); h.store.commitRelationJob(job.id, { relations: [], rejected: [{ code: 'SEMANTIC_PLAN_DROPPED' }] });
+  for (const column of ['returned_count', 'validator_accepted_count', 'accepted_count', 'inserted_relation_count', 'deduplicated_count']) h.store.db.exec(`ALTER TABLE relation_jobs DROP COLUMN ${column}`);
+  h.store.db.exec('ALTER TABLE relation_windows DROP COLUMN min_result_epoch; PRAGMA user_version=8');
+  h.reopen();
+  const diagnostics = h.store.graph(h.run.listeningId).status.diagnostics;
+  assert.equal(diagnostics.returnedCount, null); assert.equal(diagnostics.acceptedCount, null);
+  assert.equal(diagnostics.insertedRelationCount, null); assert.equal(diagnostics.deduplicatedCount, null);
+  assert.equal(diagnostics.unknownJobs, 1); assert.equal(diagnostics.rejectedCount, 1);
+  assert.equal(diagnostics.rejectionReasons[0].code, 'SEMANTIC_PLAN_DROPPED');
+  assert.equal(h.store.relationHasWork(h.run.listeningId), false); assert.equal(h.job(), null);
+  h.store.enableRelations(h.run.listeningId, { retry: true }); assert.equal(h.job(), null);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 1);
+});
+
+test('selective retry is explicit, epoch fenced, limited to problem windows and preserves prior successful data', t => {
+  const h = fixture(t); h.seed();
+  for (let i = 2; i <= 18; i++) h.store.addSegment(h.run.listeningId, h.run.runId, { id: `selective-${i}`, text: 'Acme released Camera.' });
+  h.store.enableRelations(h.run.listeningId);
+  const complete = h.reserve(); h.store.commitRelationJob(complete.id, { relations: [relation(complete)] });
+  const partial = h.reserve(); h.store.commitRelationJob(partial.id, { relations: [], rejected: [{ code: 'SEMANTIC_PLAN_DROPPED' }] });
+  const failed = h.reserve(); h.store.failRelationJob(failed.id, { code: 'REQUEST_FAILED', terminal: true });
+  const before = h.store.graph(h.run.listeningId), epoch = before.status.round.epoch;
+  assert.equal(before.status.retryableWindows, 2); assert.equal(before.status.canRetryProblems, true);
+  assert.equal(h.job(), null, 'no automatic paid retry of unchanged partial/failed windows');
+  h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: epoch });
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.epoch, epoch + 1);
+  assert.throws(() => h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: epoch }), /RETRY_STATE_CHANGED/);
+  assert.throws(() => h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: epoch + 1 }), /RETRY_STATE_CHANGED/);
+  const first = h.reserve(); assert.equal(first.window_id, partial.window_id);
+  for (let count = 1; count <= 3; count++) {
+    const current = count === 1 ? first : h.store.beginRelationRequest(h.job().id);
+    assert.equal(current.request_count, count);
+    h.store.failRelationJob(current.id, { code: 'REQUEST_FAILED', retryAt: 0, terminal: count === 3 });
+  }
+  const second = h.reserve(); assert.equal(second.window_id, failed.window_id);
+  h.store.commitRelationJob(second.id, { relations: [relation(second)] }); assert.equal(h.job(), null);
+  const after = h.store.graph(h.run.listeningId);
+  assert.equal(after.relations.length, 1); assert.equal(after.relations[0].id, before.relations[0].id);
+  assert.ok(after.supports.some(s => s.id === before.supports[0].id && s.state === 'active'));
+  assert.equal(h.store.getRelationJob(complete.id).request_count, 1, 'successful window never replayed');
+  assert.equal(after.status.round.requestCount, 4, 'per-window retry bound remains three');
+});
+
+test('a selective retry cannot reopen a cancelled late-result fence', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const first = h.reserve(); h.store.commitRelationJob(first.id, { relations: [], rejected: [{ code: 'FIELD_INVALID' }] });
+  h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: first.epoch });
+  const retry = h.reserve(); h.store.cancelRelations(h.run.listeningId);
+  assert.equal(h.store.commitRelationJob(retry.id, { relations: [relation(retry)] }).stale, true);
+  assert.equal(h.store.graph(h.run.listeningId).relations.length, 0);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'cancelled');
 });

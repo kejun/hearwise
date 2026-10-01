@@ -403,20 +403,27 @@ const server = http.createServer(async (req, res) => {
     try {
       const input = await readJson(req);
       if (!store.hasListening(match[1])) return sendJson(res, 404, { error: '收听记录不存在' });
-      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => k !== 'key')) {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !['key', 'retry', 'expectedEpoch'].includes(k)) ||
+          (input.retry !== undefined && input.retry !== 'failed_partial') ||
+          (input.retry === 'failed_partial' ? !Number.isInteger(input.expectedEpoch) || input.expectedEpoch < 0 : input.expectedEpoch !== undefined)) {
         return sendJson(res, 400, { error: '关系生成请求无效' });
       }
       const key = typeof input.key === 'string' && input.key.trim() ? input.key.trim() : keys.get(match[1]);
       if (!key) return sendJson(res, 400, { error: '请先在连接设置填写 API Key' });
+      if (input.retry === 'failed_partial') store.retryProblemRelations(match[1], { expectedEpoch: input.expectedEpoch });
+      else store.enableRelations(match[1], { retry: true });
       keys.set(match[1], key);
-      store.enableRelations(match[1], { retry: true });
       // A restored pending extraction already has authorization for this record;
       // resume its scheduler so graph admission does not wait on dormant work.
       knowledgeScheduler.pump();
       relationScheduler.schedule(match[1], true);
       publishProcessing(match[1]);
       return sendJson(res, 202, { ok: true, ...store.graphMetadata(match[1]), processingAvailable: true });
-    } catch { return sendJson(res, 400, { error: '关系生成请求无效' }); }
+    } catch (error) {
+      return error?.code === 'RETRY_STATE_CHANGED'
+        ? sendJson(res, 409, { error: '整理状态已改变，请刷新后再重试', code: 'RETRY_STATE_CHANGED' })
+        : sendJson(res, 400, { error: '关系生成请求无效' });
+    }
   }
   if (match && match[2] === 'export' && req.method === 'GET') {
     const kind = url.searchParams.get('kind');

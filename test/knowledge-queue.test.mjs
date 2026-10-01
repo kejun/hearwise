@@ -314,7 +314,7 @@ test('v2 数据库升级为 v8，旧运行中 v2 任务隔离等待历史恢复'
     PRAGMA user_version=2;`);
   store.close(); store = new ListeningStore(filename);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 9);
   assert.equal(store.nextJob(r.listeningId), undefined);
   const migrated = store.detail(r.listeningId).jobs[0];
   assert.equal(migrated.id, job.id);
