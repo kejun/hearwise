@@ -1,3 +1,6 @@
+import { GRAPH_NODE, stableGraphLayout, routeGraphRelation } from './knowledge-graph-layout.js';
+export { stableGraphLayout } from './knowledge-graph-layout.js';
+
 // The graph is a presentation of persisted knowledge, never a source of new facts.
 export const KNOWLEDGE_VIEW_KEY = 'tongsheng:knowledge-view';
 const TYPES = { person: '人物', organization: '组织', product: '产品', work: '作品', method: '方法', event: '事件', place: '地点', term: '术语', other: '其他' };
@@ -50,46 +53,6 @@ export function filterGraph(nodes, relations, { query = '', type = '', localId =
   const shown = new Set(filtered.map(n => n.id));
   return { nodes: filtered, relations: valid.filter(r => shown.has(r.subject_item_id) && shown.has(r.object_item_id)), total: nodes.length };
 }
-// Keep existing cells forever within a listening. Additions never reflow a reader's map.
-export function stableGraphLayout(nodes, relations, previous = new Map()) {
-  const ids = new Set(nodes.map(n => n.id));
-  const result = new Map([...previous].filter(([id]) => ids.has(id)));
-  const occupied = new Set([...result.values()].map(p => `${p.col},${p.row}`));
-  const neighbors = new Map(nodes.map(n => [n.id, []]));
-  for (const r of relations) {
-    if (!ids.has(r.subject_item_id) || !ids.has(r.object_item_id)) continue;
-    neighbors.get(r.subject_item_id).push(r.object_item_id);
-    neighbors.get(r.object_item_id).push(r.subject_item_id);
-  }
-  const order = [], visited = new Set();
-  for (const node of [...nodes].sort((a, b) => a.id.localeCompare(b.id))) {
-    if (visited.has(node.id)) continue;
-    const queue = [node.id]; visited.add(node.id);
-    for (let index = 0; index < queue.length; index++) {
-      const id = queue[index]; order.push(id);
-      for (const next of neighbors.get(id).sort()) if (!visited.has(next)) { visited.add(next); queue.push(next); }
-    }
-  }
-  for (const id of order) {
-    if (result.has(id)) continue;
-    const near = neighbors.get(id).map(n => result.get(n)).find(Boolean);
-    let cell;
-    if (near) {
-      for (const [dc, dr] of [[1, 0], [0, 1], [-1, 0], [1, 1], [0, -1], [-1, 1]]) {
-        const col = near.col + dc, row = near.row + dr;
-        if (col >= 0 && col < 5 && row >= 0 && !occupied.has(`${col},${row}`)) { cell = { col, row }; break; }
-      }
-    }
-    if (!cell) for (let index = 0; !cell; index++) {
-      const col = index % 5, row = Math.floor(index / 5);
-      if (!occupied.has(`${col},${row}`)) cell = { col, row };
-    }
-    occupied.add(`${cell.col},${cell.row}`);
-    result.set(id, { ...cell, x: 36 + cell.col * 264, y: 40 + cell.row * 154 });
-  }
-  return result;
-}
-
 // One request at a time, monotonic revisions, and a generation for A→B→A switches.
 // Poll active work even if a start response or the last invalidation event is lost.
 export function createGraphSnapshotLoader({ read, onSnapshot, onError = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -248,9 +211,8 @@ export function graphDiagnosticsText(status = {}) {
   return lines;
 }
 
-export function graphCostText(status = {}) {
-  const limits = status.limits || {};
-  return `点击后持续处理本次收听全部尚未完成或已变化的文本窗口，保留已有关系，不设整轮 token、请求数或处理时长上限。每个窗口最多尝试 ${numberText(limits.maxWindowRequests ?? 3)} 次，单次请求最长 ${durationText(limits.requestTimeoutMs ?? 30000)}，最多 ${numberText(limits.maxConcurrent ?? 2)} 个并行请求；没有可靠关系也会正常完成；仅请求失败或未处理完整的窗口可重试。会使用连接设置中的千问 API Key 发送相关最终原文、已完成译文和已有知识条目，产生额外模型费用。可随时取消；取消后已发出的请求仍可能计费。`;
+export function graphCostText() {
+  return '将相关原文、译文和条目发送给千问，产生模型费用。可随时取消，已发出的请求仍可能计费。';
 }
 
 export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, runNumber = () => '?' }) {
@@ -265,7 +227,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     node.addEventListener('click', action); return node;
   }
   let listeningId = null, nodes = [], relations = [], positions = new Map(), snapshotStatus = {}, selected = null;
-  let scale = 1, width = 800, height = 420, active = false, generation = 0, detailGeneration = 0, trigger = null;
+  let scale = 1, width = 800, height = 420, columns = 5, active = false, generation = 0, detailGeneration = 0, trigger = null;
   let generated = false, generating = false, cancelling = false, recovering = false, progressTimer = null, localId = null, panelFingerprint = '', updates = 0;
   let terminalSyncing = false, lastTerminalSignature = null, retryIntent = null;
   const nodeElements = new Map(), edgeElements = new Map(), resultElements = new Map(), evidenceControllers = new Set();
@@ -276,11 +238,14 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const type = element('select'); type.id = 'graph-type'; typeLabel.append(type);
   const zoomOut = button('−', 'graph-zoom-out', () => zoom(scale / 1.2)); zoomOut.setAttribute('aria-label', '缩小图谱');
   const zoomIn = button('+', 'graph-zoom-in', () => zoom(scale * 1.2)); zoomIn.setAttribute('aria-label', '放大图谱');
-  const zoomLabel = element('output', 'graph-zoom-value', '100%'); zoomLabel.setAttribute('aria-label', '图谱缩放');
   const fit = button('适应全部', 'graph-fit', () => fitView());
   const local = button('一跳邻居', 'graph-local', () => { localId = localId ? null : selected?.kind === 'node' ? selected.id : null; render(); });
   local.setAttribute('aria-pressed', 'false'); local.title = '选择节点后查看它和直接相连的节点';
-  toolbar.append(searchLabel, typeLabel, zoomOut, zoomLabel, zoomIn, fit, local);
+  const relayout = button('重新布局', 'graph-relayout', () => { arrangeForViewport(); render(); fitView(); });
+  relayout.title = '按当前关系重新聚拢节点';
+  const fullscreen = button('全屏', 'graph-fullscreen', () => setFullscreen(!savedView));
+  fullscreen.setAttribute('aria-pressed', 'false'); fullscreen.setAttribute('aria-label', '全屏查看图谱');
+  toolbar.append(searchLabel, typeLabel, zoomOut, zoomIn, fit, relayout, local, fullscreen);
   const count = element('p', 'graph-count'); count.id = 'graph-count'; count.setAttribute('role', 'status');
   const viewport = element('div', 'graph-viewport'); viewport.id = 'graph-viewport'; viewport.tabIndex = 0;
   viewport.setAttribute('aria-label', '知识图谱，可滚动浏览。使用缩放按钮或下方节点列表');
@@ -326,8 +291,35 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const panelTitle = element('h3'); panelTitle.id = 'graph-detail-title'; panel.setAttribute('aria-labelledby', panelTitle.id);
   const close = button('关闭', 'graph-close', () => closeDetails()); panelHeader.append(panelTitle, close);
   const panelBody = element('div', 'graph-details-body'); panel.append(panelHeader, panelBody);
-  jobPanel.append(status, progress, progressBar, round, actions, actionNotice, retryPanel, diagnostics, costs, usage);
-  root.append(jobPanel, toolbar, count, viewport, noNodes, notice, resultDetails, disclaimer, panel);
+  const explorer = element('section', 'graph-explorer'); explorer.setAttribute('aria-label', '知识图谱');
+  explorer.append(toolbar, count, viewport, noNodes, notice, resultDetails, disclaimer, panel);
+  const fullscreenDialog = element('dialog', 'graph-fullscreen-dialog'); fullscreenDialog.id = 'graph-fullscreen-dialog';
+  fullscreenDialog.setAttribute('aria-label', '全屏知识图谱');
+  let savedView = null;
+  function arrangeForViewport() {
+    columns = Math.max(2, Math.min(7, Math.floor((viewport.clientWidth - GRAPH_NODE.margin * 2 + GRAPH_NODE.stepX - GRAPH_NODE.width) / GRAPH_NODE.stepX) || 5));
+    positions = new Map();
+  }
+  function setFullscreen(value, restoreFocus = true) {
+    if (value === Boolean(savedView)) return;
+    if (value) {
+      savedView = { scale, columns, positions, left: viewport.scrollLeft, top: viewport.scrollTop, overflow: doc.body.style.overflow };
+      fullscreenDialog.append(explorer); fullscreenDialog.showModal(); doc.body.style.overflow = 'hidden';
+      fullscreen.textContent = '退出全屏'; fullscreen.setAttribute('aria-label', '退出全屏图谱');
+      fullscreen.setAttribute('aria-pressed', 'true'); arrangeForViewport(); render(); fitView(); fullscreen.focus({ preventScroll: true });
+    } else {
+      const previous = savedView; savedView = null;
+      fullscreenDialog.close(); root.append(explorer); doc.body.style.overflow = previous.overflow;
+      fullscreen.textContent = '全屏'; fullscreen.setAttribute('aria-label', '全屏查看图谱'); fullscreen.setAttribute('aria-pressed', 'false');
+      columns = previous.columns; positions = previous.positions; scale = previous.scale; render();
+      viewport.scrollLeft = previous.left; viewport.scrollTop = previous.top;
+      if (restoreFocus) fullscreen.focus({ preventScroll: true });
+    }
+  }
+  fullscreenDialog.addEventListener('cancel', event => { event.preventDefault(); setFullscreen(false); });
+  fullscreenDialog.addEventListener('close', () => { if (savedView && !fullscreenDialog.open) setFullscreen(false); });
+  jobPanel.append(status, progress, progressBar, round, actions, actionNotice, retryPanel, diagnostics, costs);
+  root.append(jobPanel, explorer, fullscreenDialog);
   const loader = createGraphSnapshotLoader({
     read: async (id, signal) => {
       const controller = new AbortController(), abort = () => controller.abort();
@@ -365,7 +357,6 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   }
   function syncScale() {
     world.style.transform = `scale(${scale})`; canvas.style.width = `${Math.ceil(width * scale)}px`; canvas.style.height = `${Math.ceil(height * scale)}px`;
-    zoomLabel.textContent = `${Math.round(scale * 100)}%`;
     root.classList.toggle('graph-zoom-small', scale < .6);
   }
   function zoom(next) {
@@ -407,7 +398,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       container.append(original, element('p', 'graph-evidence-translation', segment.translation_state === 'complete'
         ? `最终译文：${segment.translation_text || '（与原文相同）'}`
         : segment.translation_state === 'failed' ? '最终译文：翻译失败，以上原文仍可核对' : '最终译文：尚未完成，暂不使用临时译文'));
-      container.append(button('定位到全文原句', '', () => { closeDetails(false); locateSegment(segment); }));
+      container.append(button('定位到全文原句', '', () => { closeDetails(false); setFullscreen(false, false); locateSegment(segment); }));
     } catch (error) {
       if (gen !== detailGeneration || selectedListening !== listeningId || controller.signal.aborted) return;
       container.textContent = error.message || '证据暂时无法读取';
@@ -471,14 +462,14 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   }
   function render() {
     const filtered = filterGraph(nodes, relations, { query: search.value, type: type.value, localId });
-    positions = stableGraphLayout(nodes, relations, positions);
+    positions = stableGraphLayout(nodes, relations, positions, columns);
     const options = ['全部类型', ...new Set(nodes.map(knowledgeType).sort())];
     if (JSON.stringify([...type.options].map(o => o.textContent)) !== JSON.stringify(options)) {
       const value = type.value; type.replaceChildren(...options.map((label, index) => { const option = element('option', '', label); option.value = index ? label : ''; return option; })); type.value = value;
     }
     const shown = new Set(filtered.nodes.map(n => n.id));
-    width = Math.max(320, ...filtered.nodes.map(n => positions.get(n.id).x + 244));
-    height = Math.max(260, ...filtered.nodes.map(n => positions.get(n.id).y + 128));
+    width = Math.max(320, ...filtered.nodes.map(n => positions.get(n.id).x + GRAPH_NODE.width + GRAPH_NODE.margin));
+    height = Math.max(260, ...filtered.nodes.map(n => positions.get(n.id).y + GRAPH_NODE.height + GRAPH_NODE.margin));
     world.style.width = `${width}px`; world.style.height = `${height}px`; svg.setAttribute('width', String(width)); svg.setAttribute('height', String(height));
     const pendingEdges = relations.filter(r => visibleAssertions(r).length && (!nodes.some(n => n.id === r.subject_item_id) || !nodes.some(n => n.id === r.object_item_id))).length;
     count.textContent = `正在显示 ${filtered.nodes.length} / ${nodes.length} 个节点 · ${terminalSyncing ? '正在读取最新关系数量…' : `${filtered.relations.length} 条关系`}${localId ? ' · 一跳邻居' : ''}${pendingEdges ? ' · 部分关系等待节点同步' : ''}`;
@@ -501,19 +492,28 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     }
     const visibleEdges = new Set(filtered.relations.map(r => r.id));
     for (const [id, entry] of edgeElements) if (!visibleEdges.has(id)) { entry.line.remove(); entry.button.remove(); edgeElements.delete(id); }
-    for (const relation of filtered.relations) {
+    const pairLanes = new Map(), pairCounts = new Map();
+    const pairKey = r => [r.subject_item_id, r.object_item_id].sort().join('\0');
+    for (const relation of filtered.relations) pairCounts.set(pairKey(relation), (pairCounts.get(pairKey(relation)) || 0) + 1);
+    for (const relation of [...filtered.relations].sort((a, b) => a.id.localeCompare(b.id))) {
       let entry = edgeElements.get(relation.id);
       if (!entry) {
         const line = doc.createElementNS(svg.namespaceURI, 'path'); svg.append(line);
         const b = button('', '', event => openDetails('relation', relation.id, event.currentTarget), 'graph-edge-label'); b.dataset.relationId = relation.id; world.append(b);
         entry = { line, button: b }; edgeElements.set(relation.id, entry);
       }
-      const a = positions.get(relation.subject_item_id), b = positions.get(relation.object_item_id);
-      const dx = b.x - a.x, dy = b.y - a.y, factor = Math.min(Math.abs(dx) > 0 ? 108 / Math.abs(dx) : Infinity, Math.abs(dy) > 0 ? 42 / Math.abs(dy) : Infinity);
-      const x1 = a.x + 108 + dx * factor, y1 = a.y + 42 + dy * factor, x2 = b.x + 108 - dx * factor, y2 = b.y + 42 - dy * factor;
-      entry.line.setAttribute('d', `M${x1},${y1} L${x2},${y2}`);
+      const pair = pairKey(relation);
+      const lane = pairLanes.get(pair) || 0; pairLanes.set(pair, lane + 1);
+      const route = routeGraphRelation(relation, positions, lane, pairCounts.get(pair));
+      entry.line.setAttribute('d', route?.path || ''); entry.button.hidden = !route;
       if (SYMMETRIC.has(relation.predicate)) entry.line.removeAttribute('marker-end'); else entry.line.setAttribute('marker-end', 'url(#graph-arrow)');
-      entry.button.textContent = relationLabel(relation); entry.button.style.left = `${(x1 + x2) / 2}px`; entry.button.style.top = `${(y1 + y2) / 2}px`;
+      entry.button.textContent = relationLabel(relation);
+      if (route) {
+        entry.button.style.left = `${route.label.x}px`; entry.button.style.top = `${route.label.y}px`;
+        entry.button.style.maxWidth = `${route.label.width}px`;
+      }
+      const adjacent = selected?.kind === 'node' && [relation.subject_item_id, relation.object_item_id].includes(selected.id);
+      entry.line.classList.toggle('graph-edge-adjacent', adjacent);
       entry.button.title = relationLabel(relation); entry.button.setAttribute('aria-label', `查看关系依据：${nodes.find(n => n.id === relation.subject_item_id)?.canonical_name}，${relationLabel(relation)}，${nodes.find(n => n.id === relation.object_item_id)?.canonical_name}`);
       entry.button.classList.toggle('graph-adjacent', selected?.kind === 'node' && [relation.subject_item_id, relation.object_item_id].includes(selected.id));
     }
@@ -531,7 +531,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     usage.textContent = graphUsageText(snapshotStatus.usageLastHour);
     costs.textContent = graphCostText(snapshotStatus);
     const diagnosticLines = graphDiagnosticsText(snapshotStatus);
-    diagnostics.replaceChildren(diagnosticSummary, ...diagnosticLines.map(text => element('p', '', text))); diagnostics.hidden = diagnosticLines.length === 0;
+    diagnostics.replaceChildren(diagnosticSummary, ...diagnosticLines.map(text => element('p', '', text)), usage); diagnostics.hidden = diagnosticLines.length === 0 && !snapshotStatus.usageLastHour;
     generate.textContent = generating ? '正在启动…' : recovering ? '正在确认服务器状态…' : ['failed', 'invalid'].includes(snapshotStatus.state) ? '重试未完成的关系' : snapshotStatus.state === 'partial' ? '检查新增或变化的内容' : generated ? '继续关系整理' : '生成本次收听的关系';
     loader.setPolling(!generating && !cancelling && graphWorkActive(snapshotStatus) && snapshotStatus.state !== 'waiting_key' && snapshotStatus.waitReason !== 'waiting_key' && snapshotStatus.keyAvailable !== false);
     renderProgress();
@@ -613,14 +613,14 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   return {
     select(id) {
       if (id === listeningId) return;
-      generation++; actionNotice.textContent = ''; terminalSyncing = false; lastTerminalSignature = null; retryIntent = null; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = recovering = false;
+      setFullscreen(false, false); generation++; actionNotice.textContent = ''; terminalSyncing = false; lastTerminalSignature = null; retryIntent = null; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = recovering = false;
       for (const b of nodeElements.values()) b.remove(); nodeElements.clear();
       for (const e of resultElements.values()) e.remove(); resultElements.clear();
       search.value = ''; type.value = ''; localId = null; scale = 1; updates = 0; notice.textContent = ''; status.textContent = graphStatusText();
       viewport.scrollLeft = viewport.scrollTop = 0; loader.select(id); render();
     },
     setNodes(items) { mergeNodes(items); render(); return [...nodes]; },
-    setActive(value) { active = value; root.hidden = !value; renderProgress(); },
+    setActive(value) { if (!value) setFullscreen(false, false); active = value; root.hidden = !value; renderProgress(); },
     invalidate(id, revision) { loader.invalidate(id, revision); },
     refresh() { return loader.refresh(); },
     setProcessing(value = {}) {
@@ -643,6 +643,6 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       updates++; notice.textContent = `已收到 ${updates} 次知识更新，当前视图位置保持不变`;
       if (follow) { const node = nodeElements.get(id); node?.classList.remove('graph-node-updated'); if (node) { void node.offsetWidth; node.classList.add('graph-node-updated'); } }
     },
-    destroy() { generation++; doc.defaultView?.removeEventListener('online', reconcile); doc.removeEventListener?.('visibilitychange', reconcile); clearTimeout(progressTimer); abortEvidence(); loader.stop(); root.replaceChildren(); }
+    destroy() { setFullscreen(false, false); generation++; doc.defaultView?.removeEventListener('online', reconcile); doc.removeEventListener?.('visibilitychange', reconcile); clearTimeout(progressTimer); abortEvidence(); loader.stop(); root.replaceChildren(); }
   };
 }

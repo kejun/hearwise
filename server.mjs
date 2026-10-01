@@ -41,7 +41,7 @@ const graphRevisions = new Map();
 let relationScheduler;
 const speech = createSpeechService({ store, incrementalClauses: process.env.HEARWISE_INCREMENTAL_BOUNDARY !== 'sentence', translatePhrase: translateSpeechPhrase, onDispose: id => maybeReleaseKey(id), setHead: (owner, id) => translations.setSpeechHead(owner, id),
   onMetric: event => console.info('speech_event', JSON.stringify(event)) });
-for (const file of ['caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js', 'knowledge-graph.js']) {
+for (const file of ['caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js', 'knowledge-graph.js', 'knowledge-graph-layout.js']) {
   types[`/${file}`] = 'text/javascript; charset=utf-8';
 }
 let translating = 0;

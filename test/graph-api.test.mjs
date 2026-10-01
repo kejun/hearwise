@@ -39,6 +39,9 @@ test('graph GET is read-only; POST scopes generation to selected listening and p
   assert.equal(other.relations.length, 0);
   assert.doesNotMatch(JSON.stringify(graph), /mock-key|Bearer/);
   assert.equal((await fetch(`${fixture.base}/knowledge-graph.js`)).status, 200);
+  const layout = await fetch(`${fixture.base}/knowledge-graph-layout.js`);
+  assert.equal(layout.status, 200);
+  assert.match(layout.headers.get('content-type'), /javascript/);
   assert.equal((await fetch(`${fixture.base}/api/listenings/00000000-0000-0000-0000-000000000000/graph`)).status, 404);
 });
 
