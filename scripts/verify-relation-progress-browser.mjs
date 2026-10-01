@@ -62,6 +62,16 @@ try {
   const page = await browser.newPage({ viewport: { width: 1360, height: 1000 }, reducedMotion: 'reduce' });
   page.on('pageerror', error => errors.push(error.message));
   const screenshot = async name => { if (directory) await page.screenshot({ path: path.join(directory, name), fullPage: false }); };
+  async function settledContinuation() {
+    // Wait for the action's final render and its paint, not just completed status text.
+    await page.waitForFunction(() => {
+      const button = document.querySelector('#graph-generate'), cancel = document.querySelector('#graph-cancel');
+      return !button.disabled && button.textContent === '继续下一轮关系整理' && cancel.hidden && getComputedStyle(button).opacity === '1';
+    });
+    await page.mouse.move(0, 0);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.locator('#graph-generate').isEnabled(), true);
+  }
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.locator('#graph-status').filter({ hasText: '尚未生成' }).waitFor();
   await page.locator('#graph-cost').filter({ hasText: '最多 12 次请求' }).waitFor();
@@ -116,8 +126,9 @@ try {
   assert.match(await page.locator('#graph-status').textContent(), /本轮已取消/);
   assert.equal(await page.locator('#graph-round').textContent(), terminalRound);
   checks.push('Waiting reasons stay honest; cancel is single-flight, retains partial map, ignores stale in-flight GET/detail events and unlocks manual continuation');
-  await updateStatus({ state: 'paused', round: { ...statuses.a.round, state: 'paused', stopReason: 'ROUND_REQUEST_LIMIT' } });
+  await updateStatus({ state: 'paused', round: { ...statuses.a.round, state: 'paused', requestCount: limits.maxRequests, stopReason: 'ROUND_REQUEST_LIMIT' } });
   assert.match(await page.locator('#graph-status').textContent(), /达到本轮请求上限/);
+  assert.match(await page.locator('#graph-round').textContent(), /本轮请求 12 \/ 12 次/);
   await screenshot('relation-progress-desktop-paused.png');
   await page.setViewportSize({ width: 390, height: 844 });
   await screenshot('relation-progress-mobile-paused.png');
@@ -158,8 +169,10 @@ try {
     round: { ...statuses.a.round, finishedAt: Date.now() } });
   assert.equal(await page.locator('#graph-generate').isEnabled(), true);
   assert.equal(await page.locator('#graph-cancel').isHidden(), true);
+  await settledContinuation();
   await screenshot('relation-progress-mobile-complete.png');
   await page.setViewportSize({ width: 1360, height: 1000 });
+  await settledContinuation();
   await screenshot('relation-progress-desktop-complete.png');
   // New content can resume work in the same round without a new start request.
   const sameRound = { ...statuses.a, state: 'queued', pendingJobs: 1, waitReason: 'translations', round: { ...statuses.a.round, finishedAt: null } };
