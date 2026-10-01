@@ -71,6 +71,19 @@ function app(t, preferences = []) {
   return { element, requests, storage, run, tick, flush, reply, receive, final };
 }
 
+test('新建收听后原文和同语言译文写入当前字幕节点', t => {
+  const a = app(t);
+  a.run("els.source.value = 'zh'");
+  a.receive('第一条记录', 'first');
+  assert.equal(a.element('original').textContent, '第一条记录');
+  a.run('resetListening()');
+  assert.equal(a.element('original').textContent, '开始聆听后，实时识别的文字会出现。');
+  a.run("els.source.value = 'zh'");
+  a.receive('第二条记录', 'second');
+  assert.equal(a.element('original').textContent, '第二条记录');
+  assert.equal(a.element('translation').textContent, '第二条记录');
+});
+
 for (const [stored, expected] of [
   [null, 44], ['', 44], ['  ', 44], ['bad', 44], ['NaN', 44], ['Infinity', 44], ['-Infinity', 44],
   ['0', 21], ['-30', 21], ['20', 21], ['21', 21], ['30', 30], ['44', 44],

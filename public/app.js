@@ -1126,8 +1126,8 @@ function resetListening() {
   liveSegments.clear(); liveKnowledge.clear(); liveProcessing = null;
   clearTranslationWork();
   els.recordPanel.hidden = true;
-  els.original.textContent = '开始聆听后，实时识别的文字会出现。';
-  els.translation.textContent = '字幕会显示在这里';
+  updateText(els.original, '开始聆听后，实时识别的文字会出现。');
+  updateText(els.translation, '字幕会显示在这里');
   els.original.classList.add('placeholder'); els.translation.classList.add('placeholder');
   els.translation.classList.remove('provisional');
   els.source.value = 'en'; els.target.value = 'Chinese'; els.audioInput.value = 'microphone';
