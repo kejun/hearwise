@@ -20,6 +20,8 @@ const els = {
   testResult: $('test-result'), testSummary: $('test-summary'),
   testRecognition: $('test-recognition'), testTranslation: $('test-translation'), testKnowledge: $('test-knowledge'),
   newListening: $('new-listening'), historyListening: $('history-listening'), listeningView: $('listening-view'),
+  controls: $('listening-controls'), recordLoading: $('record-loading'), recordLoadingTitle: $('record-loading-title'),
+  recordLoadingStatus: $('record-loading-status'), recordLoadingRetry: $('record-loading-retry'), recordLoadingBack: $('record-loading-back'),
   historyView: $('history-view'), historyList: $('history-list'), historyMore: $('history-more'),
   historyError: $('history-error'), back: $('back-to-listening'),
   recordPanel: $('record-panel'), recordTitle: $('record-title'), processingStatus: $('processing-status'),
@@ -86,6 +88,7 @@ let testController;
 let listeningId = null;
 let listeningGeneration = 0;
 let detail = null;
+let openingHistory = null;
 let detailPage = 0;
 let historyPage = 0;
 let metadataVersion = 0;
@@ -339,7 +342,7 @@ function syncPinnedCaption() {
 }
 
 function updatePinnedCaption() {
-  els.pinnedCaption.hidden = els.listeningView.hidden || els.livePanel.getBoundingClientRect().bottom > 12;
+  els.pinnedCaption.hidden = els.listeningView.hidden || els.livePanel.hidden || els.livePanel.getBoundingClientRect().bottom > 12;
 }
 
 const PINNED_COLLAPSED_KEY = 'tongsheng:pinned-caption-collapsed';
@@ -999,13 +1002,12 @@ function renderDetail() {
   renderRecordMetadata();
   renderRuns(); renderTranscript(); renderKnowledge(); renderProcessing();
 }
-async function fetchDetail(page = 1, append = false) {
+async function fetchDetail(page = 1, append = false, controller = new AbortController()) {
   if (!listeningId) return;
   const requestedId = listeningId;
   const generationAtStart = listeningGeneration;
   const metadataAtStart = metadataVersion;
   const processingAtStart = liveProcessing;
-  const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   let response, result;
   try {
@@ -1047,6 +1049,7 @@ function showListening() {
 async function showHistory() {
   closeRecordEditor();
   if (phase !== 'idle') return;
+  if (openingHistory) resetListening();
   speech.stop();
   detailPoller.stop(); showListening();
   els.listeningView.hidden = true; els.historyView.hidden = false;
@@ -1069,7 +1072,7 @@ async function loadHistory() {
     const open = el('button', 'history-open'); open.type = 'button';
     open.setAttribute('aria-label', `查看“${item.title}”`);
     open.append(el('strong', '', item.title), el('span', '', `最后收听 ${formatTime(item.last_listened_at)} · ${item.segment_count} 句 · ${item.knowledge_count} 条知识`));
-    open.addEventListener('click', () => selectListening(item.id).catch(error => showError(error.message)));
+    open.addEventListener('click', () => { void selectListening(item.id, item.title); });
     const remove = el('button', 'history-delete', '删除'); remove.type = 'button';
     remove.setAttribute('aria-label', `删除“${item.title}”`);
     remove.addEventListener('click', () => deleteListening(item, remove));
@@ -1094,27 +1097,60 @@ async function deleteListening(item, button) {
     els.historyError.hidden = false;
   }
 }
-async function selectListening(id) {
-  closeRecordEditor();
-  speech.stop();
-  detailPoller.stop();
-  listeningGeneration++;
-  listeningId = id; detail = null; detailPage = 0; liveSegments.clear(); liveKnowledge.clear(); liveProcessing = null;
-  knowledgeGraph.select(id);
-  await fetchDetail();
-  if (listeningId !== id || !detail) return;
-  const lastRun = detail.runs.at(-1);
-  if (lastRun) {
-    els.source.value = lastRun.source_lang;
-    els.target.value = lastRun.target_lang;
-    els.audioInput.value = lastRun.audio_source;
+function renderHistoryOpening(error = '') {
+  const opening = Boolean(openingHistory);
+  els.recordLoading.hidden = !opening;
+  els.livePanel.hidden = els.controls.hidden = opening;
+  els.listeningView.setAttribute('aria-busy', String(opening && !error));
+  if (opening) {
+    els.recordPanel.hidden = true;
+    els.recordLoadingTitle.textContent = openingHistory.title;
+    els.recordLoadingStatus.textContent = error || '正在加载收听内容…';
+    els.recordLoadingStatus.classList.toggle('error', Boolean(error));
+    els.recordLoadingRetry.hidden = !error;
   }
-  clearError(); setPhase('idle'); showListening();
-  const last = detail.latestSegment || detail.segments.at(-1);
-  if (last) displayFinal(last);
-  startPolling();
+  updatePinnedCaption();
 }
+async function selectListening(id, title = '收听记录') {
+  if (phase !== 'idle') return;
+  resetListening();
+  listeningId = id;
+  const opening = { id, title, controller: new AbortController() };
+  openingHistory = opening;
+  renderHistoryOpening(); showListening();
+  window.scrollTo({ top: 0, behavior: 'instant' });
+  els.recordLoadingTitle.focus();
+  try {
+    // Open the page before awaiting network; graph reads begin when detail is rendered.
+    await fetchDetail(1, false, opening.controller);
+    if (openingHistory !== opening || !detail) return;
+    const lastRun = detail.runs.at(-1);
+    if (lastRun) {
+      els.source.value = lastRun.source_lang;
+      els.target.value = lastRun.target_lang;
+      els.audioInput.value = lastRun.audio_source;
+    }
+    openingHistory = null;
+    renderHistoryOpening();
+    clearError(); setPhase('idle');
+    const last = detail.latestSegment || detail.segments.at(-1);
+    if (last) displayFinal(last);
+    if (detail.processingAvailable && processingView(detail).pending) startPolling();
+  } catch (error) {
+    if (openingHistory !== opening) return;
+    renderHistoryOpening(error.message || '无法读取收听记录，请重试');
+  }
+}
+els.recordLoadingRetry.addEventListener('click', () => {
+  if (openingHistory) void selectListening(openingHistory.id, openingHistory.title);
+});
+els.recordLoadingBack.addEventListener('click', () => {
+  showHistory().catch(error => { els.historyError.textContent = error.message; els.historyError.hidden = false; });
+});
 function resetListening() {
+  openingHistory?.controller.abort();
+  openingHistory = null;
+  renderHistoryOpening();
   closeRecordEditor();
   speech.stop();
   detailPoller.stop();
@@ -1266,7 +1302,7 @@ async function releaseAudio() {
 }
 
 async function start(preselected) {
-  if (phase !== 'idle') return;
+  if (phase !== 'idle' || openingHistory) return;
   if (!saved.key) { preselected?.getTracks().forEach(track => track.stop()); openSettings(true); return; }
   speech.stop();
   detailPoller.stop();

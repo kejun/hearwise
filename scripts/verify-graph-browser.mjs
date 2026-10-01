@@ -46,6 +46,50 @@ try {
     await page.locator('#record-title').filter({ hasText: title }).waitFor();
   };
   await page.goto(fixture.base);
+  // Hold the real detail request: navigation must paint before any response arrives.
+  const detailUrl = new RegExp(`/api/listenings/${fixture.seeded.first.listeningId}\\?page=1$`);
+  let releaseDetail, detailReads = 0, graphReads = 0;
+  const heldDetail = new Promise(resolve => { releaseDetail = resolve; });
+  const countGraph = request => { if (new URL(request.url()).pathname.endsWith('/graph')) graphReads++; };
+  page.on('request', countGraph);
+  await page.route(detailUrl, async route => { detailReads++; await heldDetail; await route.continue(); });
+  await page.locator('#history-listening').click();
+  await page.getByRole('button', { name: '查看“柯达相机的故事”', exact: true }).click();
+  await page.locator('#record-loading').waitFor({ state: 'visible', timeout: 1500 });
+  assert.equal(await page.locator('#history-view').isHidden(), true);
+  assert.equal(await page.locator('#record-loading-title').textContent(), '柯达相机的故事');
+  assert.equal(await page.locator('#live-panel').isHidden(), true);
+  assert.equal(await page.locator('#record-panel').isHidden(), true);
+  assert.equal(await page.locator('#pinned-caption').isHidden(), true);
+  await screenshot('history-loading-desktop.png');
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await screenshot('history-loading-mobile.png');
+  assert.equal(graphReads, 0, 'Graph must not compete with the initial detail download');
+  releaseDetail();
+  await page.locator('#record-title').filter({ hasText: '柯达相机的故事' }).waitFor();
+  await page.locator('#record-loading').waitFor({ state: 'hidden' });
+  await page.waitForTimeout(250);
+  assert.equal(detailReads, 1, 'Completed history must not immediately download the same detail again');
+  await page.unroute(detailUrl);
+  page.off('request', countGraph);
+  await page.setViewportSize({ width: 1360, height: 1000 });
+
+  const retryUrl = new RegExp(`/api/listenings/${fixture.seeded.second.listeningId}\\?page=1$`);
+  let attempts = 0;
+  await page.route(retryUrl, route => ++attempts === 1
+    ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '暂时无法读取，请重试' }) })
+    : route.continue());
+  await page.locator('#history-listening').click();
+  await page.getByRole('button', { name: '查看“另一段收听”', exact: true }).click();
+  await page.locator('#record-loading-retry').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#record-loading-status').textContent(), /暂时无法读取/);
+  assert.equal(await page.locator('#record-panel').isHidden(), true);
+  await page.locator('#record-loading-retry').click();
+  await page.locator('#record-title').filter({ hasText: '另一段收听' }).waitFor();
+  assert.equal(attempts, 2);
+  await page.unroute(retryUrl);
+  checks.push('History opens before a held network response, defers graph reads, avoids duplicate completed-detail fetches, and retries visibly on failure; desktop/mobile loading fits');
   await select('柯达相机的故事');
   assert.equal(await page.locator('#knowledge-view-list').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('#knowledge-list details.knowledge-item').count(), fixture.seeded.first.nodes.length);

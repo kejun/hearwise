@@ -23,6 +23,14 @@
         <p class="intro-copy">收听麦克风或浏览器标签页，实时识别并翻译。</p>
       </div>
 
+      <section class="secondary-panel record-loading" id="record-loading" aria-label="收听记录加载状态" hidden>
+        <h2 id="record-loading-title" tabindex="-1">收听记录</h2>
+        <p id="record-loading-status" class="hint" role="status">正在加载收听内容…</p>
+        <div class="panel-actions">
+          <button class="switch-button" id="record-loading-retry" type="button" hidden>重新加载</button>
+          <button class="switch-button" id="record-loading-back" type="button">返回历史列表</button>
+        </div>
+      </section>
       <section class="live-panel" id="live-panel" aria-label="实时字幕与语音播报">
         <div class="tab-bar live-tabs" role="tablist" aria-label="实时内容">
           <button class="tab-button active" id="live-caption-tab" type="button" role="tab" aria-selected="true" aria-controls="live-caption-panel">实时字幕</button>
@@ -55,7 +63,7 @@
         <p class="pinned-translation placeholder" id="pinned-translation" aria-hidden="true">字幕会显示在这里</p>
       </div>
 
-      <div class="controls">
+      <div class="controls" id="listening-controls">
         <div class="control-buttons"><label class="language-field source-field"><span>声音来源</span><select id="audio-input"><option value="microphone">麦克风</option><option value="tab">浏览器标签页</option></select></label><button class="primary-button" id="toggle" type="button"><svg id="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5m-4 0h8"/></svg><svg id="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><rect x="3" y="4" width="18" height="15" rx="2"/><path d="M3 8h18m-13 8h8"/></svg><span id="toggle-label">开始聆听</span></button><button class="switch-button" id="switch-tab" type="button" hidden>更换标签页</button></div>
         <p class="hint" id="hint">音频仅在聆听期间发送至阿里云</p>
       </div>
