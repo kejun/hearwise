@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { buildRelationInput, buildRelationRequest, estimateRelationRequestTokens, canonicalizeRelation, exactRelationQuote, parseRelations, extractRelations,
+import { buildRelationInput, buildRelationRequest, canonicalizeRelation, exactRelationQuote, parseRelations, extractRelations,
   RELATION_SYSTEM_PROMPT, RELATION_MODEL } from '../relations.mjs';
 const hash = t => createHash('sha256').update(t).digest('hex');
 const segment = (id, text, translation = null) => ({ id, text, source_revision: hash(text), translation,
@@ -240,7 +240,6 @@ test('short wire IDs preserve all source, translation, identity, qualifiers and 
   assert.equal(parsed.relations[0].subject_item_id, input.candidates[0].id);
   assert.equal(parsed.relations[0].supports[0].segment_id, input.focus_segments[0].id);
   assert.equal(parsed.relations[0].supports[0].source_revision, input.focus_segments[0].source_revision);
-  assert.equal(estimateRelationRequestTokens(input), Buffer.byteLength(JSON.stringify(request.body)) + 6000 + 1024);
   const escaped = { ...row, subject_item_id: input.candidates[0].id };
   assert.equal(request.parse(JSON.stringify({ relations: [escaped] })).rejected[0].code, 'ENDPOINT_INVALID');
 });

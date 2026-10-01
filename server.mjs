@@ -83,7 +83,7 @@ relationScheduler = createRelationScheduler({ store, provider, listeningIds: () 
     [...keys.keys()].some(id => knowledgeScheduler.hasWork(id) || speech.hasConsumers(id))),
   execute: relationWorkflow.execute, onChange: publishProcessing, onIdle: maybeReleaseKey,
   onError: error => logModelError('relations', error) });
-// Recovered rounds have no in-memory key, but their wall budget still expires.
+// Recovered runs wait for an explicit in-memory key; retain their paid progress.
 queueMicrotask(() => relationScheduler.pump());
 
 function sendJson(res, status, data) {

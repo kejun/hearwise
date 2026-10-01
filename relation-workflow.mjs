@@ -26,14 +26,12 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
   async function execute(job, key, signal) {
     if (!job || !store.hasListening(job.listening_id) || signal?.aborted) return { kind: 'discarded' };
     const id = job.listening_id;
-    store.expireRelationRound?.(id, { now: now() });
     const status = store.relationProcessing?.(id);
     if (stopped(status)) return { kind: 'discarded', reason: status?.stopReason || status?.round?.stopReason };
-    const deadlineAt = status?.round?.deadlineAt ?? status?.deadlineAt;
     const readyAt = provider?.readyAt?.(key, now()) || 0;
     if (readyAt > now() || provider?.canStartBackground?.() === false) {
       const reason = readyAt > now() ? 'provider_cooldown' : 'foreground';
-      const nextReadyAt = Math.min(Number.isFinite(deadlineAt) ? deadlineAt : Infinity, Math.max(readyAt, now() + 1000));
+      const nextReadyAt = Math.max(readyAt, now() + 1000);
       store.setRelationWaitReason?.(id, reason, nextReadyAt);
       return { kind: 'continue', readyAt: nextReadyAt, reason };
     }
@@ -59,11 +57,9 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
     const requestCount = reserved.window_request_count ?? attempt;
     const timeout = new AbortController();
     const requestSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
-    const roundTimeLeft = Number.isFinite(deadlineAt) ? Math.max(0, deadlineAt - now()) : Infinity;
     const timer = setTimeout(() => {
-      if (Number.isFinite(deadlineAt) && now() >= deadlineAt) store.expireRelationRound?.(id, { now: now() });
       timeout.abort(new DOMException('Relation request timed out', 'TimeoutError'));
-    }, Math.min(requestTimeoutMs, roundTimeLeft));
+    }, requestTimeoutMs);
     const recordUsage = (usage, outcome) => {
       try {
         if (store.hasListening(id)) store.recordRelationUsage?.(job.id, { usage, outcome, attempt });
@@ -73,7 +69,7 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
     try {
       const request = () => {
         // A provider implementation may postpone invoking us. Never start paid
-        // work after cancellation or after the original wall-clock deadline.
+        // work after cancellation or after this request timed out.
         if (requestSignal.aborted) return Promise.reject(requestSignal.reason);
         const operation = Promise.resolve().then(() => {
           if (requestSignal.aborted) throw requestSignal.reason;
@@ -92,7 +88,6 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
       const parsed = await raceRelationAbort(operation, requestSignal);
       requestFinished = true;
       if (!store.hasListening(id) || requestSignal.aborted) return { kind: 'discarded' };
-      store.expireRelationRound?.(id, { now: now() });
       if (stopped(store.relationProcessing?.(id))) return { kind: 'discarded' };
       const result = store.commitRelationJob(job.id, { relations: parsed.relations,
         rejected: parsed.rejected || [], usage: parsed.usage || null });
@@ -102,7 +97,6 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
         parsed.relations.length ? 'ok' : 'empty', ...result };
     } catch (error) {
       if (!store.hasListening(id)) return { kind: 'discarded' };
-      store.expireRelationRound?.(id, { now: now() });
       if (signal?.aborted || stopped(store.relationProcessing?.(id))) return { kind: 'discarded' };
       // Storage failures must not replay a completed paid request automatically.
       const delay = requestFinished ? null : relationRetryDelay(error, requestCount);
