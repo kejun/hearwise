@@ -336,13 +336,13 @@ test('request cap, conservative token reservations and deadline are durable and 
   const after = h.store.relationProcessing(h.run.listeningId).round;
   assert.equal(after.id, before.id); assert.equal(after.deadlineAt, before.deadlineAt);
   assert.equal(after.estimatedTokens, before.estimatedTokens);
-  const next = h.job(); assert.ok(next); assert.equal(h.store.beginRelationRequest(next.id), null);
+  assert.equal(h.job(), null, 'admission stops before creating another job at the request cap');
   let status = h.store.relationProcessing(h.run.listeningId);
   assert.equal(status.state, 'paused'); assert.equal(status.round.stopReason, 'ROUND_REQUEST_LIMIT');
   assert.equal(status.progress.completedWindows, 1);
   h.store.enableRelations(h.run.listeningId, { retry: true, limits: { maxEstimatedTokens: Math.floor(before.estimatedTokens * 1.5) } });
   const tokenJob = h.reserve(); h.store.commitRelationJob(tokenJob.id, { relations: [] });
-  const tokenNext = h.job(); assert.ok(tokenNext); assert.equal(h.store.beginRelationRequest(tokenNext.id), null);
+  assert.equal(h.job(), null, 'admission stops before creating another job at the token cap');
   status = h.store.relationProcessing(h.run.listeningId);
   assert.equal(status.round.stopReason, 'ROUND_TOKEN_LIMIT'); assert.equal(status.round.requestCount, 1);
   h.store.enableRelations(h.run.listeningId, { retry: true, now: time });
@@ -416,4 +416,65 @@ test('a new mention cannot reorder an unchanged candidate set into another paid 
   const first = h.reserve(); h.store.commitRelationJob(first.id, { relations: [] }); const node = first.input.candidates[1];
   h.store.db.prepare('INSERT INTO knowledge_mentions(item_id,segment_id,surface_text) VALUES(?,?,?)').run(node.id, h.segment.id, node.canonical_name);
   assert.equal(h.job(), null); assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 1);
+});
+
+test('two concurrent reservations share durable request cap and let last paid slots complete before pause', t => {
+  const h = fixture(t); h.seed();
+  for (let i = 2; i <= 18; i++) h.store.addSegment(h.run.listeningId, h.run.runId, { id: `parallel-${i}`, text: 'Acme released Camera.' });
+  h.store.enableRelations(h.run.listeningId, { limits: { maxRequests: 2 } });
+  const next = () => h.store.nextRelationJob(h.run.listeningId, { quietMs: 0, maxConcurrent: 2 });
+  const first = h.store.beginRelationRequest(next().id), second = h.store.beginRelationRequest(next().id);
+  assert.notEqual(first.window_id, second.window_id);
+  assert.equal(next(), null);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.requestCount, 2);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.state, 'active');
+  h.store.commitRelationJob(first.id, { relations: [relation(first)] });
+  assert.equal(next(), null, 'budget refuses new admission while last paid request is still running');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.state, 'active');
+  assert.equal(h.store.commitRelationJob(second.id, { relations: [relation(second)] }).stale, false);
+  assert.equal(next(), null);
+  const status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.state, 'paused'); assert.equal(status.round.stopReason, 'ROUND_REQUEST_LIMIT');
+  assert.equal(status.progress.completedWindows, 2);
+  assert.equal(h.store.graph(h.run.listeningId).relations.length, 1, 'parallel equivalent relations keep one canonical edge');
+  assert.equal(h.store.getRelationJob(second.id).window_request_count, 1);
+  h.reopen(); assert.equal(h.store.relationProcessing(h.run.listeningId).round.requestCount, 2);
+});
+
+test('concurrent token admission cannot overspend or discard a paid in-flight result', t => {
+  const h = fixture(t); h.seed();
+  for (let i = 2; i <= 12; i++) h.store.addSegment(h.run.listeningId, h.run.runId, { id: `tokens-${i}`, text: 'Acme released Camera.' });
+  h.store.enableRelations(h.run.listeningId);
+  const next = () => h.store.nextRelationJob(h.run.listeningId, { quietMs: 0, maxConcurrent: 2 });
+  const first = h.store.beginRelationRequest(next().id);
+  const round = h.store.relationProcessing(h.run.listeningId).round;
+  h.store.db.prepare('UPDATE relation_rounds SET max_estimated_tokens=? WHERE id=?').run(round.estimatedTokens + 1, round.id);
+  assert.equal(next(), null); assert.equal(h.store.relationProcessing(h.run.listeningId).round.state, 'active');
+  assert.equal(h.store.commitRelationJob(first.id, { relations: [relation(first)] }).stale, false);
+  assert.equal(next(), null);
+  const stopped = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(stopped.round.stopReason, 'ROUND_TOKEN_LIMIT'); assert.equal(stopped.round.requestCount, 1);
+  assert.equal(stopped.progress.completedWindows, 1);
+});
+
+test('explicit correction windows are ordered barriers and see preceding paid assertions', t => {
+  const h = fixture(t); h.seed();
+  for (let i = 2; i <= 18; i++) h.store.addSegment(h.run.listeningId, h.run.runId,
+    { id: `correction-${i}`, text: i === 7 ? 'Correction: Acme did not release Camera.' : 'Acme released Camera.' });
+  h.store.enableRelations(h.run.listeningId);
+  const next = () => h.store.nextRelationJob(h.run.listeningId, { quietMs: 0, maxConcurrent: 2 });
+  const first = h.store.beginRelationRequest(next().id);
+  assert.equal(next(), null, 'neither the correction nor later window overtakes prior work');
+  h.store.commitRelationJob(first.id, { relations: [relation(first)] });
+  const correction = h.store.beginRelationRequest(next().id);
+  assert.equal(correction.input.focus_segments[0].sequence_no, 7);
+  assert.equal(correction.input.existing_assertions.length, 1);
+  assert.equal(next(), null, 'later windows cannot overtake the in-flight correction');
+  const s = correction.input.focus_segments[0];
+  const row = relation(correction, { polarity: 'negative', correction_of: correction.input.existing_assertions[0].id,
+    statement: '更正：Acme 没有推出 Camera', supports: [{ segment_id: s.id, source_revision: s.source_revision,
+      start: 0, end: s.text.length, quote: s.text, role: 'relation' }] });
+  assert.equal(h.store.commitRelationJob(correction.id, { relations: [row] }).accepted, 1);
+  assert.equal(h.store.graph(h.run.listeningId).assertions.find(a => a.id === row.correction_of).status, 'superseded');
+  assert.equal(next().input.focus_segments[0].sequence_no, 13);
 });

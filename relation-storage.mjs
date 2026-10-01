@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { buildRelationInput, canonicalizeRelation, isExplicitRelationCorrection, RELATION_LIMITS, RELATION_SYSTEM_PROMPT } from './relations.mjs';
+import { buildRelationInput, canonicalizeRelation, isExplicitRelationCorrection, RELATION_LIMITS, estimateRelationRequestTokens } from './relations.mjs';
 
 export const RELATION_WINDOW_SIZE = 6;
 export const RELATION_CONTEXT_SIZE = 3;
@@ -25,7 +25,7 @@ function usageSummary(requests) {
 }
 // Conservative UTF-8 prompt bytes plus maximum output; unknown usage never
 // refunds a reservation. This is a safety budget, not a provider bill estimate.
-const requestEstimate = input => Buffer.byteLength(JSON.stringify(buildRelationInput(input))) + Buffer.byteLength(RELATION_SYSTEM_PROMPT) + 6000 + 1024;
+const requestEstimate = estimateRelationRequestTokens;
 function currentRound(store, id) {
   return store.db.prepare('SELECT r.* FROM relation_rounds r JOIN listenings l ON l.id=r.listening_id AND l.relation_epoch=r.epoch WHERE l.id=?').get(id);
 }
@@ -434,17 +434,44 @@ export const relationMethods = {
     for (const r of relations) r.assertions = assertions.filter(a => a.relation_id === r.id);
     return { ...metadata, nodes: this.knowledge(listeningId), relations, assertions, supports, revisions };
   },
-  nextRelationJob(listeningId, { now = Date.now(), quietMs = RELATION_QUIET_MS } = {}) {
+  getRelationJob(jobId) {
+    const job = publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
+    if (!job) return null;
+    return { ...job, window_request_count: this.db.prepare('SELECT COALESCE(SUM(request_count),0) AS n FROM relation_jobs WHERE window_id=? AND epoch=?').get(job.window_id, job.epoch).n };
+  },
+  nextRelationJob(listeningId, { now = Date.now(), quietMs = RELATION_QUIET_MS, maxConcurrent = 1 } = {}) {
     return this.tx(() => {
       this.expireRelationRound(listeningId, { now });
       const l = this.db.prepare('SELECT * FROM listenings WHERE id=? AND relation_enabled=1').get(listeningId);
       const round = currentRound(this, listeningId);
       if (!l || round?.state !== 'active') return null;
       this.db.prepare("UPDATE relation_jobs SET state='superseded',updated_at=? WHERE listening_id=? AND epoch!=? AND state IN ('pending','running')").run(stamp(), listeningId, l.relation_epoch);
-      if (this.db.prepare("SELECT 1 FROM relation_jobs WHERE listening_id=? AND state='running'").get(listeningId)) return null;
+      const running = this.db.prepare("SELECT * FROM relation_jobs WHERE listening_id=? AND state='running'").all(listeningId);
+      const concurrency = Math.max(1, Math.min(2, Number.isInteger(maxConcurrent) ? maxConcurrent : 1));
+      if (running.length >= concurrency) return null;
+      const activeWindows = this.db.prepare("SELECT * FROM relation_windows WHERE listening_id=? AND state IN ('dirty','pending') ORDER BY from_sequence").all(listeningId);
+      const runningWindows = new Set(running.map(j => j.window_id));
+      // Explicit corrections form a chronological barrier. They must see prior
+      // completed assertions, and later windows cannot overtake them.
+      const barrier = activeWindows.find(w => this.db.prepare('SELECT original_text FROM segments WHERE listening_id=? AND sequence_no BETWEEN ? AND ?')
+        .all(listeningId, w.from_sequence, w.to_sequence).some(s => isExplicitRelationCorrection(s.original_text)));
+      const eligible = window => !runningWindows.has(window.id) && (!barrier || window.from_sequence < barrier.from_sequence ||
+        (window.id === barrier.id && !running.length && !activeWindows.some(w => w.from_sequence < barrier.from_sequence)));
+      const requests = roundRequests(this, round), usage = usageSummary(requests);
+      const reserved = requests.reduce((n, q) => n + q.estimated_tokens, 0);
+      const hasRoom = input => {
+        const reason = requests.length >= round.max_requests ? 'ROUND_REQUEST_LIMIT' :
+          Math.max(reserved, usage.totalTokens) + requestEstimate(input) > round.max_estimated_tokens ? 'ROUND_TOKEN_LIMIT' : null;
+        if (!reason) return true;
+        // Drain already-paid work before pausing admission. Stopping the round
+        // here would discard another slot's valid response at the last request.
+        if (!running.length) stopRound(this, round, reason, now);
+        return false;
+      };
       const queued = this.db.prepare("SELECT * FROM relation_jobs WHERE listening_id=? AND state='pending' ORDER BY created_at,id").all(listeningId);
       for (const row of queued) {
         const window = this.db.prepare('SELECT * FROM relation_windows WHERE id=?').get(row.window_id);
+        if (window && !eligible(window)) continue;
         const input = window && inputFor(this, window).input;
         if (!input || input.input_fingerprint !== row.input_fingerprint) {
           this.db.prepare("UPDATE relation_jobs SET state='superseded',last_error='STALE_INPUT',updated_at=? WHERE id=?").run(stamp(), row.id);
@@ -460,10 +487,11 @@ export const relationMethods = {
         if (row.request_count >= row.max_requests) {
           this.db.prepare("UPDATE relation_jobs SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE id=?").run(row.id);
           this.db.prepare("UPDATE relation_windows SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE id=?").run(row.window_id);
-        } else if (row.ready_at <= now) return publicJob(row);
+        } else if (row.ready_at <= now) return hasRoom(input) ? publicJob(row) : null;
       }
       const windows = this.db.prepare("SELECT * FROM relation_windows WHERE listening_id=? AND state='dirty' ORDER BY from_sequence").all(listeningId);
       for (const window of windows) {
+        if (!eligible(window)) continue;
         const { input } = inputFor(this, window);
         if (input.candidates.length < 2 || !input.focus_segments.length) {
           this.db.prepare("UPDATE relation_windows SET state='waiting_nodes',ready_at=0 WHERE id=?").run(window.id);
@@ -480,6 +508,7 @@ export const relationMethods = {
         }
         const spent = this.db.prepare('SELECT COALESCE(SUM(request_count),0) AS n FROM relation_jobs WHERE window_id=? AND epoch=?').get(window.id, l.relation_epoch).n;
         if (spent >= 3) { this.db.prepare("UPDATE relation_windows SET state='failed',last_error='WINDOW_REQUEST_LIMIT',ready_at=0 WHERE id=?").run(window.id); continue; }
+        if (!hasRoom(input)) return null;
         const id = randomUUID(), time = stamp();
         this.db.prepare(`INSERT INTO relation_jobs(id,listening_id,window_id,window_revision,epoch,input_fingerprint,prompt_version,model_version,input_json,state,created_at,updated_at)
           VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(id, listeningId, window.id, window.revision, l.relation_epoch, input.input_fingerprint, PROMPT_VERSION, MODEL_VERSION, JSON.stringify(input), time, time);
@@ -514,7 +543,10 @@ export const relationMethods = {
       const reserved = requests.reduce((n, q) => n + q.estimated_tokens, 0);
       const reason = requests.length >= round.max_requests ? 'ROUND_REQUEST_LIMIT' :
         Math.max(reserved, usage.totalTokens) + estimated > round.max_estimated_tokens ? 'ROUND_TOKEN_LIMIT' : null;
-      if (reason) { stopRound(this, round, reason, now); return null; }
+      if (reason) {
+        if (!this.db.prepare("SELECT 1 FROM relation_jobs WHERE listening_id=? AND state='running'").get(job.listening_id)) stopRound(this, round, reason, now);
+        return null;
+      }
       this.db.prepare("UPDATE relation_jobs SET state='running',request_count=request_count+1,max_requests=?,window_revision=?,input_json=?,updated_at=? WHERE id=?")
         .run(limit, window.revision, JSON.stringify(input), stamp(), jobId);
       this.db.prepare("UPDATE relation_windows SET state='pending',ready_at=0 WHERE id=?").run(window.id);

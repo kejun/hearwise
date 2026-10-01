@@ -1,18 +1,24 @@
 import { relationRetryDelay } from './relation-workflow.mjs';
 import { raceRelationAbort } from './relations.mjs';
 
-export const RELATION_QUEUE_DEFAULTS = Object.freeze({ quietMs: 6000, minStartIntervalMs: 2000, busyPollMs: 1000 });
+export const RELATION_QUEUE_DEFAULTS = Object.freeze({ quietMs: 6000, minStartIntervalMs: 2000, busyPollMs: 1000, maxConcurrent: 2 });
 
-// Independent, strictly single-concurrency, round-robin low-priority admission.
+// Independent, bounded-concurrency, round-robin low-priority admission.
 // SQLite owns the bounded round, coalescing and restart recovery. Foreground
 // work retains priority, but waiting for it consumes the same wall-clock budget.
 export function createRelationScheduler({ store, listeningIds = () => store.relationListeningIds(), keyFor,
   foregroundBusy = () => false, execute, provider, onChange = () => {}, onIdle = () => {}, onError = () => {},
   now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = timer => clearTimeout(timer), ...options }) {
   const config = { ...RELATION_QUEUE_DEFAULTS, ...options };
+  config.maxConcurrent = Number.isInteger(config.maxConcurrent) ? Math.max(1, Math.min(2, config.maxConcurrent)) : RELATION_QUEUE_DEFAULTS.maxConcurrent;
   const forced = new Set(), waitingKeys = new Map(), waitingReasons = new Map(), blockedKeys = new Set(), cooldowns = new Map();
-  let closed = false, pumping = false, running = null, wakeTimer = null, deadlineTimer = null, lastServed = null, lastStarted = -Infinity;
+  const running = new Map();
+  let closed = false, pumping = false, wakeTimer = null, deadlineTimer = null, lastServed = null, lastStarted = -Infinity;
   const notify = (callback, ...args) => { try { callback(...args); } catch (error) { try { onError(error); } catch {} } };
+  const activeFor = id => [...running.values()].filter(entry => entry.job.listening_id === id && !entry.controller.signal.aborted);
+  function abortListening(id, reason) {
+    for (const entry of running.values()) if (entry.job.listening_id === id) entry.controller.abort(reason);
+  }
   function wakeAt(timestamp) {
     if (closed || !Number.isFinite(timestamp)) return;
     clearTimer(wakeTimer);
@@ -39,15 +45,18 @@ export function createRelationScheduler({ store, listeningIds = () => store.rela
       const status = store.relationProcessing?.(id);
       const round = status?.round;
       const deadlineAt = round?.deadlineAt ?? status?.deadlineAt;
-      if (!Number.isFinite(deadlineAt) || ['paused', 'cancelled'].includes(status?.state) ||
-        (round?.state && round.state !== 'active')) continue;
+      if (['paused', 'cancelled'].includes(status?.state) || (round?.state && round.state !== 'active')) {
+        abortListening(id, new DOMException('Relation round stopped', 'AbortError'));
+        continue;
+      }
+      if (!Number.isFinite(deadlineAt)) continue;
       if (deadlineAt <= now()) {
         if (store.expireRelationRound?.(id, { now: now() })) {
           forced.delete(id); waitingKeys.delete(id); waitingReasons.delete(id);
-          if (running?.job.listening_id === id) running.controller.abort(new DOMException('Relation round expired', 'TimeoutError'));
+          abortListening(id, new DOMException('Relation round expired', 'TimeoutError'));
           notify(onChange, id, { refreshDetail: true }); notify(onIdle, id);
         }
-      } else if (store.relationHasWork(id) || running?.job.listening_id === id) next = Math.min(next, deadlineAt);
+      } else if (store.relationHasWork(id) || activeFor(id).length) next = Math.min(next, deadlineAt);
     }
     if (Number.isFinite(next)) {
       deadlineTimer = setTimer(() => { deadlineTimer = null; pump(); }, Math.max(1, next - now()));
@@ -67,17 +76,17 @@ export function createRelationScheduler({ store, listeningIds = () => store.rela
       }
       if (result?.kind === 'continue' && result.readyAt) wakeAt(result.readyAt);
     } catch (error) {
-      if (store.hasListening(job.listening_id) && !controller.signal.aborted) {
+      if (!controller.signal.aborted && store.hasListening(job.listening_id)) {
         // Unexpected errors may have followed a durable reservation. Read the
         // latest job rather than resetting the request count in memory.
-        const fresh = store.nextRelationJob(job.listening_id, { now: now(), quietMs: 0 });
+        const fresh = store.getRelationJob?.(job.id);
         const delay = relationRetryDelay(error, fresh?.window_request_count || fresh?.request_count || job.window_request_count || job.request_count || 1);
         store.failRelationJob(job.id, { code: 'RELATION_EXECUTION_FAILED',
           retryAt: delay == null ? null : now() + delay, terminal: delay == null });
         notify(onError, error);
       }
     } finally {
-      if (running?.controller === controller) running = null;
+      if (running.get(job.id)?.controller === controller) running.delete(job.id);
       if (!closed) {
         if (store.hasListening(job.listening_id)) notify(onChange, job.listening_id, { refreshDetail: true });
         pump(); notify(onIdle, job.listening_id);
@@ -90,54 +99,68 @@ export function createRelationScheduler({ store, listeningIds = () => store.rela
     try {
       const ids = [...new Set([...listeningIds(), ...(store.relationListeningIds?.() || [])])].filter(id => store.hasListening(id));
       expireAndArm(ids);
-      if (running) return;
+      if (running.size >= config.maxConcurrent) return;
       clearTimer(wakeTimer); wakeTimer = null;
       const liveKeys = new Set(ids.map(keyFor).filter(Boolean));
       for (const key of blockedKeys) if (!liveKeys.has(key)) blockedKeys.delete(key);
       for (const [key, until] of cooldowns) if (!liveKeys.has(key) || until <= now()) cooldowns.delete(key);
       for (const id of waitingKeys.keys()) if (!ids.includes(id)) waitingKeys.delete(id);
       for (const id of waitingReasons.keys()) if (!ids.includes(id)) waitingReasons.delete(id);
-      const cursor = ids.indexOf(lastServed), ordered = [...ids.slice(cursor + 1), ...ids.slice(0, cursor + 1)];
       let nextWake = Infinity;
-      for (const id of ordered) {
-        if (!store.relationHasWork(id)) continue;
-        const key = keyFor(id);
-        waitingKey(id, !key || blockedKeys.has(key));
-        if (!key || blockedKeys.has(key)) { waitReason(id, 'waiting_key'); continue; }
-        if (foregroundBusy() || provider?.canStartBackground?.() === false) {
-          waitReason(id, 'foreground');
-          nextWake = Math.min(nextWake, now() + config.busyPollMs); continue;
+      let admitted;
+      do {
+        admitted = false;
+        const cursor = ids.indexOf(lastServed), ordered = [...ids.slice(cursor + 1), ...ids.slice(0, cursor + 1)];
+        for (const id of ordered) {
+          if (!store.relationHasWork(id)) continue;
+          const key = keyFor(id);
+          waitingKey(id, !key || blockedKeys.has(key));
+          if (!key || blockedKeys.has(key)) { waitReason(id, 'waiting_key'); continue; }
+          if (foregroundBusy() || provider?.canStartBackground?.() === false) {
+            waitReason(id, 'foreground');
+            nextWake = Math.min(nextWake, now() + config.busyPollMs); continue;
+          }
+          const cooldownAt = Math.max(cooldowns.get(key) || 0, provider?.readyAt?.(key, now()) || 0);
+          const admissionAt = Math.max(lastStarted + config.minStartIntervalMs, cooldownAt);
+          if (admissionAt > now()) {
+            waitReason(id, cooldownAt > now() ? 'provider_cooldown' : 'admission_interval', admissionAt);
+            nextWake = Math.min(nextWake, admissionAt); continue;
+          }
+          // Admission/cooldown has elapsed. Do not let its old timestamp mask a
+          // later quiet/retry timestamp when another slot is still in flight.
+          waitReason(id, null);
+          const job = store.nextRelationJob(id, { now: now(), quietMs: forced.has(id) ? 0 : config.quietMs,
+            maxConcurrent: config.maxConcurrent });
+          if (!job) {
+            if (!store.relationHasWork(id)) { waitReason(id, null); notify(onChange, id); notify(onIdle, id); continue; }
+            const status = store.relationProcessing?.(id);
+            // An in-flight window may fence a dependent window or the remaining
+            // round budget. Its completion will pump again; do not busy-poll it.
+            if (activeFor(id).length && !status?.waitingTranslations && !(status?.nextReadyAt > now())) continue;
+            waitReason(id, status?.waitingTranslations ? 'translations' : status?.waitReason === 'network_retry' ? 'network_retry' : 'quiet_period', status?.nextReadyAt ?? null);
+            if (Number.isFinite(status?.nextReadyAt) && status.nextReadyAt > now()) nextWake = Math.min(nextWake, status.nextReadyAt);
+            else if (status?.waitingTranslations || status?.pendingJobs || status?.queued) nextWake = Math.min(nextWake, now() + config.busyPollMs);
+            continue;
+          }
+          // Storage normally marks the job running synchronously in execute.
+          // Also fence injected/deferred executors that still return it pending.
+          if (running.has(job.id)) continue;
+          const readyAt = Number(job.ready_at) || 0;
+          if (readyAt > now()) { waitReason(id, 'network_retry', readyAt); nextWake = Math.min(nextWake, readyAt); continue; }
+          forced.delete(id);
+          waitReason(id, null);
+          const controller = new AbortController();
+          running.set(job.id, { job, key, controller }); lastServed = id; lastStarted = now();
+          notify(onChange, id);
+          void perform(job, key, controller); admitted = true; break;
         }
-        const cooldownAt = Math.max(cooldowns.get(key) || 0, provider?.readyAt?.(key, now()) || 0);
-        const admissionAt = Math.max(lastStarted + config.minStartIntervalMs, cooldownAt);
-        if (admissionAt > now()) {
-          waitReason(id, cooldownAt > now() ? 'provider_cooldown' : 'admission_interval', admissionAt);
-          nextWake = Math.min(nextWake, admissionAt); continue;
-        }
-        const job = store.nextRelationJob(id, { now: now(), quietMs: forced.has(id) ? 0 : config.quietMs });
-        if (!job) {
-          if (!store.relationHasWork(id)) { waitReason(id, null); notify(onChange, id); notify(onIdle, id); continue; }
-          const status = store.relationProcessing?.(id);
-          waitReason(id, status?.waitingTranslations ? 'translations' : status?.waitReason === 'network_retry' ? 'network_retry' : 'quiet_period', status?.nextReadyAt ?? null);
-          if (Number.isFinite(status?.nextReadyAt) && status.nextReadyAt > now()) nextWake = Math.min(nextWake, status.nextReadyAt);
-          else if (status?.waitingTranslations || status?.pendingJobs || status?.queued) nextWake = Math.min(nextWake, now() + config.busyPollMs);
-          continue;
-        }
-        const readyAt = Number(job.ready_at) || 0;
-        if (readyAt > now()) { waitReason(id, 'network_retry', readyAt); nextWake = Math.min(nextWake, readyAt); continue; }
-        forced.delete(id);
-        waitReason(id, null);
-        const controller = new AbortController();
-        running = { job, key, controller }; lastServed = id; lastStarted = now();
-        notify(onChange, id);
-        void perform(job, key, controller); return;
-      }
-      if (Number.isFinite(nextWake)) wakeAt(nextWake);
+      } while (!closed && admitted && running.size < config.maxConcurrent);
+      if (running.size < config.maxConcurrent && Number.isFinite(nextWake)) wakeAt(nextWake);
     } finally { pumping = false; }
   }
   function cancel(id) {
     forced.delete(id); waitingKeys.delete(id); waitingReasons.delete(id);
-    if (running?.job.listening_id === id) running.controller.abort(new DOMException('Relation work cancelled', 'AbortError'));
+    abortListening(id, new DOMException('Relation work cancelled', 'AbortError'));
     pump();
   }
   return {
@@ -147,10 +170,11 @@ export function createRelationScheduler({ store, listeningIds = () => store.rela
       pump();
     },
     pump,
-    hasWork: id => (running?.job.listening_id === id && !running.controller.signal.aborted) || Boolean(store.relationHasWork(id)),
+    hasWork: id => Boolean(activeFor(id).length || store.relationHasWork(id)),
     cancel,
     remove: cancel,
-    close() { closed = true; clearTimer(wakeTimer); clearTimer(deadlineTimer); running?.controller.abort();
+    close() { closed = true; clearTimer(wakeTimer); clearTimer(deadlineTimer);
+      for (const entry of running.values()) entry.controller.abort();
       forced.clear(); waitingKeys.clear(); waitingReasons.clear(); blockedKeys.clear(); cooldowns.clear(); }
   };
 }

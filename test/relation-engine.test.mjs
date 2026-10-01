@@ -145,7 +145,7 @@ function queueHarness(t, options = {}) {
     execute: (job, key, signal) => {
       const gate = deferred(); job.state = 'running'; calls.push({ job, key, signal, ...gate });
       return gate.promise.then(result => { job.state = result?.kind === 'continue' ? 'pending' : 'complete'; if (result?.readyAt) job.ready_at = result.readyAt; return result; });
-    }, onChange: id => changes.push(id), onError: error => errors.push(error), minStartIntervalMs: 0, ...options });
+    }, onChange: id => changes.push(id), onError: error => errors.push(error), minStartIntervalMs: 0, maxConcurrent: 1, ...options });
   t.after(() => queue.close());
   const add = (id, key = 'test-key') => { live.add(id); if (key) keys.set(id, key);
     const job = { id: `job${++sequence}`, listening_id: id, state: 'pending', ready_at: 0, request_count: 0 };
