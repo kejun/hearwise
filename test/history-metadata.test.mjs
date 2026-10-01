@@ -38,14 +38,14 @@ function snapshotContent(store, id) {
   return { runs, segments, knowledge, jobs, processing };
 }
 
-test('v4 升级为 v6：历史记录默认空备注，转写与知识任务保留，重复打开不重建', t => {
+test('v4 升级为 v7：历史记录默认空备注，转写与知识任务保留，重复打开不重建', t => {
   const h = fixture(t);
   const run = seed(h.store);
   h.store.createExtractionJob(run.listeningId, [run.segment]);
   const previous = snapshotContent(h.store, run.listeningId);
   h.store.db.exec('ALTER TABLE listenings DROP COLUMN notes; PRAGMA user_version = 4;');
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 6);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 7);
   const column = h.store.db.prepare("SELECT * FROM pragma_table_info('listenings') WHERE name='notes'").get();
   assert.equal(column.type, 'TEXT');
   assert.equal(column.notnull, 1);

@@ -2,7 +2,9 @@ export function processingView(detail) {
   const p = detail.processing || {};
   const k = p.knowledge || {};
   const r = p.relations || {};
-  const relationPending = r.enabled !== false && r.state !== 'not_generated' ? (r.pendingJobs || 0) + (r.runningJobs || 0) : 0;
+  const relationStopped = ['not_generated', 'paused', 'cancelled', 'waiting_key', 'complete', 'empty', 'ok', 'failed', 'invalid', 'partial', 'waiting_nodes'].includes(r.state);
+  const relationPending = r.enabled !== false && !relationStopped
+    ? Math.max(Math.max(r.pendingJobs || 0, r.retryingJobs || 0) + (r.runningJobs || 0), ['running', 'queued', 'pending', 'retrying'].includes(r.state) ? 1 : 0) : 0;
   const jobs = detail.jobs || [];
   const segments = detail.segments || [];
   const failedTranslations = p.failedTranslations ?? segments.filter(s => s.translation_state === 'failed').length;
@@ -31,11 +33,19 @@ export function processingView(detail) {
     else if (knowledgePending > retrying) labels.push('知识整理中');
     if (retrying) labels.push('知识稍后自动重试');
   }
-  if (r.enabled !== false && r.state !== 'not_generated') {
+  if (r.state === 'paused') labels.push('关系本轮已停止，可在图谱中继续');
+  else if (r.state === 'cancelled') labels.push('关系本轮已取消，已有关系保留');
+  else if (r.enabled !== false && r.state !== 'not_generated') {
     if (r.failedJobs || r.state === 'failed') labels.push('关系整理失败，可在图谱中继续');
     if (r.partialJobs || r.state === 'partial') labels.push('关系部分完成');
-    if (relationPending && (!detail.processingAvailable || r.state === 'waiting_key')) labels.push('关系待继续整理（需 API Key）');
-    else if (r.runningJobs || r.state === 'running') labels.push('关系整理中');
+    if (r.state === 'waiting_key' || relationPending && !detail.processingAvailable) labels.push('关系待继续整理（需 API Key）');
+    else if (relationPending && r.waitReason === 'foreground') labels.push('关系等待前台任务');
+    else if (relationPending && r.waitReason === 'provider_cooldown') labels.push('关系等待服务商限流冷却');
+    else if (relationPending && ['retrying', 'network_retry'].includes(r.waitReason)) labels.push('关系等待重试');
+    else if (relationPending && r.waitReason === 'quiet_period') labels.push('关系等待原文与条目稳定');
+    else if (relationPending && r.waitReason === 'admission_interval') labels.push('关系等待请求间隔');
+    else if (relationPending && r.waitReason === 'translations') labels.push('关系等待译文完成');
+    else if (relationPending && (r.runningJobs || r.state === 'running')) labels.push('关系整理中');
     else if (relationPending) labels.push('关系稍后补齐');
     if (r.waitingNodes || r.state === 'waiting_nodes') labels.push('关系等待更多知识条目');
   }

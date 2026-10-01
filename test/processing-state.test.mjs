@@ -167,3 +167,38 @@ test('关系鉴权受阻时即使服务器仍持有旧 Key，也停止无效轮�
   poller.start('a'); await settle(); t.mock.timers.tick(10000); await settle();
   assert.equal(calls, 1);
 });
+
+test('关系终态压过遗留任务计数，明确显示暂停或取消', () => {
+  for (const [state, text] of [['paused', '本轮已停止'], ['cancelled', '本轮已取消']]) {
+    const result = processingView(snapshot({}, { processing: { relations: { enabled: true, state, pendingJobs: 9, runningJobs: 1 } } }));
+    assert.equal(result.pending, 0);
+    assert.match(result.text, new RegExp(text));
+    assert.doesNotMatch(result.text, /整理中|稍后补齐/);
+  }
+  assert.equal(processingView(snapshot({}, { processing: { relations: { state: 'queued' } } })).pending, 1);
+});
+
+test('关系限额暂停和取消停止轮询；手动下一轮重新开始，完成后再次停止', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const state of ['paused', 'cancelled']) {
+    let calls = 0, relations = { state, enabled: true, pendingJobs: 7, runningJobs: 1 };
+    const poller = createProcessingPoller({ isCurrent: () => true, read: async () => {
+      calls++; return snapshot({}, { processing: { relations } });
+    } });
+    t.after(() => poller.stop());
+    poller.start('a'); await settle(); t.mock.timers.tick(20000); assert.equal(calls, 1);
+    relations = { enabled: true, state: 'queued' }; poller.start('a'); await settle(); assert.equal(calls, 2);
+    t.mock.timers.tick(2000); await settle(); assert.equal(calls, 3);
+    relations = { enabled: true, state: 'complete', pendingJobs: 7 };
+    t.mock.timers.tick(2000); await settle(); assert.equal(calls, 4);
+    t.mock.timers.tick(20000); assert.equal(calls, 4); poller.stop();
+  }
+});
+
+test('关系暂停不会中断仍在处理的译文；等待原因不误报正在调用', () => {
+  const result = processingView(snapshot({}, { processing: { pendingTranslations: 1, relations: { enabled: true, state: 'paused', pendingJobs: 9 } } }));
+  assert.equal(result.pending, 1); assert.match(result.text, /译文处理中.*关系本轮已停止/);
+  for (const [waitReason, label] of [['foreground', '等待前台任务'], ['provider_cooldown', '限流冷却'], ['retrying', '等待重试'], ['network_retry', '等待重试'], ['quiet_period', '等待原文与条目稳定'], ['admission_interval', '等待请求间隔'], ['translations', '等待译文完成']]) {
+    assert.match(processingView(snapshot({}, { processing: { relations: { enabled: true, state: 'running', runningJobs: 1, waitReason } } })).text, new RegExp(label));
+  }
+});

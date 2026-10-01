@@ -39,14 +39,14 @@ function relation(job, extra = {}) {
     supports: [{ segment_id: s.id, source_revision: s.source_revision, start: 0, end: s.text.length, quote: s.text, role: 'relation' }], ...extra };
 }
 
-test('schema 5→6 preserves legacy data; migrations and read-only snapshots never backfill or enable other histories', t => {
+test('schema 5→7 preserves legacy data; migrations and read-only snapshots never backfill or enable other histories', t => {
   const h = fixture(t); h.seed();
   for (const row of h.store.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'relation_%'").all()) h.store.db.exec(`DROP TRIGGER ${row.name}`);
   h.store.db.exec('DROP TABLE relation_revisions; DROP TABLE relation_supports; DROP TABLE relation_assertions; DROP TABLE relations; DROP TABLE relation_requests; DROP TABLE relation_jobs; DROP TABLE relation_windows;');
   for (const column of ['relation_enabled', 'relation_epoch', 'relation_waiting_key', 'graph_revision']) h.store.db.exec(`ALTER TABLE listenings DROP COLUMN ${column}`);
   h.store.db.exec('PRAGMA user_version=5');
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 6);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 7);
   assert.equal(h.store.graph(h.run.listeningId).nodes.length, 2);
   assert.equal(h.store.graph(h.run.listeningId).status.state, 'not_generated');
   assert.equal(h.store.db.prepare('SELECT COUNT(*) n FROM relation_windows').get().n, 0);
@@ -261,4 +261,159 @@ test('uncertain node identities remain review-only at commit and explicit correc
   assert.equal(graph.assertions.find(a => a.id === old.id).status, 'superseded');
   assert.equal(graph.assertions.find(a => a.id !== old.id).status, 'needs_review');
   assert.ok(graph.revisions.some(r => r.action === 'explicit_correction'));
+});
+
+test('static 114-sentence history stops each bounded round and continuation never replays completed windows', t => {
+  const h = fixture(t); const [acme] = h.seed();
+  for (let i = 2; i <= 114; i++) h.store.addSegment(h.run.listeningId, h.run.runId, { id: `s${i}`, text: `Acme released Camera ${i}.` });
+  h.store.finishRun(h.run.runId);
+  let total = 0, rounds = 0;
+  do {
+    h.store.enableRelations(h.run.listeningId, { retry: true }); rounds++;
+    const first = h.store.relationProcessing(h.run.listeningId).round;
+    for (;;) {
+      const job = h.job(); if (!job) break;
+      const reserved = h.store.beginRelationRequest(job.id); if (!reserved) break;
+      total++;
+      h.store.commitRelationJob(job.id, { relations: [], usage: { total_tokens: 8000 } });
+    }
+    const status = h.store.relationProcessing(h.run.listeningId);
+    assert.ok(status.round.requestCount <= status.round.maxRequests);
+    assert.ok(status.round.estimatedTokens <= status.round.maxEstimatedTokens);
+    assert.equal(status.round.deadlineAt, first.deadlineAt);
+    assert.equal(status.progress.completedWindows, total);
+    assert.equal(status.progress.totalWindows, 19);
+    if (status.state !== 'paused') break;
+    assert.ok(rounds < 5);
+  } while (true);
+  assert.equal(total, 19); assert.ok(rounds > 1);
+  for (let i = 0; i < 100; i++) assert.equal(h.job(), null);
+  h.store.db.prepare('UPDATE knowledge_items SET content_version=content_version+1,dialogue_summary=? WHERE id=?').run('Updated card prose.', acme.id);
+  assert.equal(h.job(), null, 'a global card-description edit must not reprocess 19 relation windows');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 19);
+});
+
+test('no-op and redundant mention writes do not discard an in-flight paid result or reset retry state', t => {
+  const h = fixture(t); const [acme] = h.seed(); h.store.enableRelations(h.run.listeningId);
+  const job = h.reserve();
+  h.store.db.prepare('UPDATE knowledge_items SET canonical_name=canonical_name,content_version=content_version+1 WHERE id=?').run(acme.id);
+  h.store.db.prepare('UPDATE knowledge_mentions SET surface_text=surface_text WHERE item_id=?').run(acme.id);
+  h.store.db.exec("UPDATE relation_windows SET revision=revision+1,state='dirty'");
+  assert.equal(h.store.commitRelationJob(job.id, { relations: [relation(job)], usage: { total_tokens: 15 } }).stale, false);
+  assert.equal(h.job(), null); assert.equal(h.store.graph(h.run.listeningId).relations.length, 1);
+  h.store.db.prepare('UPDATE segments SET translation_state=\'complete\',translation_text=? WHERE id=?').run('Acme 推出了 Camera。', h.segment.id);
+  const retry = h.reserve(); h.store.failRelationJob(retry.id, { code: 'HTTP_429', retryAt: Date.now() + 20000 });
+  h.store.db.exec("UPDATE relation_windows SET revision=revision+1,state='dirty'");
+  assert.equal(h.job(), null, 'no-op cannot bypass provider retry delay');
+  const pending = h.store.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(retry.id);
+  assert.equal(pending.state, 'pending'); assert.equal(pending.request_count, 1);
+});
+
+test('real source or endpoint identity changes stay pending but share a three-attempt window budget', t => {
+  const h = fixture(t); const [acme] = h.seed(); h.store.enableRelations(h.run.listeningId);
+  for (let i = 1; i <= 3; i++) {
+    const job = h.reserve(); assert.equal(job.window_request_count, i);
+    h.store.db.prepare('UPDATE knowledge_items SET certainty=? WHERE id=?').run(i % 2 ? 'needs_review' : 'clear', acme.id);
+    assert.equal(h.store.commitRelationJob(job.id, { relations: [relation(job)], usage: { total_tokens: 20 } }).stale, true);
+  }
+  assert.equal(h.job(), null);
+  const status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.requestCount, 3); assert.equal(status.state, 'failed');
+  assert.equal(status.usageLastHour.totalTokens, 60); assert.equal(status.progress.remainingWindows, 1);
+  h.store.enableRelations(h.run.listeningId, { retry: true });
+  assert.equal(h.reserve().window_request_count, 1, 'only explicit continuation grants a new bounded window budget');
+});
+
+test('request cap, conservative token reservations and deadline are durable and cannot be reset by duplicate start or restart', t => {
+  const h = fixture(t); h.seed();
+  for (let i = 2; i <= 18; i++) h.store.addSegment(h.run.listeningId, h.run.runId, { id: `s${i}`, text: 'Acme released Camera.' });
+  const time = Date.now();
+  h.store.enableRelations(h.run.listeningId, { now: time, limits: { maxRequests: 1 } });
+  const job = h.reserve(); h.store.commitRelationJob(job.id, { relations: [] });
+  const before = h.store.relationProcessing(h.run.listeningId).round;
+  assert.ok(before.estimatedTokens > 6000); assert.equal(before.measuredRequests, 0);
+  h.store.enableRelations(h.run.listeningId, { retry: true }); h.reopen();
+  const after = h.store.relationProcessing(h.run.listeningId).round;
+  assert.equal(after.id, before.id); assert.equal(after.deadlineAt, before.deadlineAt);
+  assert.equal(after.estimatedTokens, before.estimatedTokens);
+  const next = h.job(); assert.ok(next); assert.equal(h.store.beginRelationRequest(next.id), null);
+  let status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.state, 'paused'); assert.equal(status.round.stopReason, 'ROUND_REQUEST_LIMIT');
+  assert.equal(status.progress.completedWindows, 1);
+  h.store.enableRelations(h.run.listeningId, { retry: true, limits: { maxEstimatedTokens: Math.floor(before.estimatedTokens * 1.5) } });
+  const tokenJob = h.reserve(); h.store.commitRelationJob(tokenJob.id, { relations: [] });
+  const tokenNext = h.job(); assert.ok(tokenNext); assert.equal(h.store.beginRelationRequest(tokenNext.id), null);
+  status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.round.stopReason, 'ROUND_TOKEN_LIMIT'); assert.equal(status.round.requestCount, 1);
+  h.store.enableRelations(h.run.listeningId, { retry: true, now: time });
+  const round = h.store.relationProcessing(h.run.listeningId).round;
+  assert.equal(h.store.nextRelationJob(h.run.listeningId, { now: round.deadlineAt, quietMs: 0 }), null);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.stopReason, 'ROUND_DEADLINE');
+  h.reopen(); assert.equal(h.job(), null, 'restart cannot resume an expired round');
+});
+
+test('cancel is durable, keeps partial graph, ignores late edges and attributes late usage to its original attempt', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const successful = h.reserve(); h.store.commitRelationJob(successful.id, { relations: [relation(successful)] });
+  h.store.addSegment(h.run.listeningId, h.run.runId, { id: 's2', text: 'Acme released Camera again.' });
+  const late = h.reserve(); h.store.cancelRelations(h.run.listeningId); h.reopen();
+  assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'cancelled');
+  assert.equal(h.store.graph(h.run.listeningId).relations.length, 1); assert.equal(h.job(), null);
+  h.store.enableRelations(h.run.listeningId, { retry: true }); const current = h.reserve();
+  h.store.recordRelationUsage(late.id, { usage: { total_tokens: 123 }, attempt: late.request_count });
+  assert.equal(h.store.commitRelationJob(late.id, { relations: [relation(late)] }).stale, true);
+  const status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.round.requestCount, 1); assert.equal(status.round.totalTokens, 0);
+  assert.equal(status.usageLastHour.totalTokens, 123);
+  h.store.commitRelationJob(current.id, { relations: [] });
+  assert.equal(h.store.graph(h.run.listeningId).relations.length, 1);
+});
+
+test('restored source text does not reuse stale evidence without revalidation', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const first = h.reserve(); h.store.commitRelationJob(first.id, { relations: [relation(first)] });
+  h.store.db.prepare('UPDATE segments SET original_text=? WHERE id=?').run('Acme never released Camera.', h.segment.id);
+  h.store.db.prepare('UPDATE segments SET original_text=? WHERE id=?').run(h.segment.original_text, h.segment.id);
+  assert.equal(h.store.graph(h.run.listeningId).assertions[0].status, 'stale');
+  const recheck = h.reserve(); h.store.commitRelationJob(recheck.id, { relations: [relation(recheck)] });
+  assert.equal(h.store.graph(h.run.listeningId).assertions[0].status, 'active');
+});
+
+test('v6 migration replaces broad update triggers and pauses unbounded legacy work', t => {
+  const h = fixture(t); const [acme] = h.seed(); h.store.enableRelations(h.run.listeningId);
+  const running = h.reserve(); h.store.db.exec('DROP TABLE relation_rounds; PRAGMA user_version=6'); h.reopen();
+  assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'paused');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.stopReason, 'REQUEST_INTERRUPTED'); assert.equal(h.job(), null);
+  assert.equal(h.store.db.prepare('SELECT request_count FROM relation_jobs WHERE id=?').get(running.id).request_count, 1);
+  const revision = h.store.db.prepare('SELECT revision FROM relation_windows').get().revision;
+  h.store.db.prepare('UPDATE knowledge_items SET content_version=content_version+1 WHERE id=?').run(acme.id);
+  assert.equal(h.store.db.prepare('SELECT revision FROM relation_windows').get().revision, revision);
+});
+
+test('an empty revalidation caches changed input even while historical supports remain stale', t => {
+  const h = fixture(t); const [acme] = h.seed(); h.store.enableRelations(h.run.listeningId);
+  const first = h.reserve(); h.store.commitRelationJob(first.id, { relations: [relation(first)] });
+  h.store.db.prepare('UPDATE segments SET original_text=? WHERE id=?').run('Acme never released Camera.', h.segment.id);
+  const second = h.reserve(); h.store.commitRelationJob(second.id, { relations: [] });
+  assert.equal(h.store.graph(h.run.listeningId).assertions[0].status, 'stale');
+  h.store.db.prepare('INSERT INTO knowledge_mentions(item_id,segment_id,surface_text) VALUES(?,?,?)').run(acme.id, h.segment.id, 'Acme never released');
+  assert.equal(h.job(), null, 'stale historical support does not force identical already-validated input to repeat');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 2);
+});
+
+test('storage final fence rejects late commits even before a scheduler timer fires', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const job = h.reserve(), round = h.store.relationProcessing(h.run.listeningId).round;
+  const result = h.store.commitRelationJob(job.id, { relations: [relation(job)], usage: { total_tokens: 31 }, now: round.deadlineAt + 1 });
+  assert.equal(result.stale, true); assert.equal(h.store.graph(h.run.listeningId).relations.length, 0);
+  const status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.state, 'paused'); assert.equal(status.round.totalTokens, 31);
+  assert.equal(h.store.db.prepare('SELECT state FROM relation_jobs WHERE id=?').get(job.id).state, 'cancelled');
+});
+
+test('a new mention cannot reorder an unchanged candidate set into another paid input', t => {
+  const h = fixture(t); h.seed(); h.store.db.exec('DELETE FROM knowledge_mentions'); h.store.enableRelations(h.run.listeningId);
+  const first = h.reserve(); h.store.commitRelationJob(first.id, { relations: [] }); const node = first.input.candidates[1];
+  h.store.db.prepare('INSERT INTO knowledge_mentions(item_id,segment_id,surface_text) VALUES(?,?,?)').run(node.id, h.segment.id, node.canonical_name);
+  assert.equal(h.job(), null); assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 1);
 });

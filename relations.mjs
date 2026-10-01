@@ -251,7 +251,7 @@ export function buildRelationInput(input) {
     focus_segments: input.focus_segments.map(mapSegment), context_segments: (input.context_segments || []).map(mapSegment),
     candidates: candidates.map(c => ({ id: c.id, listening_id: c.listening_id || input.listening_id,
       canonical_name: textField(c.canonical_name, 120), aliases: (c.aliases || []).filter(a => typeof a === 'string' && a.length <= 120).slice(0, 12),
-      content_version: c.content_version, certainty: c.certainty || 'clear' })),
+      certainty: c.certainty || 'clear' })),
     existing_assertions: (input.existing_assertions || []).slice(0, 48).map(a => ({ id: a.id,
       subject_item_id: a.subject_item_id, object_item_id: a.object_item_id, predicate: a.predicate,
       statement: typeof a.statement === 'string' ? a.statement.slice(0, 500) : '', polarity: a.polarity,
@@ -262,26 +262,53 @@ export function buildRelationInput(input) {
   return result;
 }
 
-export async function extractRelations(key, input, endpoint, { signal, fetchImpl = fetch, now = () => Date.now() } = {}) {
+// Reject promptly even when an injected transport ignores AbortSignal. The
+// original operation still has rejection handlers and may report billable usage.
+export function raceRelationAbort(operation, signal) {
+  if (!signal) return Promise.resolve(operation);
+  return new Promise((resolve, reject) => {
+    const aborted = () => { cleanup(); reject(signal.reason || new DOMException('Relation request aborted', 'AbortError')); };
+    const cleanup = () => signal.removeEventListener('abort', aborted);
+    Promise.resolve(operation).then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+    if (signal.aborted) aborted(); else signal.addEventListener('abort', aborted, { once: true });
+  });
+}
+
+export async function extractRelations(key, input, endpoint, { signal, fetchImpl = fetch, now = () => Date.now(),
+  onUsage = () => {}, requestTimeoutMs = 30000 } = {}) {
   const bounded = buildRelationInput(input);
-  const response = await fetchImpl(endpoint, { method: 'POST', headers: {
-    Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: RELATION_MODEL, enable_thinking: false, temperature: 0, max_tokens: 6000,
-      messages: [{ role: 'system', content: RELATION_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(bounded) }] }),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) });
-  let result;
-  try { result = await response.json(); }
-  catch (error) { if (!response.ok) result = {}; else if (error instanceof SyntaxError) invalid('HTTP_JSON_INVALID'); else throw error; }
-  if (!response.ok) {
-    const value = response.headers?.get('retry-after');
-    const numeric = typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim());
-    const delay = numeric ? Number(value) * 1000 : Math.max(0, Date.parse(value) - now());
-    // Provider bodies may echo transcript/credentials. Persist only safe codes.
-    throw Object.assign(new Error(`关系服务 HTTP ${response.status}`), { status: response.status,
-      retryAfterMs: Number.isFinite(delay) ? delay : 0 });
-  }
-  const parsed = parseRelations(result?.choices?.[0]?.message?.content, bounded);
-  const usage = result?.usage;
-  return { ...parsed, usage: usage && typeof usage === 'object' ? Object.fromEntries(
-    ['prompt_tokens', 'completion_tokens', 'total_tokens'].filter(k => Number.isFinite(usage[k]) && usage[k] >= 0).map(k => [k, usage[k]])) : null };
+  if (signal?.aborted) throw signal.reason;
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(new DOMException('Relation request timed out', 'TimeoutError')), requestTimeoutMs);
+  const requestSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
+  const operation = (async () => {
+    const response = await fetchImpl(endpoint, { method: 'POST', headers: {
+      Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: RELATION_MODEL, enable_thinking: false, temperature: 0, max_tokens: 6000,
+        messages: [{ role: 'system', content: RELATION_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(bounded) }] }),
+      signal: requestSignal });
+    let result;
+    try { result = await response.json(); }
+    catch (error) { if (!response.ok) result = {}; else if (error instanceof SyntaxError) invalid('HTTP_JSON_INVALID'); else throw error; }
+    const rawUsage = result?.usage;
+    const values = rawUsage && typeof rawUsage === 'object' ? Object.fromEntries(
+      ['prompt_tokens', 'completion_tokens', 'total_tokens', 'input_tokens', 'output_tokens']
+        .filter(k => Number.isFinite(rawUsage[k]) && rawUsage[k] >= 0).map(k => [k, rawUsage[k]])) : {};
+    const usage = Object.keys(values).length ? values : null;
+    // JSON syntax/contract errors are still paid responses. Report before any
+    // validation and even if cancellation won the race while reading the body.
+    if (usage) onUsage(usage);
+    if (!response.ok) {
+      const value = response.headers?.get('retry-after');
+      const numeric = typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim());
+      const delay = numeric ? Number(value) * 1000 : Math.max(0, Date.parse(value) - now());
+      // Provider bodies may echo transcript/credentials. Persist only safe codes.
+      throw Object.assign(new Error(`关系服务 HTTP ${response.status}`), { status: response.status,
+        retryAfterMs: Number.isFinite(delay) ? delay : 0, usage });
+    }
+    try { return { ...parseRelations(result?.choices?.[0]?.message?.content, bounded), usage }; }
+    catch (error) { error.usage = usage; throw error; }
+  })();
+  try { return await raceRelationAbort(operation, requestSignal); }
+  finally { clearTimeout(timer); }
 }
