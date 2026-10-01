@@ -6,12 +6,12 @@ import path from 'node:path';
 import { ListeningStore } from '../storage.mjs';
 import { createRelationWorkflow, relationRetryDelay } from '../relation-workflow.mjs';
 import { createRelationScheduler } from '../relation-queue.mjs';
-import { parseRelations } from '../relations.mjs';
+import { parseRelations, extractRelations } from '../relations.mjs';
 import { createProviderAdmission } from '../provider-admission.mjs';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((r, j) => { resolve = r; reject = j; }); return { promise, resolve, reject }; };
 
-function fixture(t) {
+function fixture(t, { limits } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'relation-engine-')), file = path.join(dir, 'store.sqlite');
   let store = new ListeningStore(file);
   const run = store.createRun(null, { source: 'en', targetLang: 'Chinese', audioSource: 'microphone' }, 'relations');
@@ -22,7 +22,7 @@ function fixture(t) {
       VALUES(?,?,'other',?,?,?,'clear',?,?)`).run(id, run.listeningId, name, name.toLowerCase(), name, new Date().toISOString(), new Date().toISOString());
     store.db.prepare('INSERT INTO knowledge_mentions(item_id,segment_id,surface_text) VALUES(?,?,?)').run(id, seg.id, name);
   }
-  store.enableRelations(run.listeningId);
+  store.enableRelations(run.listeningId, { limits });
   const job = () => store.nextRelationJob(run.listeningId, { quietMs: 0, now: Date.now() });
   const result = input => parseRelations(JSON.stringify({ relations: [{ subject_item_id: 'atlas', object_item_id: 'nova', predicate: 'released',
     statement: 'Atlas 推出了 Nova', polarity: 'positive', modality: 'asserted', conditions: null, time_scope: null, attribution: null,
@@ -52,12 +52,12 @@ test('empty model result completes without automatic repeat and existing graph s
   const initial = createRelationWorkflow({ store: h.store, extract: async (_key, input) => h.result(input) });
   await initial.execute(h.job(), 'key');
   const existing = h.store.graph(h.run.listeningId).relations[0].id;
-  h.store.db.prepare('UPDATE knowledge_items SET content_version=content_version+1 WHERE id=?').run('atlas');
+  h.store.db.prepare("UPDATE knowledge_items SET canonical_name=canonical_name||' Inc' WHERE id=?").run('atlas');
   const empty = createRelationWorkflow({ store: h.store, extract: async () => ({ relations: [], rejected: [] }) });
   assert.equal((await empty.execute(h.job(), 'key')).outcome, 'empty');
   assert.equal(h.store.graph(h.run.listeningId).relations[0].id, existing);
   assert.equal(h.job(), null);
-  h.store.db.prepare('UPDATE knowledge_items SET content_version=content_version+1 WHERE id=?').run('atlas');
+  h.store.db.prepare("UPDATE knowledge_items SET canonical_name=canonical_name||' Inc' WHERE id=?").run('atlas');
   const fail = createRelationWorkflow({ store: h.store, extract: async () => { throw Object.assign(new Error('upstream secret'), { status: 401 }); } });
   const result = await fail.execute(h.job(), 'key');
   assert.equal(result.stopKey, true); assert.equal(result.outcome, 'failed');
@@ -73,7 +73,7 @@ test('stale translation/source/node version responses are discarded rather than 
       const request = workflow.execute(job, 'key');
       if (change === 'translation') h.store.db.prepare('UPDATE segments SET translation_text=? WHERE id=?').run('Atlas 已推出 Nova', h.seg.id);
       if (change === 'source') h.store.db.prepare('UPDATE segments SET original_text=? WHERE id=?').run('Atlas did not launch Nova.', h.seg.id);
-      if (change === 'node') h.store.db.prepare('UPDATE knowledge_items SET content_version=content_version+1 WHERE id=?').run('atlas');
+      if (change === 'node') h.store.db.prepare("UPDATE knowledge_items SET canonical_name=canonical_name||' Inc' WHERE id=?").run('atlas');
       gate.resolve(h.result(job.input));
       assert.equal((await request).kind, 'discarded');
       assert.equal(h.store.graph(h.run.listeningId).relations.length, 0);
@@ -240,4 +240,180 @@ test('terminal 429 preserves Retry-After across key release and explicit same-ke
   t.mock.timers.tick(599999); h.queue.pump(); assert.equal(h.calls.length, 1);
   t.mock.timers.tick(1); h.queue.pump(); assert.equal(h.calls.length, 2);
   h.calls[1].resolve(); await settle();
+});
+
+test('malformed paid model JSON preserves measured usage before protocol retry', async t => {
+  const h = fixture(t);
+  const workflow = createRelationWorkflow({ store: h.store, endpoint: 'mock',
+    extract: (key, input, endpoint, options) => extractRelations(key, input, endpoint, { ...options,
+      fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: 'not valid JSON' } }],
+        usage: { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52, hidden: 'private' } }) }) }) });
+  const result = await workflow.execute(h.job(), 'key');
+  assert.equal(result.kind, 'continue');
+  const status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.usageLastHour.measuredRequests, 1);
+  assert.equal(status.usageLastHour.totalTokens, 52);
+  assert.equal(status.round.totalTokens, 52);
+  assert.equal(status.waitReason, 'network_retry');
+  assert.doesNotMatch(JSON.stringify(status), /private|not valid JSON/);
+});
+
+test('stalled extract ignoring abort is released at 30 seconds and late usage cannot alter graph', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const h = fixture(t), gate = deferred();
+  const workflow = createRelationWorkflow({ store: h.store, extract: () => gate.promise });
+  const job = h.job(), work = workflow.execute(job, 'key');
+  await settle();
+  t.mock.timers.tick(30000);
+  const result = await work;
+  assert.equal(result.kind, 'continue');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).runningJobs, 0);
+  gate.resolve({ ...h.result(job.input), usage: { total_tokens: 80 } });
+  await settle();
+  assert.equal(h.store.graph(h.run.listeningId).relations.length, 0);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.totalTokens, 80);
+});
+
+test('durable cancellation frees scheduler immediately and retains late paid usage after manual continuation', async t => {
+  const h = fixture(t), gates = [], workflow = createRelationWorkflow({ store: h.store, extract: (_key, input) => {
+    const gate = deferred(); gates.push({ ...gate, input }); return gate.promise;
+  } });
+  const queue = createRelationScheduler({ store: h.store, keyFor: () => 'key', execute: workflow.execute, minStartIntervalMs: 0, quietMs: 0 });
+  t.after(() => queue.close());
+  queue.schedule(h.run.listeningId, true); await settle();
+  const firstRound = h.store.relationProcessing(h.run.listeningId).round.id;
+  h.store.cancelRelations(h.run.listeningId); queue.cancel(h.run.listeningId);
+  await settle();
+  assert.equal(queue.hasWork(h.run.listeningId), false);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'cancelled');
+  h.store.enableRelations(h.run.listeningId, { retry: true });
+  queue.schedule(h.run.listeningId, true); await settle();
+  assert.equal(gates.length, 2);
+  assert.notEqual(h.store.relationProcessing(h.run.listeningId).round.id, firstRound);
+  gates[0].resolve({ ...h.result(gates[0].input), usage: { total_tokens: 71 } });
+  await settle();
+  assert.equal(h.store.graph(h.run.listeningId).relations.length, 0);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).usageLastHour.totalTokens, 71);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.totalTokens, 0);
+  gates[1].resolve({ relations: [], rejected: [], usage: { total_tokens: 21 } });
+  await settle();
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.totalTokens, 21);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).usageLastHour.totalTokens, 92);
+});
+
+test('foreground, missing-key and provider-cooldown waits terminate at the original round deadline', async t => {
+  for (const waiting of ['foreground', 'waiting_key', 'provider_cooldown']) await t.test(waiting, async sub => {
+    sub.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+    const h = fixture(sub, { limits: { maxDurationMs: 5000 } });
+    let calls = 0;
+    const queue = createRelationScheduler({ store: h.store, keyFor: () => waiting === 'waiting_key' ? null : 'key',
+      foregroundBusy: () => waiting === 'foreground', provider: { readyAt: () => waiting === 'provider_cooldown' ? Date.now() + 600000 : 0 },
+      execute: async () => { calls++; }, quietMs: 0 });
+    sub.after(() => queue.close());
+    queue.schedule(h.run.listeningId, true);
+    assert.equal(h.store.relationProcessing(h.run.listeningId).waitReason, waiting);
+    sub.mock.timers.tick(5000); await settle();
+    const status = h.store.relationProcessing(h.run.listeningId);
+    assert.equal(status.state, 'paused');
+    assert.equal(status.round.stopReason, 'ROUND_DEADLINE');
+    assert.equal(status.round.requestCount, 0);
+    assert.equal(queue.hasWork(h.run.listeningId), false);
+    assert.equal(calls, 0);
+  });
+});
+
+test('running request cannot outlive the round even when execution ignores AbortSignal', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const h = fixture(t, { limits: { maxDurationMs: 5000 } }), gate = deferred();
+  let signal;
+  const queue = createRelationScheduler({ store: h.store, keyFor: () => 'key', quietMs: 0,
+    execute: (_job, _key, value) => { signal = value; return gate.promise; } });
+  t.after(() => queue.close());
+  queue.schedule(h.run.listeningId, true);
+  assert.equal(signal.aborted, false);
+  t.mock.timers.tick(5000); await settle();
+  assert.equal(signal.aborted, true);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'paused');
+  assert.equal(queue.hasWork(h.run.listeningId), false);
+  gate.resolve({ kind: 'terminal' }); await settle();
+});
+
+test('retry backoff beyond round deadline pauses rather than scheduling another paid attempt', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const h = fixture(t, { limits: { maxDurationMs: 5000 } }); let calls = 0;
+  const workflow = createRelationWorkflow({ store: h.store, extract: async () => {
+    calls++; throw Object.assign(new Error('rate limit'), { status: 429, retryAfterMs: 20000 });
+  } });
+  const queue = createRelationScheduler({ store: h.store, keyFor: () => 'key', execute: workflow.execute, quietMs: 0 });
+  t.after(() => queue.close());
+  queue.schedule(h.run.listeningId, true); await settle();
+  assert.equal(calls, 1);
+  t.mock.timers.tick(5000); await settle();
+  assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'paused');
+  t.mock.timers.tick(600000); await settle();
+  assert.equal(calls, 1);
+  assert.equal(queue.hasWork(h.run.listeningId), false);
+});
+
+test('late usage from a timed-out attempt never overwrites a newer attempt in the same job', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const h = fixture(t), gates = [];
+  const workflow = createRelationWorkflow({ store: h.store, extract: () => {
+    const gate = deferred(); gates.push(gate); return gate.promise;
+  } });
+  const first = workflow.execute(h.job(), 'key'); await settle();
+  t.mock.timers.tick(30000); await first;
+  t.mock.timers.tick(3000);
+  const job = h.job(), second = workflow.execute(job, 'key'); await settle();
+  gates[0].resolve({ relations: [], rejected: [], usage: { total_tokens: 90 } }); await settle();
+  let rows = h.store.db.prepare('SELECT attempt,usage_json FROM relation_requests WHERE job_id=? ORDER BY attempt').all(job.id);
+  assert.equal(JSON.parse(rows[0].usage_json).total_tokens, 90);
+  assert.equal(rows[1].usage_json, null);
+  gates[1].resolve({ relations: [], rejected: [], usage: { total_tokens: 20 } }); await second;
+  rows = h.store.db.prepare('SELECT attempt,usage_json FROM relation_requests WHERE job_id=? ORDER BY attempt').all(job.id);
+  assert.equal(JSON.parse(rows[0].usage_json).total_tokens, 90);
+  assert.equal(JSON.parse(rows[1].usage_json).total_tokens, 20);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.totalTokens, 110);
+});
+
+test('workflow alone enforces the remaining whole-round deadline and aborts the provider signal', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const h = fixture(t, { limits: { maxDurationMs: 1000 } }), gate = deferred(); let signal;
+  const workflow = createRelationWorkflow({ store: h.store, extract: (_key, _input, _endpoint, options) => {
+    signal = options.signal; return gate.promise;
+  } });
+  const work = workflow.execute(h.job(), 'key'); await settle();
+  t.mock.timers.tick(1000);
+  assert.equal((await work).kind, 'discarded');
+  assert.equal(signal.aborted, true);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'paused');
+  gate.resolve({ relations: [], rejected: [], usage: { total_tokens: 18 } }); await settle();
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.totalTokens, 18);
+});
+
+test('restart while waiting preserves the original deadline and cannot purchase a fresh round', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const h = fixture(t, { limits: { maxDurationMs: 5000 } });
+  const original = h.store.relationProcessing(h.run.listeningId).round;
+  t.mock.timers.tick(3000); h.restart(); let calls = 0;
+  const queue = createRelationScheduler({ store: h.store, keyFor: () => null, execute: async () => { calls++; } });
+  t.after(() => queue.close()); queue.pump();
+  assert.equal(h.store.relationProcessing(h.run.listeningId).round.deadlineAt, original.deadlineAt);
+  t.mock.timers.tick(2000); await settle();
+  const status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.round.id, original.id);
+  assert.equal(status.state, 'paused');
+  assert.equal(status.round.stopReason, 'ROUND_DEADLINE');
+  assert.equal(calls, 0);
+});
+
+test('network retry wait reason remains distinct from quiet-period admission', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const h = fixture(t), workflow = createRelationWorkflow({ store: h.store, extract: async () => {
+    throw Object.assign(new Error('temporary'), { status: 500 });
+  } });
+  const queue = createRelationScheduler({ store: h.store, keyFor: () => 'key', execute: workflow.execute, minStartIntervalMs: 0, quietMs: 0 });
+  t.after(() => queue.close());
+  queue.schedule(h.run.listeningId, true); await settle();
+  assert.equal(h.store.relationProcessing(h.run.listeningId).waitReason, 'network_retry');
 });

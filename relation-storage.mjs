@@ -1,9 +1,45 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { buildRelationInput, canonicalizeRelation, isExplicitRelationCorrection, RELATION_LIMITS } from './relations.mjs';
+import { buildRelationInput, canonicalizeRelation, isExplicitRelationCorrection, RELATION_LIMITS, RELATION_SYSTEM_PROMPT } from './relations.mjs';
 
 export const RELATION_WINDOW_SIZE = 6;
 export const RELATION_CONTEXT_SIZE = 3;
 export const RELATION_QUIET_MS = 6000;
+export const RELATION_ROUND_LIMITS = Object.freeze({ maxRequests: 12, maxDurationMs: 120000, maxEstimatedTokens: 120000 });
+const safeUsage = usage => {
+  if (!usage || typeof usage !== 'object') return null;
+  const result = Object.fromEntries(['prompt_tokens', 'input_tokens', 'completion_tokens', 'output_tokens', 'total_tokens']
+    .filter(key => Number.isFinite(usage[key]) && usage[key] >= 0).map(key => [key, usage[key]]));
+  return Object.keys(result).length ? result : null;
+};
+function usageSummary(requests) {
+  const result = { requests: requests.length, inputTokens: 0, outputTokens: 0, totalTokens: 0, measuredRequests: 0 };
+  for (const request of requests) if (request.usage_json) {
+    const usage = safeUsage(JSON.parse(request.usage_json));
+    if (!usage) continue;
+    result.measuredRequests++;
+    result.inputTokens += usage.prompt_tokens ?? usage.input_tokens ?? 0;
+    result.outputTokens += usage.completion_tokens ?? usage.output_tokens ?? 0;
+    result.totalTokens += usage.total_tokens ?? ((usage.prompt_tokens ?? usage.input_tokens ?? 0) + (usage.completion_tokens ?? usage.output_tokens ?? 0));
+  }
+  return result;
+}
+// Conservative UTF-8 prompt bytes plus maximum output; unknown usage never
+// refunds a reservation. This is a safety budget, not a provider bill estimate.
+const requestEstimate = input => Buffer.byteLength(JSON.stringify(buildRelationInput(input))) + Buffer.byteLength(RELATION_SYSTEM_PROMPT) + 6000 + 1024;
+function currentRound(store, id) {
+  return store.db.prepare('SELECT r.* FROM relation_rounds r JOIN listenings l ON l.id=r.listening_id AND l.relation_epoch=r.epoch WHERE l.id=?').get(id);
+}
+function roundRequests(store, round) {
+  return store.db.prepare('SELECT q.* FROM relation_requests q JOIN relation_jobs j ON j.id=q.job_id WHERE j.listening_id=? AND j.epoch=?').all(round.listening_id, round.epoch);
+}
+function stopRound(store, round, reason, now, state = 'paused') {
+  if (!round || round.state !== 'active') return false;
+  store.db.prepare("UPDATE relation_rounds SET state=?,stop_reason=?,finished_at=?,wait_reason=NULL,next_ready_at=NULL WHERE id=? AND state='active'").run(state, reason, state === 'complete' ? round.finished_at ?? now : now, round.id);
+  store.db.prepare("UPDATE relation_jobs SET state='cancelled',last_error=?,updated_at=? WHERE listening_id=? AND epoch=? AND state IN ('pending','running')").run(reason, stamp(), round.listening_id, round.epoch);
+  store.db.prepare("UPDATE relation_windows SET state='dirty',ready_at=0,last_error=? WHERE listening_id=? AND state='pending'").run(reason, round.listening_id);
+  store.db.prepare('UPDATE listenings SET relation_waiting_key=0 WHERE id=?').run(round.listening_id);
+  return true;
+}
 const PROMPT_VERSION = 'relations-v1';
 const MODEL_VERSION = 'qwen3.8-flash';
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -73,6 +109,21 @@ export function migrateRelations(store) {
       assertion_id TEXT REFERENCES relation_assertions(id) ON DELETE CASCADE,
       action TEXT NOT NULL, old_value TEXT, new_value TEXT, reason TEXT, created_at TEXT NOT NULL);
   `);
+  db.exec(`CREATE TABLE IF NOT EXISTS relation_rounds (
+    id TEXT PRIMARY KEY, listening_id TEXT NOT NULL REFERENCES listenings(id) ON DELETE CASCADE,
+    epoch INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'active', started_at INTEGER NOT NULL,
+    deadline_at INTEGER NOT NULL, finished_at INTEGER, max_requests INTEGER NOT NULL,
+    max_estimated_tokens INTEGER NOT NULL, stop_reason TEXT, wait_reason TEXT, next_ready_at INTEGER,
+    UNIQUE(listening_id,epoch));`);
+  const windowColumns = new Set(db.prepare('PRAGMA table_info(relation_windows)').all().map(c => c.name));
+  if (!windowColumns.has('source_change_revision')) {
+    db.exec('ALTER TABLE relation_windows ADD COLUMN source_change_revision INTEGER NOT NULL DEFAULT 0');
+    db.exec("UPDATE relation_windows SET source_change_revision=revision WHERE EXISTS (SELECT 1 FROM relation_supports s WHERE s.window_id=relation_windows.id AND s.state='stale')");
+  }
+  const requestColumns = new Set(db.prepare('PRAGMA table_info(relation_requests)').all().map(c => c.name));
+  if (!requestColumns.has('estimated_tokens')) db.exec('ALTER TABLE relation_requests ADD COLUMN estimated_tokens INTEGER NOT NULL DEFAULT 0');
+  // Replace deployed v6 triggers, not just triggers on fresh databases.
+  for (const row of db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'relation_%'").all()) db.exec(`DROP TRIGGER ${row.name}`);
   const clock = "CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)";
   const dirty = where => `UPDATE relation_windows SET revision=revision+1,state='dirty',dirty_at=${clock},ready_at=0,last_error=NULL WHERE ${where};`;
   const nodeWindows = ref => `listening_id=${ref}.listening_id AND (state='waiting_nodes' OR EXISTS (
@@ -81,22 +132,26 @@ export function migrateRelations(store) {
     AND (instr(lower(s.original_text),lower(${ref}.canonical_name))>0 OR EXISTS
       (SELECT 1 FROM knowledge_mentions m WHERE m.item_id=${ref}.id AND m.segment_id=s.id))))`;
   for (const event of ['INSERT', 'UPDATE', 'DELETE']) {
-    const ref = event === 'DELETE' ? 'OLD' : 'NEW';
-    db.exec(`CREATE TRIGGER IF NOT EXISTS relation_node_${event.toLowerCase()} AFTER ${event} ON knowledge_items BEGIN
+    const refs = event === 'UPDATE' ? ['OLD', 'NEW'] : [event === 'DELETE' ? 'OLD' : 'NEW'];
+    const ref = refs[refs.length - 1];
+    const identityChanged = event === 'UPDATE' ? ' AND (OLD.canonical_name IS NOT NEW.canonical_name OR OLD.type IS NOT NEW.type OR OLD.display_label IS NOT NEW.display_label OR OLD.certainty IS NOT NEW.certainty)' : '';
+    db.exec(`CREATE TRIGGER relation_node_${event.toLowerCase()} AFTER ${event} ON knowledge_items BEGIN
       UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=${ref}.listening_id;
-      ${dirty(nodeWindows(ref))}
+      ${refs.map(r => dirty(`(${nodeWindows(r)})${identityChanged}`)).join('\n')}
     END;`);
   }
   for (const table of ['knowledge_mentions', 'knowledge_aliases']) {
     for (const event of ['INSERT', 'UPDATE', 'DELETE']) {
-      const ref = event === 'DELETE' ? 'OLD' : 'NEW';
-      const scope = table === 'knowledge_mentions'
+      const refs = event === 'UPDATE' ? ['OLD', 'NEW'] : [event === 'DELETE' ? 'OLD' : 'NEW'];
+      const scope = ref => table === 'knowledge_mentions'
         ? `EXISTS (SELECT 1 FROM segments s WHERE s.id=${ref}.segment_id AND s.sequence_no BETWEEN relation_windows.from_sequence-3 AND relation_windows.to_sequence)`
         : `(state='waiting_nodes' OR EXISTS (SELECT 1 FROM segments s WHERE s.listening_id=relation_windows.listening_id AND s.sequence_no BETWEEN relation_windows.from_sequence-3 AND relation_windows.to_sequence
             AND (instr(lower(s.original_text),lower(${ref}.alias))>0 OR EXISTS (SELECT 1 FROM knowledge_mentions m WHERE m.item_id=${ref}.item_id AND m.segment_id=s.id))))`;
-      db.exec(`CREATE TRIGGER IF NOT EXISTS relation_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN
-        UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=(SELECT listening_id FROM knowledge_items WHERE id=${ref}.item_id);
-        ${dirty(`listening_id=(SELECT listening_id FROM knowledge_items WHERE id=${ref}.item_id) AND ${scope}`)}
+      const fields = table === 'knowledge_mentions' ? ['item_id', 'segment_id', 'surface_text'] : ['item_id', 'alias', 'normalized_alias'];
+      const when = event === 'UPDATE' ? `WHEN ${fields.map(f => `OLD.${f} IS NOT NEW.${f}`).join(' OR ')}` : '';
+      db.exec(`CREATE TRIGGER relation_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} ${when} BEGIN
+        ${refs.map(ref => `UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=(SELECT listening_id FROM knowledge_items WHERE id=${ref}.item_id);
+        ${dirty(`listening_id=(SELECT listening_id FROM knowledge_items WHERE id=${ref}.item_id) AND ${scope(ref)}`)}`).join('\n')}
       END;`);
     }
   }
@@ -113,6 +168,7 @@ export function migrateRelations(store) {
         (CASE WHEN OLD.translation_state='complete' THEN OLD.translation_text END) IS NOT
         (CASE WHEN NEW.translation_state='complete' THEN NEW.translation_text END) BEGIN
       ${dirty('listening_id=NEW.listening_id AND NEW.sequence_no BETWEEN from_sequence-3 AND to_sequence')}
+      UPDATE relation_windows SET source_change_revision=revision WHERE listening_id=NEW.listening_id AND NEW.sequence_no BETWEEN from_sequence-3 AND to_sequence AND OLD.original_text IS NOT NEW.original_text;
       UPDATE relation_supports SET state='stale' WHERE group_id IN (SELECT group_id FROM relation_supports WHERE segment_id=NEW.id) AND OLD.original_text IS NOT NEW.original_text;
       INSERT INTO relation_revisions(id,relation_id,assertion_id,action,old_value,new_value,reason,created_at)
         SELECT lower(hex(randomblob(16))),a.relation_id,a.id,'source_invalidated',a.status,'support_group_stale','SOURCE_CHANGED',strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -124,6 +180,7 @@ export function migrateRelations(store) {
     END;
     CREATE TRIGGER IF NOT EXISTS relation_segment_delete BEFORE DELETE ON segments BEGIN
       ${dirty('listening_id=OLD.listening_id AND OLD.sequence_no BETWEEN from_sequence-3 AND to_sequence')}
+      UPDATE relation_windows SET source_change_revision=revision WHERE listening_id=OLD.listening_id AND OLD.sequence_no BETWEEN from_sequence-3 AND to_sequence;
       UPDATE relation_supports SET state='stale' WHERE group_id IN (SELECT group_id FROM relation_supports WHERE segment_id=OLD.id);
       INSERT INTO relation_revisions(id,relation_id,assertion_id,action,old_value,new_value,reason,created_at)
         SELECT lower(hex(randomblob(16))),a.relation_id,a.id,'source_invalidated',a.status,'support_group_stale','SOURCE_DELETED',strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -133,7 +190,7 @@ export function migrateRelations(store) {
         AND NOT EXISTS (SELECT 1 FROM relation_supports p WHERE p.assertion_id=relation_assertions.id AND p.state='active' AND p.segment_id!=OLD.id);
       UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=OLD.listening_id;
     END;
-    PRAGMA user_version=6;
+    PRAGMA user_version=7;
   `);
 }
 
@@ -147,7 +204,7 @@ function inputFor(store, window) {
   const segments = store.db.prepare(`SELECT * FROM segments WHERE listening_id=? AND sequence_no BETWEEN ? AND ? ORDER BY sequence_no`)
     .all(window.listening_id, Math.max(1, window.from_sequence - RELATION_CONTEXT_SIZE), window.to_sequence);
   const ids = new Set(segments.map(s => s.id));
-  const all = store.db.prepare('SELECT id,listening_id,canonical_name,type,display_label,certainty,content_version FROM knowledge_items WHERE listening_id=?').all(window.listening_id);
+  const all = store.db.prepare('SELECT id,listening_id,canonical_name,type,display_label,certainty FROM knowledge_items WHERE listening_id=?').all(window.listening_id);
   const aliases = store.db.prepare('SELECT a.* FROM knowledge_aliases a JOIN knowledge_items k ON k.id=a.item_id WHERE k.listening_id=?').all(window.listening_id);
   const mentions = store.db.prepare(`SELECT m.* FROM knowledge_mentions m JOIN segments s ON s.id=m.segment_id
     WHERE s.listening_id=? AND s.sequence_no BETWEEN ? AND ?`).all(window.listening_id, Math.max(1, window.from_sequence - RELATION_CONTEXT_SIZE), window.to_sequence);
@@ -155,12 +212,11 @@ function inputFor(store, window) {
   const text = norm(segments.map(s => s.original_text).join('\n'));
   const recalled = all.filter(item => item.mentions.some(m => ids.has(m.segment_id)) || [item.canonical_name, ...item.aliases].some(name => name && text.includes(norm(name))))
     .sort((a, b) => Number(b.mentions.some(m => ids.has(m.segment_id))) - Number(a.mentions.some(m => ids.has(m.segment_id))) || a.id.localeCompare(b.id));
-  const candidates = recalled.slice(0, 48).map(item => ({ id: item.id, listening_id: item.listening_id,
+  const candidates = recalled.slice(0, 48).sort((a, b) => a.id.localeCompare(b.id)).map(item => ({ id: item.id, listening_id: item.listening_id,
     canonical_name: item.canonical_name, type: item.type, display_label: item.display_label,
-    certainty: item.certainty, content_version: item.content_version,
+    certainty: item.certainty,
     aliases: [...item.aliases].sort((a, b) => Number(text.includes(norm(b))) - Number(text.includes(norm(a))) || a.localeCompare(b)).slice(0, 12),
-    identity_revision: stableHash([item.canonical_name, [...item.aliases].sort(), item.certainty, item.content_version,
-      item.mentions.map(m => [m.segment_id, m.surface_text]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]) }));
+    identity_revision: stableHash([item.canonical_name, item.type, item.display_label, [...item.aliases].sort(), item.certainty]) }));
   const candidateIds = new Set(candidates.map(c => c.id));
   const existing = store.db.prepare(`SELECT a.*,r.subject_item_id,r.object_item_id,r.predicate FROM relation_assertions a JOIN relations r ON r.id=a.relation_id
     WHERE r.listening_id=? ORDER BY a.id`).all(window.listening_id)
@@ -263,23 +319,60 @@ export const relationMethods = {
   recoverRelationJobs() {
     this.db.prepare("UPDATE relation_jobs SET state=CASE WHEN request_count>=max_requests THEN 'failed' ELSE 'pending' END,last_error='REQUEST_INTERRUPTED',updated_at=? WHERE state='running'").run(stamp());
     this.db.exec("UPDATE relation_windows SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE state='pending' AND EXISTS (SELECT 1 FROM relation_jobs j WHERE j.window_id=relation_windows.id AND j.window_revision=relation_windows.revision AND j.state='failed')");
+    // Legacy work never had a whole-round budget. A migration/restart cannot
+    // authorize a new budget or reset a previously established deadline.
+    const now = Date.now();
+    for (const l of this.db.prepare('SELECT id,relation_epoch FROM listenings WHERE relation_enabled=1').all()) {
+      if (!currentRound(this, l.id)) this.db.prepare(`INSERT INTO relation_rounds(id,listening_id,epoch,state,started_at,deadline_at,finished_at,max_requests,max_estimated_tokens,stop_reason)
+        VALUES(?,?,?,'paused',?,?,?,?,?,'REQUEST_INTERRUPTED')`).run(randomUUID(), l.id, l.relation_epoch, now, now, now, RELATION_ROUND_LIMITS.maxRequests, RELATION_ROUND_LIMITS.maxEstimatedTokens);
+      this.expireRelationRound(l.id, { now });
+    }
     this.db.exec('UPDATE listenings SET relation_waiting_key=relation_enabled');
   },
-  enableRelations(listeningId, { retry = false } = {}) {
+  enableRelations(listeningId, { retry = false, now = Date.now(), limits = {} } = {}) {
     return this.tx(() => {
       const listening = this.db.prepare('SELECT * FROM listenings WHERE id=?').get(listeningId);
       if (!listening) return null;
-      if (!listening.relation_enabled || (retry && !this.relationHasWork(listeningId))) {
-        this.db.prepare('UPDATE listenings SET relation_enabled=1,relation_epoch=relation_epoch+1,relation_waiting_key=0 WHERE id=?').run(listeningId);
-        const time = Date.now();
+      this.expireRelationRound(listeningId, { now });
+      const round = currentRound(this, listeningId);
+      const hasPending = Boolean(this.db.prepare("SELECT 1 FROM relation_windows WHERE listening_id=? AND state IN ('dirty','pending')").get(listeningId));
+      if (round?.state === 'active' && hasPending) {
+        this.db.prepare('UPDATE listenings SET relation_waiting_key=0 WHERE id=?').run(listeningId);
+        return this.graphMetadata(listeningId);
+      }
+      if (!listening.relation_enabled || !round || round.state !== 'active' || retry) {
+        const epoch = listening.relation_epoch + 1;
+        // Internal test overrides can only lower a limit, never expand it.
+        const bounded = key => Number.isInteger(limits[key]) && limits[key] > 0 ? Math.min(limits[key], RELATION_ROUND_LIMITS[key]) : RELATION_ROUND_LIMITS[key];
+        this.db.prepare("UPDATE relation_rounds SET state='complete',finished_at=?,wait_reason=NULL,next_ready_at=NULL WHERE listening_id=? AND state='active'").run(now, listeningId);
+        this.db.prepare('UPDATE listenings SET relation_enabled=1,relation_epoch=?,relation_waiting_key=0 WHERE id=?').run(epoch, listeningId);
+        this.db.prepare(`INSERT INTO relation_rounds(id,listening_id,epoch,started_at,deadline_at,max_requests,max_estimated_tokens) VALUES(?,?,?,?,?,?,?)`)
+          .run(randomUUID(), listeningId, epoch, now, now + bounded('maxDurationMs'), bounded('maxRequests'), bounded('maxEstimatedTokens'));
         const ranges = this.db.prepare('SELECT DISTINCT CAST((sequence_no-1)/6 AS INTEGER)*6+1 AS first FROM segments WHERE listening_id=?').all(listeningId);
         for (const { first } of ranges) this.db.prepare('INSERT OR IGNORE INTO relation_windows(id,listening_id,from_sequence,to_sequence,dirty_at) VALUES(?,?,?,?,?)')
-          .run(`${listeningId}:${Math.floor((first - 1) / 6)}`, listeningId, first, first + 5, time);
-        if (retry) this.db.prepare("UPDATE relation_windows SET revision=revision+1,state='dirty',dirty_at=?,ready_at=0,last_error=NULL WHERE listening_id=? AND state IN ('failed','partial','waiting_nodes','pending','dirty')").run(time, listeningId);
+          .run(`${listeningId}:${Math.floor((first - 1) / 6)}`, listeningId, first, first + 5, now);
+        this.db.prepare("UPDATE relation_windows SET revision=revision+1,state='dirty',dirty_at=?,ready_at=0,last_error=NULL WHERE listening_id=? AND state IN ('failed','partial','waiting_nodes','pending','dirty')").run(now, listeningId);
         this.db.prepare("UPDATE relation_jobs SET state='superseded',updated_at=? WHERE listening_id=? AND state IN ('pending','running')").run(stamp(), listeningId);
       }
       return this.graphMetadata(listeningId);
     });
+  },
+  cancelRelations(listeningId, { reason = 'USER_CANCELLED', now = Date.now() } = {}) {
+    return this.tx(() => {
+      stopRound(this, currentRound(this, listeningId), reason, now, 'cancelled');
+      return this.graphMetadata(listeningId);
+    });
+  },
+  expireRelationRound(listeningId, { now = Date.now() } = {}) {
+    const round = currentRound(this, listeningId);
+    if (!round || round.state !== 'active' || now < round.deadline_at) return false;
+    const pending = Boolean(this.db.prepare("SELECT 1 FROM relation_windows WHERE listening_id=? AND state IN ('dirty','pending')").get(listeningId));
+    return stopRound(this, round, pending ? 'ROUND_DEADLINE' : null, now, pending ? 'paused' : 'complete');
+  },
+  setRelationWaitReason(listeningId, reason = null, nextReadyAt = null) {
+    this.db.prepare(`UPDATE relation_rounds SET wait_reason=?,next_ready_at=? WHERE listening_id=? AND state='active'
+      AND (wait_reason IS NOT ? OR next_ready_at IS NOT ?)`)
+      .run(reason, nextReadyAt, listeningId, reason, nextReadyAt);
   },
   markRelationWaitingKey(listeningId, waiting) {
     this.db.prepare('UPDATE listenings SET relation_waiting_key=? WHERE id=? AND relation_enabled=1').run(Number(Boolean(waiting)), listeningId);
@@ -288,7 +381,9 @@ export const relationMethods = {
     return this.db.prepare('SELECT id FROM listenings WHERE relation_enabled=1 ORDER BY created_at').all().map(row => row.id);
   },
   relationHasWork(listeningId) {
-    return Boolean(this.db.prepare("SELECT 1 FROM relation_windows w JOIN listenings l ON l.id=w.listening_id WHERE w.listening_id=? AND l.relation_enabled=1 AND w.state IN ('dirty','pending') LIMIT 1").get(listeningId));
+    return Boolean(this.db.prepare(`SELECT 1 FROM relation_windows w JOIN listenings l ON l.id=w.listening_id
+      JOIN relation_rounds r ON r.listening_id=l.id AND r.epoch=l.relation_epoch AND r.state='active'
+      WHERE w.listening_id=? AND l.relation_enabled=1 AND w.state IN ('dirty','pending') LIMIT 1`).get(listeningId));
   },
   relationProcessing(listeningId) {
     const l = this.db.prepare('SELECT relation_enabled,relation_waiting_key FROM listenings WHERE id=?').get(listeningId);
@@ -298,21 +393,29 @@ export const relationMethods = {
     const jobs = this.db.prepare(`SELECT COALESCE(SUM(state='running'),0) AS runningJobs,COALESCE(SUM(request_count),0) AS requestCount,
       MIN(CASE WHEN state='pending' AND ready_at>0 THEN ready_at END) AS nextReadyAt FROM relation_jobs WHERE listening_id=?`).get(listeningId);
     const windowsReady = this.db.prepare("SELECT MIN(ready_at) AS n FROM relation_windows WHERE listening_id=? AND state='dirty' AND ready_at>0").get(listeningId).n;
-    const ready = [jobs.nextReadyAt, windowsReady].filter(Number.isFinite);
-    const result = { enabled: Boolean(l.relation_enabled), pendingJobs: Math.max(0, (counts.dirty || 0) + (counts.pending || 0) - jobs.runningJobs),
-      runningJobs: jobs.runningJobs, failedJobs: counts.failed || 0, partialJobs: counts.partial || 0,
-      waitingNodes: counts.waiting_nodes || 0, requestCount: jobs.requestCount, nextReadyAt: ready.length ? Math.min(...ready) : null };
+    const round = currentRound(this, listeningId);
+    const ready = [jobs.nextReadyAt, windowsReady, round?.next_ready_at].filter(Number.isFinite);
+    const actionable = (counts.dirty || 0) + (counts.pending || 0);
+    const result = { enabled: Boolean(l.relation_enabled), pendingJobs: round?.state === 'active' ? Math.max(0, actionable - jobs.runningJobs) : 0,
+      runningJobs: round?.state === 'active' ? jobs.runningJobs : 0, failedJobs: counts.failed || 0, partialJobs: counts.partial || 0,
+      waitingNodes: counts.waiting_nodes || 0, requestCount: jobs.requestCount, nextReadyAt: ready.length ? Math.min(...ready) : null,
+      waitReason: round?.wait_reason || null, limits: { ...RELATION_ROUND_LIMITS },
+      progress: { totalWindows: rows.reduce((n, row) => n + row.n, 0), completedWindows: (counts.complete || 0) + (counts.partial || 0),
+        remainingWindows: actionable + (counts.failed || 0) + (counts.waiting_nodes || 0), partialWindows: counts.partial || 0 } };
     const requests = this.db.prepare('SELECT q.usage_json FROM relation_requests q JOIN relation_jobs j ON j.id=q.job_id WHERE j.listening_id=? AND q.started_at>=?').all(listeningId, Date.now() - 3600000);
-    result.usageLastHour = { requests: requests.length, inputTokens: 0, outputTokens: 0, totalTokens: 0, measuredRequests: 0 };
-    for (const request of requests) if (request.usage_json) {
-      const usage = JSON.parse(request.usage_json);
-      result.usageLastHour.measuredRequests++;
-      result.usageLastHour.inputTokens += usage.prompt_tokens ?? usage.input_tokens ?? 0;
-      result.usageLastHour.outputTokens += usage.completion_tokens ?? usage.output_tokens ?? 0;
-      result.usageLastHour.totalTokens += usage.total_tokens ?? ((usage.prompt_tokens ?? usage.input_tokens ?? 0) + (usage.completion_tokens ?? usage.output_tokens ?? 0));
+    result.usageLastHour = usageSummary(requests);
+    if (round) {
+      const requests = roundRequests(this, round), usage = usageSummary(requests);
+      const reserved = requests.reduce((n, q) => n + q.estimated_tokens, 0);
+      result.round = { id: round.id, epoch: round.epoch, state: round.state, startedAt: round.started_at, deadlineAt: round.deadline_at, finishedAt: round.finished_at,
+        maxRequests: round.max_requests, requestCount: usage.requests, measuredRequests: usage.measuredRequests, totalTokens: usage.totalTokens,
+        estimatedTokens: reserved, reservedTokens: reserved, maxEstimatedTokens: round.max_estimated_tokens, tokenLimit: round.max_estimated_tokens,
+        stopReason: round.stop_reason || (round.state === 'complete' && actionable ? 'INPUT_CHANGED' : null) };
     }
     const relations = this.db.prepare("SELECT COUNT(DISTINCT r.id) AS n FROM relations r JOIN relation_assertions a ON a.relation_id=r.id WHERE r.listening_id=? AND a.status IN ('active','needs_review')").get(listeningId).n;
-    result.state = !result.enabled ? 'not_generated' : l.relation_waiting_key && (result.pendingJobs || result.runningJobs) ? 'waiting_key' : result.runningJobs ? 'running' : result.pendingJobs ? 'queued' : result.failedJobs ? 'failed' : result.partialJobs ? 'partial' : result.waitingNodes ? 'waiting_nodes' : relations ? 'complete' : 'empty';
+    result.state = !result.enabled ? 'not_generated' : round?.state === 'cancelled' ? 'cancelled' :
+      round?.state === 'paused' || (round?.state === 'complete' && actionable) ? 'paused' :
+      l.relation_waiting_key && (result.pendingJobs || result.runningJobs) ? 'waiting_key' : result.runningJobs ? 'running' : result.pendingJobs ? 'queued' : result.failedJobs ? 'failed' : result.partialJobs ? 'partial' : result.waitingNodes ? 'waiting_nodes' : relations ? 'complete' : 'empty';
     return result;
   },
   graphMetadata(listeningId) {
@@ -333,32 +436,50 @@ export const relationMethods = {
   },
   nextRelationJob(listeningId, { now = Date.now(), quietMs = RELATION_QUIET_MS } = {}) {
     return this.tx(() => {
+      this.expireRelationRound(listeningId, { now });
       const l = this.db.prepare('SELECT * FROM listenings WHERE id=? AND relation_enabled=1').get(listeningId);
-      if (!l) return null;
-      this.db.prepare(`UPDATE relation_jobs SET state='superseded',updated_at=? WHERE listening_id=? AND state IN ('pending','running')
-        AND (epoch!=? OR NOT EXISTS(SELECT 1 FROM relation_windows w WHERE w.id=relation_jobs.window_id AND w.revision=relation_jobs.window_revision))`).run(stamp(), listeningId, l.relation_epoch);
+      const round = currentRound(this, listeningId);
+      if (!l || round?.state !== 'active') return null;
+      this.db.prepare("UPDATE relation_jobs SET state='superseded',updated_at=? WHERE listening_id=? AND epoch!=? AND state IN ('pending','running')").run(stamp(), listeningId, l.relation_epoch);
       if (this.db.prepare("SELECT 1 FROM relation_jobs WHERE listening_id=? AND state='running'").get(listeningId)) return null;
       const queued = this.db.prepare("SELECT * FROM relation_jobs WHERE listening_id=? AND state='pending' ORDER BY created_at,id").all(listeningId);
       for (const row of queued) {
+        const window = this.db.prepare('SELECT * FROM relation_windows WHERE id=?').get(row.window_id);
+        const input = window && inputFor(this, window).input;
+        if (!input || input.input_fingerprint !== row.input_fingerprint) {
+          this.db.prepare("UPDATE relation_jobs SET state='superseded',last_error='STALE_INPUT',updated_at=? WHERE id=?").run(stamp(), row.id);
+          if (window) this.db.prepare("UPDATE relation_windows SET revision=revision+1,state='dirty',ready_at=0 WHERE id=? AND state!='dirty'").run(window.id);
+          continue;
+        }
+        // A revision-only bump cannot reset the durable retry budget/cooldown.
+        if (window.revision !== row.window_revision) {
+          row.window_revision = window.revision; row.input_json = JSON.stringify(input);
+          this.db.prepare('UPDATE relation_jobs SET window_revision=?,input_json=? WHERE id=?').run(row.window_revision, row.input_json, row.id);
+        }
+        this.db.prepare("UPDATE relation_windows SET state='pending' WHERE id=?").run(window.id);
         if (row.request_count >= row.max_requests) {
           this.db.prepare("UPDATE relation_jobs SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE id=?").run(row.id);
-          this.db.prepare("UPDATE relation_windows SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE id=? AND revision=?").run(row.window_id, row.window_revision);
+          this.db.prepare("UPDATE relation_windows SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE id=?").run(row.window_id);
         } else if (row.ready_at <= now) return publicJob(row);
       }
       const windows = this.db.prepare("SELECT * FROM relation_windows WHERE listening_id=? AND state='dirty' ORDER BY from_sequence").all(listeningId);
       for (const window of windows) {
-        const { input, pendingTranslation } = inputFor(this, window);
+        const { input } = inputFor(this, window);
         if (input.candidates.length < 2 || !input.focus_segments.length) {
           this.db.prepare("UPDATE relation_windows SET state='waiting_nodes',ready_at=0 WHERE id=?").run(window.id);
           continue;
         }
+        // Reuse identical input only if checked after the latest source change.
+        // Historical stale supports alone must not cause endless paid rechecks.
+        const previous = this.db.prepare("SELECT state FROM relation_jobs WHERE window_id=? AND input_fingerprint=? AND window_revision>=? AND (state='complete' OR (epoch=? AND state='partial')) ORDER BY created_at DESC LIMIT 1")
+          .get(window.id, input.input_fingerprint, window.source_change_revision, l.relation_epoch);
+        if (previous) { this.db.prepare('UPDATE relation_windows SET state=?,last_fingerprint=?,ready_at=0 WHERE id=?').run(previous.state, input.input_fingerprint, window.id); continue; }
         const readyAt = window.dirty_at + Math.max(0, Math.min(30000, quietMs));
         if (now < readyAt) {
           this.db.prepare('UPDATE relation_windows SET ready_at=? WHERE id=?').run(readyAt, window.id); continue;
         }
-        const previous = this.db.prepare("SELECT state FROM relation_jobs WHERE window_id=? AND epoch=? AND input_fingerprint=? AND state IN ('complete','partial') ORDER BY created_at DESC LIMIT 1")
-          .get(window.id, l.relation_epoch, input.input_fingerprint);
-        if (previous) { this.db.prepare('UPDATE relation_windows SET state=?,last_fingerprint=?,ready_at=0 WHERE id=?').run(previous.state, input.input_fingerprint, window.id); continue; }
+        const spent = this.db.prepare('SELECT COALESCE(SUM(request_count),0) AS n FROM relation_jobs WHERE window_id=? AND epoch=?').get(window.id, l.relation_epoch).n;
+        if (spent >= 3) { this.db.prepare("UPDATE relation_windows SET state='failed',last_error='WINDOW_REQUEST_LIMIT',ready_at=0 WHERE id=?").run(window.id); continue; }
         const id = randomUUID(), time = stamp();
         this.db.prepare(`INSERT INTO relation_jobs(id,listening_id,window_id,window_revision,epoch,input_fingerprint,prompt_version,model_version,input_json,state,created_at,updated_at)
           VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(id, listeningId, window.id, window.revision, l.relation_epoch, input.input_fingerprint, PROMPT_VERSION, MODEL_VERSION, JSON.stringify(input), time, time);
@@ -372,19 +493,44 @@ export const relationMethods = {
     return this.tx(() => {
       const job = this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId);
       if (!job || job.state !== 'pending' || job.ready_at > now) return null;
-      const current = this.db.prepare('SELECT w.revision,l.relation_epoch FROM relation_windows w JOIN listenings l ON l.id=w.listening_id WHERE w.id=?').get(job.window_id);
-      if (!current || current.revision !== job.window_revision || current.relation_epoch !== job.epoch) {
-        this.db.prepare("UPDATE relation_jobs SET state='superseded' WHERE id=?").run(jobId); return null;
+      this.expireRelationRound(job.listening_id, { now });
+      const round = currentRound(this, job.listening_id);
+      if (round?.state !== 'active' || round.epoch !== job.epoch) return null;
+      const window = this.db.prepare('SELECT * FROM relation_windows WHERE id=?').get(job.window_id);
+      const input = window && inputFor(this, window).input;
+      if (!input || input.input_fingerprint !== job.input_fingerprint) {
+        this.db.prepare("UPDATE relation_jobs SET state='superseded',last_error='STALE_INPUT' WHERE id=?").run(jobId);
+        if (window) this.db.prepare("UPDATE relation_windows SET revision=revision+1,state='dirty',ready_at=0 WHERE id=? AND state!='dirty'").run(window.id);
+        return null;
       }
       const limit = Math.min(job.max_requests, Number.isInteger(maxRequests) && maxRequests > 0 ? maxRequests : 3);
-      if (job.request_count >= limit) {
-        this.db.prepare("UPDATE relation_jobs SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE id=?").run(jobId);
-        this.db.prepare("UPDATE relation_windows SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE id=?").run(job.window_id); return null;
+      const windowCount = this.db.prepare('SELECT COALESCE(SUM(request_count),0) AS n FROM relation_jobs WHERE window_id=? AND epoch=?').get(job.window_id, job.epoch).n;
+      if (job.request_count >= limit || windowCount >= 3) {
+        this.db.prepare("UPDATE relation_jobs SET state='failed',last_error='WINDOW_REQUEST_LIMIT' WHERE id=?").run(jobId);
+        this.db.prepare("UPDATE relation_windows SET state='failed',last_error='WINDOW_REQUEST_LIMIT' WHERE id=?").run(job.window_id); return null;
       }
-      this.db.prepare("UPDATE relation_jobs SET state='running',request_count=request_count+1,max_requests=?,updated_at=? WHERE id=?").run(limit, stamp(), jobId);
-      this.db.prepare('INSERT INTO relation_requests(job_id,attempt,started_at) VALUES(?,?,?)').run(jobId, job.request_count + 1, now);
-      return publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
+      const requests = roundRequests(this, round), usage = usageSummary(requests);
+      const estimated = requestEstimate(input);
+      const reserved = requests.reduce((n, q) => n + q.estimated_tokens, 0);
+      const reason = requests.length >= round.max_requests ? 'ROUND_REQUEST_LIMIT' :
+        Math.max(reserved, usage.totalTokens) + estimated > round.max_estimated_tokens ? 'ROUND_TOKEN_LIMIT' : null;
+      if (reason) { stopRound(this, round, reason, now); return null; }
+      this.db.prepare("UPDATE relation_jobs SET state='running',request_count=request_count+1,max_requests=?,window_revision=?,input_json=?,updated_at=? WHERE id=?")
+        .run(limit, window.revision, JSON.stringify(input), stamp(), jobId);
+      this.db.prepare("UPDATE relation_windows SET state='pending',ready_at=0 WHERE id=?").run(window.id);
+      this.db.prepare('INSERT INTO relation_requests(job_id,attempt,started_at,estimated_tokens) VALUES(?,?,?,?)').run(jobId, job.request_count + 1, now, estimated);
+      this.db.prepare('UPDATE relation_rounds SET finished_at=NULL WHERE id=?').run(round.id);
+      return { ...publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId)), window_request_count: windowCount + 1,
+        round: { id: round.id, deadlineAt: round.deadline_at } };
     });
+  },
+  recordRelationUsage(jobId, { usage = null, outcome = null, attempt = null } = {}) {
+    const safe = safeUsage(usage);
+    const job = this.db.prepare('SELECT request_count FROM relation_jobs WHERE id=?').get(jobId);
+    if (!job) return false;
+    const number = Number.isInteger(attempt) && attempt > 0 ? attempt : job.request_count;
+    return Boolean(this.db.prepare(`UPDATE relation_requests SET usage_json=COALESCE(?,usage_json),outcome=COALESCE(?,outcome) WHERE job_id=? AND attempt=?`)
+      .run(safe ? JSON.stringify(safe) : null, outcome && String(outcome).slice(0, 160), jobId, number).changes);
   },
   failRelationJob(jobId, { code = 'RELATION_FAILED', retryAt = null, terminal = false } = {}) {
     return this.tx(() => {
@@ -398,17 +544,20 @@ export const relationMethods = {
       return publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
     });
   },
-  commitRelationJob(jobId, { relations = [], rejected = [], usage = null } = {}) {
+  commitRelationJob(jobId, { relations = [], rejected = [], usage = null, now = Date.now() } = {}) {
     return this.tx(() => {
       const job = publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
       if (!job) return { stale: true, changed: false, missing: true };
       if (['complete', 'partial'].includes(job.state)) return { stale: false, changed: false, duplicate: true, graphRevision: this.graphMetadata(job.listening_id)?.graphRevision };
-      const safeUsage = usage && typeof usage === 'object' ? Object.fromEntries(Object.entries(usage).filter(([key, value]) => /tokens|requests/.test(key) && Number.isFinite(value) && value >= 0)) : null;
+      const sanitizedUsage = safeUsage(usage);
+      this.recordRelationUsage(jobId, { usage });
+      this.expireRelationRound(job.listening_id, { now });
       const window = this.db.prepare('SELECT w.*,l.relation_epoch FROM relation_windows w JOIN listenings l ON l.id=w.listening_id WHERE w.id=?').get(job.window_id);
-      if (!window || !['running', 'pending'].includes(job.state) || window.revision !== job.window_revision || window.relation_epoch !== job.epoch || inputFor(this, window).input.input_fingerprint !== job.input_fingerprint) {
-        this.db.prepare('UPDATE relation_requests SET outcome=?,usage_json=? WHERE job_id=? AND attempt=?').run('stale', safeUsage ? JSON.stringify(safeUsage) : null, jobId, job.request_count);
-        this.db.prepare("UPDATE relation_jobs SET state='superseded',last_error='STALE_INPUT',usage_json=?,updated_at=? WHERE id=?").run(safeUsage ? JSON.stringify(safeUsage) : null, stamp(), jobId);
-        if (window && window.revision === job.window_revision && window.relation_epoch === job.epoch) this.db.prepare("UPDATE relation_windows SET revision=revision+1,state='dirty',dirty_at=?,ready_at=0 WHERE id=?").run(Date.now(), window.id);
+      const round = currentRound(this, job.listening_id);
+      if (!window || !['running', 'pending'].includes(job.state) || round?.state !== 'active' || window.relation_epoch !== job.epoch || inputFor(this, window).input.input_fingerprint !== job.input_fingerprint) {
+        this.recordRelationUsage(jobId, { usage, outcome: 'stale' });
+        if (['running', 'pending'].includes(job.state)) this.db.prepare("UPDATE relation_jobs SET state='superseded',last_error='STALE_INPUT',usage_json=COALESCE(?,usage_json),updated_at=? WHERE id=? AND state IN ('running','pending')").run(sanitizedUsage ? JSON.stringify(sanitizedUsage) : null, stamp(), jobId);
+        if (window && round?.state === 'active' && window.relation_epoch === job.epoch && window.state !== 'dirty') this.db.prepare("UPDATE relation_windows SET revision=revision+1,state='dirty',dirty_at=?,ready_at=0 WHERE id=?").run(Date.now(), window.id);
         return { stale: true, changed: false, graphRevision: this.graphMetadata(job.listening_id)?.graphRevision };
       }
       if (!Array.isArray(relations) || relations.length > RELATION_LIMITS.relations || !Array.isArray(rejected)) throw new Error('RELATION_RESULT_LIMIT');
@@ -452,9 +601,10 @@ export const relationMethods = {
       }
       if (changed) this.db.prepare('UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=?').run(job.listening_id);
       const state = rejects.length || job.input.coverage_limited ? 'partial' : 'complete';
-      this.db.prepare('UPDATE relation_requests SET outcome=?,usage_json=? WHERE job_id=? AND attempt=?').run(state, safeUsage ? JSON.stringify(safeUsage) : null, jobId, job.request_count);
-      this.db.prepare('UPDATE relation_jobs SET state=?,rejected_json=?,usage_json=?,last_error=NULL,updated_at=? WHERE id=?').run(state, JSON.stringify(rejects.slice(0, 96)), safeUsage ? JSON.stringify(safeUsage) : null, time, jobId);
+      this.recordRelationUsage(jobId, { usage, outcome: state });
+      this.db.prepare('UPDATE relation_jobs SET state=?,rejected_json=?,usage_json=?,window_revision=?,last_error=NULL,updated_at=? WHERE id=?').run(state, JSON.stringify(rejects.slice(0, 96)), sanitizedUsage ? JSON.stringify(sanitizedUsage) : null, window.revision, time, jobId);
       this.db.prepare('UPDATE relation_windows SET state=?,last_fingerprint=?,last_error=NULL,ready_at=0 WHERE id=?').run(state, job.input_fingerprint, window.id);
+      if (!this.relationHasWork(job.listening_id)) this.db.prepare("UPDATE relation_rounds SET finished_at=? WHERE id=? AND state='active'").run(Date.now(), round.id);
       return { stale: false, changed, accepted, rejected: rejects, state, graphRevision: this.graphMetadata(job.listening_id).graphRevision };
     });
   }

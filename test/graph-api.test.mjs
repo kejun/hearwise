@@ -61,3 +61,76 @@ test('graph generation resumes restored pending knowledge instead of waiting beh
   assert.equal(state.processing.knowledge.pendingJobs, 0);
   assert.equal(state.processing.knowledge.runningJobs, 0);
 });
+
+test('graph DELETE cancels an in-flight request, preserves nodes and allows explicit bounded continuation', { timeout: 22000 }, async t => {
+  let release, began;
+  const started = new Promise(resolve => { began = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  const fixture = await graphFixture({ modelResponse: async body => {
+    if (body.model === 'qwen-mt-flash') return undefined;
+    const input = JSON.parse(body.messages.at(-1).content);
+    if (!input.candidates) return { items: [] };
+    began(); await blocked;
+    const subject = input.candidates.find(item => item.canonical_name === 'Eastman Kodak');
+    const object = input.candidates.find(item => item.canonical_name === 'Brownie camera');
+    const segment = input.focus_segments.find(item => item.text.includes('Eastman Kodak released'));
+    return !subject || !object || !segment ? { relations: [] } : { relations: [{
+      subject_item_id: subject.id, object_item_id: object.id, predicate: 'released',
+      statement: 'Eastman Kodak released the Brownie camera in 1900.', polarity: 'positive', modality: 'asserted',
+      conditions: null, time_scope: '1900', attribution: null, status: 'active', correction_of: null,
+      supports: [{ segment_id: segment.id, quote: segment.text, role: 'relation' }]
+    }] };
+  } });
+  t.after(async () => { release(); await fixture.close(); });
+  const url = `${fixture.base}/api/listenings/${fixture.seeded.first.listeningId}/graph`;
+  const read = async () => (await fetch(url)).json();
+  const initial = await read();
+  assert.equal((await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'mock-cancel-key' }) })).status, 202);
+  await started;
+  const running = await read();
+  assert.equal(running.status.runningJobs, 1);
+  assert.equal((await fetch(url, { method: 'DELETE', headers: { Origin: 'https://untrusted.example' } })).status, 403);
+  assert.equal((await read()).status.round.id, running.status.round.id);
+  const cancelled = await fetch(url, { method: 'DELETE' });
+  assert.equal(cancelled.status, 200);
+  const stop = await cancelled.json();
+  assert.equal(stop.status.state, 'cancelled');
+  assert.equal(stop.status.round.stopReason, 'USER_CANCELLED');
+  assert.equal(stop.status.round.id, running.status.round.id);
+  assert.equal(stop.status.runningJobs, 0);
+  const repeat = await (await fetch(url, { method: 'DELETE' })).json();
+  assert.equal(repeat.status.round.id, stop.status.round.id);
+  assert.equal(repeat.status.round.requestCount, stop.status.round.requestCount);
+  release(); await sleep(150);
+  const after = await read();
+  assert.equal(after.status.state, 'cancelled');
+  assert.deepEqual(after.nodes.map(n => n.id), initial.nodes.map(n => n.id));
+  assert.equal(after.relations.length, 0);
+  const resumed = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'mock-cancel-key' }) });
+  assert.equal(resumed.status, 202);
+  const next = await resumed.json();
+  assert.notEqual(next.status.round.id, stop.status.round.id);
+  assert.equal(next.status.round.maxRequests, 12);
+  assert.equal(next.status.round.deadlineAt - next.status.round.startedAt, 120000);
+  const finished = await until(read, graph => graph.relations.length === 1);
+  assert.equal(finished.relations.length, 1);
+  assert.equal((await fetch(`${fixture.base}/api/listenings/00000000-0000-0000-0000-000000000000/graph`, { method: 'DELETE' })).status, 404);
+});
+
+test('server startup expires recovered keyless rounds without any manual resume', { timeout: 12000 }, async t => {
+  const { speechFixture } = await import('../test-support/speech-fixture.mjs');
+  const { seedGraphListening } = await import('../test-support/graph-fixture.mjs');
+  const fixture = await speechFixture({ seed: store => {
+    const seeded = seedGraphListening(store, { extraNodes: 0 });
+    store.enableRelations(seeded.listeningId, { limits: { maxDurationMs: 2000 } });
+    return { ...seeded, round: store.relationProcessing(seeded.listeningId).round };
+  } });
+  t.after(() => fixture.close());
+  const url = `${fixture.base}/api/listenings/${fixture.seeded.listeningId}/graph`;
+  const graph = await until(async () => (await fetch(url)).json(), value => value.status.state === 'paused', 7000);
+  assert.equal(graph.status.round.id, fixture.seeded.round.id);
+  assert.equal(graph.status.round.deadlineAt, fixture.seeded.round.deadlineAt);
+  assert.equal(graph.status.round.stopReason, 'ROUND_DEADLINE');
+  assert.equal(graph.status.round.requestCount, 0);
+  assert.equal(fixture.stats.providerRequests.length, 0);
+});

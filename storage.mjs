@@ -26,7 +26,7 @@ export class ListeningStore {
   }
   migrate() {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 6) throw new Error(`不支持的数据库版本：${version}`);
+    if (version > 7) throw new Error(`不支持的数据库版本：${version}`);
     if (version === 0) this.tx(() => {
       this.db.exec(`
         CREATE TABLE listenings (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -112,7 +112,7 @@ export class ListeningStore {
       this.db.exec(`ALTER TABLE listenings ADD COLUMN notes TEXT NOT NULL DEFAULT '';
         PRAGMA user_version = 5;`);
     });
-    if (version < 6) this.tx(() => migrateRelations(this));
+    if (version < 7) this.tx(() => migrateRelations(this));
   }
   createRun(listeningId, settings, title) {
     return this.tx(() => {

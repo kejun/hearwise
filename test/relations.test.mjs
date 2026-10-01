@@ -174,3 +174,40 @@ test('cross-sentence pronouns cannot skip a competing newer antecedent or anchor
   assert.equal(projected.focus_segments[1].sequence_no, 2);
   assert.equal(code(parse([row], projected)), 'COREFERENCE_REFERENCE_ORDER');
 });
+
+test('paid usage is available on invalid model JSON and only numeric token fields survive', async () => {
+  const reported = [];
+  await assert.rejects(extractRelations('key', inputFor(), 'mock', {
+    onUsage: usage => reported.push(usage), fetchImpl: async () => ({ ok: true, json: async () => ({
+      choices: [{ message: { content: '{invalid' } }], usage: { total_tokens: 123, prompt_tokens: 100, completion_tokens: 23, secret: 'omit' }
+    }) })
+  }), error => {
+    assert.equal(error.code, 'RELATION_INVALID_RESPONSE'); assert.equal(error.usage.total_tokens, 123); return true;
+  });
+  assert.deepEqual(reported, [{ prompt_tokens: 100, completion_tokens: 23, total_tokens: 123 }]);
+});
+
+test('cancelled fetch which ignores abort still reports late usage without returning a graph', async () => {
+  let resolve;
+  const pending = new Promise(r => { resolve = r; }), reported = [], controller = new AbortController();
+  const request = extractRelations('key', inputFor(), 'mock', { signal: controller.signal,
+    onUsage: usage => reported.push(usage), fetchImpl: () => pending });
+  controller.abort();
+  await assert.rejects(request, { name: 'AbortError' });
+  resolve({ ok: true, json: async () => ({ choices: [{ message: { content: '{"relations":[]}' } }], usage: { total_tokens: 55 } }) });
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(reported, [{ total_tokens: 55 }]);
+});
+
+test('request deadline also bounds a stalled response body which ignores abort', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let resolve;
+  const pending = new Promise(r => { resolve = r; });
+  const request = extractRelations('key', inputFor(), 'mock', { requestTimeoutMs: 30,
+    fetchImpl: async () => ({ ok: true, json: () => pending }) });
+  const rejected = assert.rejects(request, { name: 'TimeoutError' });
+  await Promise.resolve();
+  t.mock.timers.tick(30);
+  await rejected;
+  resolve({ choices: [{ message: { content: '{"relations":[]}' } }] });
+});

@@ -83,6 +83,8 @@ relationScheduler = createRelationScheduler({ store, provider, listeningIds: () 
     [...keys.keys()].some(id => knowledgeScheduler.hasWork(id) || speech.hasConsumers(id))),
   execute: relationWorkflow.execute, onChange: publishProcessing, onIdle: maybeReleaseKey,
   onError: error => logModelError('relations', error) });
+// Recovered rounds have no in-memory key, but their wall budget still expires.
+queueMicrotask(() => relationScheduler.pump());
 
 function sendJson(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -386,6 +388,16 @@ const server = http.createServer(async (req, res) => {
     const graph = store.graph(match[1]);
     return graph ? sendJson(res, 200, { ...graph, processingAvailable: keys.has(match[1]) })
       : sendJson(res, 404, { error: '收听记录不存在' });
+  }
+  if (match && match[2] === 'graph' && req.method === 'DELETE') {
+    if (!store.hasListening(match[1])) return sendJson(res, 404, { error: '收听记录不存在' });
+    // Persist the cancellation fence before aborting the network operation so a
+    // simultaneous or late paid response can never resurrect cancelled work.
+    store.cancelRelations(match[1], { reason: 'USER_CANCELLED' });
+    relationScheduler.cancel(match[1]);
+    publishProcessing(match[1]);
+    maybeReleaseKey(match[1]);
+    return sendJson(res, 200, { ok: true, ...store.graphMetadata(match[1]), processingAvailable: keys.has(match[1]) });
   }
   if (match && match[2] === 'graph' && req.method === 'POST') {
     try {
