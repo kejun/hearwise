@@ -7,6 +7,7 @@ import * as translationParams from '../public/translation-params.js';
 import { processingView, createProcessingPoller } from '../public/processing-state.js';
 import { createSpeechController } from '../public/speech-controller.js';
 import { speechConfig } from '../public/speech-protocol.js';
+import { readKnowledgeView, saveKnowledgeView } from '../public/knowledge-graph.js';
 
 // Execute the actual app and event handlers with a minimal DOM and controllable HTTP responses.
 // Deliberately let aborted requests resolve to exercise the stale-response guards.
@@ -22,7 +23,7 @@ function app(t, preferences = []) {
       get textContent() { return this.children ? this.children.map(child => child.textContent).join('') : this._text; },
       set textContent(text) { this.children = null; this._text = text; },
       replaceChildren(...children) { this.children = children; }, hidden: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
-      style: { setProperty: (name, value) => styles.set(name, value), getPropertyValue: name => styles.get(name) }, setAttribute() {}, focus() {},
+      style: { setProperty: (name, value) => styles.set(name, value), getPropertyValue: name => styles.get(name) }, setAttribute() {}, focus() {}, querySelectorAll: () => [],
       getBoundingClientRect: () => ({ bottom: 100 }),
       setCustomValidity(message) { this.validationMessage = message; },
       reportValidity() { this.reported = true; },
@@ -42,6 +43,8 @@ function app(t, preferences = []) {
     close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
   }
   const context = vm.createContext({
+    // Graph DOM interaction has a dedicated browser suite; keep these MT lifecycle tests isolated.
+    readKnowledgeView, saveKnowledgeView, createKnowledgeGraph: () => ({ select() {}, setNodes() {}, setActive() {}, setProcessing() {}, invalidate() {}, highlight() {}, refresh() {} }),
     ...translationParams, createCaptionFrontier, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },
     document: { createElement: () => ({ textContent: '', className: '' }), getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },

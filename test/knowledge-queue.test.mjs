@@ -298,7 +298,7 @@ test('v2 未捕获系统错误直接保留失败，不按 TypeError 自动重放
   assert.equal(errors.length, 1);
 });
 
-test('v2 数据库升级为 v5，旧运行中 v2 任务隔离等待历史恢复', t => {
+test('v2 数据库升级为 v6，旧运行中 v2 任务隔离等待历史恢复', t => {
   const dir = mkdtempSync(path.join(tmpdir(), 'knowledge-migration-'));
   const filename = path.join(dir, 'test.sqlite');
   let store = new ListeningStore(filename);
@@ -314,7 +314,7 @@ test('v2 数据库升级为 v5，旧运行中 v2 任务隔离等待历史恢复'
     PRAGMA user_version=2;`);
   store.close(); store = new ListeningStore(filename);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
-  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 5);
+  assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 6);
   assert.equal(store.nextJob(r.listeningId), undefined);
   const migrated = store.detail(r.listeningId).jobs[0];
   assert.equal(migrated.id, job.id);

@@ -165,12 +165,16 @@ test('真实 v1 数据库迁移：旧记录策略为 v1，新记录为 v2', () =
         state TEXT,attempts INTEGER,last_error TEXT,created_at TEXT,updated_at TEXT);
       CREATE TABLE knowledge_items (id TEXT PRIMARY KEY,listening_id TEXT,type TEXT,canonical_name TEXT,normalized_name TEXT,
         dialogue_summary TEXT,background_note TEXT,certainty TEXT,created_at TEXT,updated_at TEXT);
+      CREATE TABLE segments (id TEXT PRIMARY KEY,listening_id TEXT,run_id TEXT,sequence_no INTEGER,asr_sentence_id TEXT,original_text TEXT,translation_text TEXT,translation_state TEXT,begin_ms INTEGER,end_ms INTEGER,created_at TEXT);
+      CREATE TABLE knowledge_mentions (item_id TEXT,segment_id TEXT,surface_text TEXT,PRIMARY KEY(item_id,segment_id,surface_text));
+      CREATE TABLE knowledge_aliases (item_id TEXT,alias TEXT,normalized_alias TEXT,PRIMARY KEY(item_id,normalized_alias));
+      CREATE TABLE knowledge_revisions (id TEXT PRIMARY KEY,item_id TEXT,action TEXT,old_value TEXT,new_value TEXT,merged_from_id TEXT,reason TEXT,created_at TEXT);
       INSERT INTO listenings VALUES ('legacy','旧记录','2026-01-01','2026-01-01');
       INSERT INTO knowledge_items VALUES ('k1','legacy','other','旧对象','旧对象','旧摘要',NULL,'clear','2026-01-01','2026-01-01');
       PRAGMA user_version=1;`);
     legacy.close();
     const store = new ListeningStore(filename);
-    assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 5);
+    assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 6);
     assert.equal(store.db.prepare("SELECT knowledge_policy_version FROM listenings WHERE id='legacy'").get().knowledge_policy_version, 1);
     assert.equal(store.db.prepare("SELECT short_description FROM knowledge_items WHERE id='k1'").get().short_description, '旧摘要');
     const fresh = store.createRun(null, settings, '新记录');

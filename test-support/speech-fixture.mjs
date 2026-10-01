@@ -1,5 +1,6 @@
 // Local deterministic ASR/MT/TTS fixture. No external services or real credentials.
 import http from 'node:http';
+import { ListeningStore } from '../storage.mjs';
 import { WebSocketServer } from 'ws';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -8,20 +9,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0 } = {}) {
+export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, extraEnv = {} } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
-  const stats = { connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
+  const filename = path.join(directory, 'test.sqlite');
+  let seeded;
+  if (seed) { const store = new ListeningStore(filename); try { seeded = await seed(store); } finally { store.close(); } }
+  const stats = { providerRequests: [], connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
     mtRequests: [], mtAborted: 0, fishRequests: [], fishAborted: 0, holdFish: false };
   const mt = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     let body; try { body = JSON.parse(Buffer.concat(chunks).toString()); } catch { res.writeHead(400); return res.end(); }
+    stats.providerRequests.push({ model: body.model, at: Date.now() });
     if (body.model === 'qwen-mt-flash') {
       stats.mtRequests.push(body.messages[0].content);
       res.on('close', () => { if (!res.writableEnded) stats.mtAborted++; });
       if (translationDelay) await new Promise(resolve => setTimeout(resolve, translationDelay));
     }
     const chosenTranslation = typeof translationText === 'function' ? translationText(body.messages?.[0]?.content) : translationText;
-    const text = body.model === 'qwen-mt-flash' ? chosenTranslation ?? `这是第 ${body.messages[0].content.match(/\d+/)?.[0] || 1} 句中文译文。` : '{"items":[]}';
+    const override = modelResponse ? await modelResponse(body, stats, seeded) : undefined;
+    const text = override === undefined ? (body.model === 'qwen-mt-flash' ? chosenTranslation ?? `这是第 ${body.messages[0].content.match(/\d+/)?.[0] || 1} 句中文译文。` : '{"items":[]}') : typeof override === 'string' ? override : JSON.stringify(override);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));
   });
@@ -87,16 +93,16 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
     });
   });
   const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(fileURLToPath(new URL('..', import.meta.url))),
-    env: { ...process.env, HEARWISE_INCREMENTAL_SPEECH: legacyIncrementalEnv ? '1' : '0', PORT: '0', LISTENING_DB: path.join(directory, 'test.sqlite'),
+    env: { ...process.env, HEARWISE_INCREMENTAL_SPEECH: legacyIncrementalEnv ? '1' : '0', PORT: '0', LISTENING_DB: filename,
       ASR_ENDPOINT: `ws://127.0.0.1:${asr.address().port}`, MT_ENDPOINT: `http://127.0.0.1:${mt.address().port}`,
-      TTS_ENDPOINT: `ws://127.0.0.1:${tts.address().port}`, FISH_TTS_ENDPOINT: `http://127.0.0.1:${fish.address().port}/v1/tts`, EXTRACTION_WAIT_MS: '15000' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      TTS_ENDPOINT: `ws://127.0.0.1:${tts.address().port}`, FISH_TTS_ENDPOINT: `http://127.0.0.1:${fish.address().port}/v1/tts`, EXTRACTION_WAIT_MS: '15000', ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; child.stderr.on('data', data => { logs += data; });
   const base = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Fixture startup timeout: ' + logs)), 10000);
     child.stdout.on('data', data => { logs += data; const url = String(data).match(/http:\/\/127\.0\.0\.1:\d+/)?.[0]; if (url) { clearTimeout(timeout); resolve(url); } });
     child.once('error', reject);
   });
-  return { base, stats, final, logs: () => logs,
+  return { base, stats, final, seeded, logs: () => logs,
     async close() {
       const exited = once(child, 'exit'); child.kill(); await exited;
       for (const server of [asr, tts]) { for (const ws of server.clients) ws.terminate(); await new Promise(resolve => server.close(resolve)); }

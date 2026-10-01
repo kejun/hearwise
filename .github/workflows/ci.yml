@@ -49,7 +49,9 @@ jobs:
         run: |
           mkdir -p browser-evidence
           node scripts/verify-speech-browser.mjs | tee browser-evidence/result.json
+          node scripts/verify-graph-browser.mjs | tee browser-evidence/graph-result.json
         env:
+          GRAPH_EVIDENCE_DIR: browser-evidence
           SPEECH_SCREENSHOT: browser-evidence/speech.png
           PINNED_SCREENSHOT: browser-evidence/pinned-caption.png
           SPEECH_TRANSCRIPT_SCREENSHOT: browser-evidence/transcript.png

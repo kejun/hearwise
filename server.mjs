@@ -6,11 +6,14 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from './storage.mjs';
-import { extractKnowledge, splitFocusSegments } from './knowledge.mjs';
+import { extractKnowledge, repairKnowledge, splitFocusSegments } from './knowledge.mjs';
 import { createTranslationScheduler } from './translation-queue.mjs';
 import { createKnowledgeScheduler } from './knowledge-queue.mjs';
 import { createKnowledgeWorkflow } from './knowledge-workflow.mjs';
 import { createSpeechService } from './speech-service.mjs';
+import { createProviderAdmission } from './provider-admission.mjs';
+import { createRelationScheduler } from './relation-queue.mjs';
+import { createRelationWorkflow } from './relation-workflow.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -33,9 +36,12 @@ const asrSentenceSilenceMs = Math.min(6000, Math.max(200, Number(process.env.ASR
 const keys = new Map();
 const listeners = new Map();
 const translations = createTranslationScheduler();
+const provider = createProviderAdmission({ onMetric: event => console.info('provider_request', JSON.stringify(event)) });
+const graphRevisions = new Map();
+let relationScheduler;
 const speech = createSpeechService({ store, incrementalClauses: process.env.HEARWISE_INCREMENTAL_BOUNDARY !== 'sentence', translatePhrase: translateSpeechPhrase, onDispose: id => maybeReleaseKey(id), setHead: (owner, id) => translations.setSpeechHead(owner, id),
   onMetric: event => console.info('speech_event', JSON.stringify(event)) });
-for (const file of ['caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js']) {
+for (const file of ['caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js', 'knowledge-graph.js']) {
   types[`/${file}`] = 'text/javascript; charset=utf-8';
 }
 let translating = 0;
@@ -46,6 +52,8 @@ const configuredExtractionWait = Number(process.env.EXTRACTION_WAIT_MS ?? 1500);
 const extractionWaitMs = Number.isFinite(configuredExtractionWait) ? Math.min(15000, Math.max(0, configuredExtractionWait)) : 1500;
 const knowledgeWorkflow = createKnowledgeWorkflow({
   store, endpoint: mtEndpoint, onProgress: publishProcessing,
+  extract: (key, ...args) => provider.run({ key, priority: 'knowledge' }, () => extractKnowledge(key, ...args)),
+  repair: (key, ...args) => provider.run({ key, priority: 'knowledge' }, () => repairKnowledge(key, ...args)),
   onItems: (id, items) => {
     for (const item of items) broadcast(id, { type: 'knowledge-upserted', listeningId: id, item });
   },
@@ -59,7 +67,7 @@ const knowledgeWorkflow = createKnowledgeWorkflow({
   onError: error => logModelError('knowledge', error)
 });
 const knowledgeScheduler = createKnowledgeScheduler({
-  store, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
+  store, provider, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
   translationBusy: () => Boolean(translations.length || translating || interimTranslating),
   execute: executeKnowledge, onChange: publishProcessing, onIdle: maybeReleaseKey,
   onError: error => logModelError('knowledge', error),
@@ -67,6 +75,14 @@ const knowledgeScheduler = createKnowledgeScheduler({
   translationGraceMs: extractionWaitMs,
   concurrency: Math.min(4, Math.max(1, Math.floor(Number(process.env.EXTRACTION_CONCURRENCY) || 2)))
 });
+
+const relationWorkflow = createRelationWorkflow({ store, endpoint: mtEndpoint, provider,
+  onChange: publishProcessing, onError: error => logModelError('relations', error) });
+relationScheduler = createRelationScheduler({ store, provider, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
+  foregroundBusy: () => Boolean(translations.length || translating || interimTranslating ||
+    [...keys.keys()].some(id => knowledgeScheduler.hasWork(id) || speech.hasConsumers(id))),
+  execute: relationWorkflow.execute, onChange: publishProcessing, onIdle: maybeReleaseKey,
+  onError: error => logModelError('relations', error) });
 
 function sendJson(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -98,6 +114,13 @@ function publishProcessing(id, { refreshDetail = false } = {}) {
   if (!store.hasListening(id)) return;
   broadcast(id, { type: 'processing-updated', listeningId: id, processing: store.processing(id),
     processingAvailable: keys.has(id), refreshDetail });
+  const graphRevision = store.graphMetadata(id)?.graphRevision;
+  if (graphRevision != null && graphRevisions.get(id) !== graphRevision) {
+    graphRevisions.set(id, graphRevision);
+    broadcast(id, { type: 'graph-invalidated', listeningId: id, graphRevision });
+  }
+  // Defer pumping until the current knowledge/translation transaction has finished.
+  queueMicrotask(() => relationScheduler?.pump());
 }
 function subscribe(id, ws) {
   if (!listeners.has(id)) listeners.set(id, new Set());
@@ -119,15 +142,17 @@ function logModelError(modelName, error) {
 }
 
 async function translate(key, text, target, timeout = 15000, signal) {
+  return provider.run({ key, priority: 'translation', signal }, async () => {
   const response = await fetch(mtEndpoint, { method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'qwen-mt-flash', messages: [{ role: 'user', content: text }],
       translation_options: { source_lang: 'auto', target_lang: target } }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error?.message || result.message || `翻译服务 HTTP ${response.status}`);
+  if (!response.ok) throw Object.assign(new Error(result.error?.message || result.message || `翻译服务 HTTP ${response.status}`), { status: response.status });
   const output = result.choices?.[0]?.message?.content;
   if (typeof output !== 'string' || !output.trim()) throw new Error('翻译服务未返回文字');
   return output.trim();
+  });
 }
 async function translateSpeechPhrase({ listeningId, text, signal, final }) {
   if (signal.aborted) throw signal.reason;
@@ -190,10 +215,14 @@ function checkRecognition(key) {
 }
 
 function maybeReleaseKey(id) {
-  if (!id || listeners.get(id)?.size || speech.hasConsumers(id) || knowledgeScheduler.hasWork(id) ||
+  relationScheduler?.pump();
+  if (!id || listeners.get(id)?.size || speech.hasConsumers(id) || knowledgeScheduler.hasWork(id) || relationScheduler?.hasWork(id) ||
       activeTranslations.get(id) || translations.hasListening(id)) return;
+  const key = keys.get(id);
   keys.delete(id);
+  if (key && ![...keys.values()].includes(key)) provider.forget(key);
   knowledgeScheduler.pump();
+  relationScheduler?.pump();
 }
 function queueTranslation(segment, listeningId, target, kind = 'background') {
   if (segment.translation_state === 'complete') return;
@@ -240,7 +269,7 @@ async function executeKnowledge(job, key) {
     const refreshed = store.jobInput(job, input.focus_segments);
     input.existing_candidates = refreshed.existing_candidates;
     if (job.prompt_version === 2) input.observed_candidates = refreshed.observed_candidates;
-    const parsed = await extractKnowledge(key, input, mtEndpoint);
+    const parsed = await provider.run({ key, priority: 'knowledge' }, () => extractKnowledge(key, input, mtEndpoint));
     if (!store.hasListening(job.listening_id)) break;
     if (parsed.rejected.length) console.info('knowledge_rejected', job.id, `${parsed.rejected.length}/${parsed.rejected.length + parsed.items.length}`,
       parsed.rejected.map(r => `${r.name}（${r.reason}）`).join('；').slice(0, 400));
@@ -261,6 +290,7 @@ function resumeProcessing(id, key) {
   }
   knowledgeScheduler.schedule(id, true);
   knowledgeScheduler.pump();
+  relationScheduler?.schedule(id);
   maybeReleaseKey(id);
 }
 
@@ -310,7 +340,7 @@ const server = http.createServer(async (req, res) => {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     return sendJson(res, 200, store.list(page));
   }
-  const match = /^\/api\/listenings\/([0-9a-f-]{36})(?:\/(retry|export|segments))?$/.exec(url.pathname);
+  const match = /^\/api\/listenings\/([0-9a-f-]{36})(?:\/(retry|export|segments|graph))?$/.exec(url.pathname);
   if (match && req.method === 'GET' && !match[2]) {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     const detail = store.detail(match[1], page);
@@ -338,6 +368,8 @@ const server = http.createServer(async (req, res) => {
       speech.remove(match[1]);
       keys.delete(match[1]);
       knowledgeScheduler.remove(match[1]);
+      relationScheduler.remove(match[1]);
+      graphRevisions.delete(match[1]);
       return sendJson(res, 200, { ok: true });
     } catch (error) { return sendJson(res, 500, { error: errorMessage(error) }); }
   }
@@ -349,6 +381,30 @@ const server = http.createServer(async (req, res) => {
       store.retry(match[1]); resumeProcessing(match[1], key.trim());
       return sendJson(res, 202, { ok: true });
     } catch { return sendJson(res, 400, { error: '请求无效' }); }
+  }
+  if (match && match[2] === 'graph' && req.method === 'GET') {
+    const graph = store.graph(match[1]);
+    return graph ? sendJson(res, 200, { ...graph, processingAvailable: keys.has(match[1]) })
+      : sendJson(res, 404, { error: '收听记录不存在' });
+  }
+  if (match && match[2] === 'graph' && req.method === 'POST') {
+    try {
+      const input = await readJson(req);
+      if (!store.hasListening(match[1])) return sendJson(res, 404, { error: '收听记录不存在' });
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => k !== 'key')) {
+        return sendJson(res, 400, { error: '关系生成请求无效' });
+      }
+      const key = typeof input.key === 'string' && input.key.trim() ? input.key.trim() : keys.get(match[1]);
+      if (!key) return sendJson(res, 400, { error: '请先在连接设置填写 API Key' });
+      keys.set(match[1], key);
+      store.enableRelations(match[1], { retry: true });
+      // A restored pending extraction already has authorization for this record;
+      // resume its scheduler so graph admission does not wait on dormant work.
+      knowledgeScheduler.pump();
+      relationScheduler.schedule(match[1], true);
+      publishProcessing(match[1]);
+      return sendJson(res, 202, { ok: true, ...store.graphMetadata(match[1]), processingAvailable: true });
+    } catch { return sendJson(res, 400, { error: '关系生成请求无效' }); }
   }
   if (match && match[2] === 'export' && req.method === 'GET') {
     const kind = url.searchParams.get('kind');
