@@ -51,8 +51,6 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST') { statuses[id] = activeStatus(); revision++; }
   if (req.method === 'DELETE') { statuses[id] = { ...statuses[id], state: 'cancelled', round: { ...statuses[id].round, state: 'cancelled', stopReason: 'USER_CANCELLED', finishedAt: Date.now() } }; revision++; }
-  if (req.method === 'POST' && dropPost) { dropPost = false; return res.destroy(); }
-  if (req.method === 'DELETE' && dropDelete) { dropDelete = false; return res.destroy(); }
   const data = structuredClone({ status: statuses[id], graphRevision: revision });
   const gate = req.method === 'POST' ? holdPost : holdDelete;
   if (gate) await gate.promise;
@@ -64,6 +62,42 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args: ['--no-sandbox', '--no-zygote', '--disable-gpu'] });
   const page = await browser.newPage({ viewport: { width: 1360, height: 1000 }, reducedMotion: 'reduce' });
   page.on('pageerror', error => errors.push(error.message));
+  const browserRequests = { GET: 0, POST: 0, DELETE: 0 }, inFlightReads = new Set(), lostResponses = [];
+  const graphRequest = request => /\/api\/listenings\/[ab]\/graph$/.test(request.url());
+  page.on('request', request => {
+    if (!graphRequest(request)) return;
+    browserRequests[request.method()]++;
+    if (request.method() === 'GET') inFlightReads.add(request);
+  });
+  const readFinished = request => inFlightReads.delete(request);
+  page.on('requestfinished', readFinished); page.on('requestfailed', readFinished);
+  await page.route('**/api/listenings/*/graph', async route => {
+    const method = route.request().method();
+    if (!(method === 'POST' && dropPost || method === 'DELETE' && dropDelete)) return route.continue();
+    if (method === 'POST') dropPost = false; else dropDelete = false;
+    // Accept the mutation at the real fixture, then lose only its browser-facing
+    // response. Destroying a reused HTTP socket can trigger Chromium's internal
+    // transport retry, which is not an application-generated second mutation.
+    const before = counters[method];
+    const response = await route.fetch({ maxRetries: 0 });
+    assert.equal(response.status(), 200);
+    const accepted = await response.json();
+    assert.equal(counters[method], before + 1, 'the fixture must accept the mutation exactly once');
+    assert.equal(accepted.status.state, method === 'POST' ? 'running' : 'cancelled');
+    lostResponses.push({ method, roundId: accepted.status.round.id });
+    await route.abort('failed');
+  });
+  async function assertReadPollingStopped() {
+    await until(() => inFlightReads.size === 0);
+    // Drain a pre-existing coalesced read (35 ms), without waiting out a poll
+    // interval. The subsequent full interval must contain no new GET requests.
+    await page.waitForTimeout(100);
+    await until(() => inFlightReads.size === 0);
+    const reads = counters.GET, browserReads = browserRequests.GET;
+    await page.waitForTimeout(2300);
+    assert.equal(counters.GET, reads);
+    assert.equal(browserRequests.GET, browserReads);
+  }
   const screenshot = async name => { if (directory) await page.screenshot({ path: path.join(directory, name), fullPage: false }); };
   async function settledContinuation() {
     // Wait for the action's final render and its paint, not just completed status text.
@@ -186,15 +220,17 @@ try {
   await page.evaluate(value => window.graph.setProcessing(value), statuses.a);
   // The server accepts a start, but its response and the first recovery GET are lost.
   // Recovery must only read, then poll to completion without an SSE event or another click.
-  const beforeLostPost = counters.POST;
+  const beforeLostPost = counters.POST, beforeLostBrowserPost = browserRequests.POST;
   dropPost = true; failGets = 1;
   await page.locator('#graph-generate').click();
   await page.locator('#graph-status').filter({ hasText: '服务器操作状态尚未确认' }).waitFor();
   assert.equal(await page.locator('#graph-generate').isDisabled(), true);
   await page.locator('#graph-generate').evaluate(el => { el.dispatchEvent(new Event('click')); });
   assert.equal(counters.POST, beforeLostPost + 1);
+  assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
   await page.locator('#graph-status').filter({ hasText: '正在整理关系' }).waitFor();
   assert.equal(counters.POST, beforeLostPost + 1);
+  assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
   statuses.a = { ...statuses.a, state: 'partial', pendingJobs: 0, runningJobs: 0,
     progress: { totalWindows: 10, completedWindows: 8, partialWindows: 2, remainingWindows: 2 }, round: { ...statuses.a.round, finishedAt: Date.now() } }; revision++;
   await page.locator('#graph-status').filter({ hasText: '关系部分完成' }).waitFor();
@@ -202,9 +238,9 @@ try {
   assert.match(await page.locator('#graph-progress').textContent(), /其中 2 个部分完成/);
   assert.equal(await page.locator('#graph-generate').textContent(), '检查新增或变化的内容');
   assert.equal(await page.locator('#graph-generate').isEnabled(), true);
-  const partialReads = counters.GET;
-  await page.waitForTimeout(2300); assert.equal(counters.GET, partialReads);
+  await assertReadPollingStopped();
   assert.equal(counters.POST, beforeLostPost + 1);
+  assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
   checks.push('Lost POST response plus failed recovery GET recovers through reads only; active polling reaches honest partial completion without SSE; no duplicate generation');
   await screenshot('relation-progress-desktop-partial.png');
   // A final invalidation can be the only signal; its failed GET must retry itself.
@@ -214,21 +250,24 @@ try {
   await page.locator('#graph-status').filter({ hasText: '关系整理失败' }).waitFor();
   assert.equal(await page.locator('#graph-generate').textContent(), '重试未完成的关系');
   assert.equal(counters.POST, beforeLostPost + 1);
+  assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
   // Online/visibility reconciliation also only reads the existing server state.
   statuses.a = { ...statuses.a, state: 'complete', progress: { totalWindows: 10, completedWindows: 10, remainingWindows: 0 } }; revision++;
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await page.locator('#graph-status').filter({ hasText: '关系整理完成' }).waitFor();
   assert.equal(counters.POST, beforeLostPost + 1);
+  assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
   await page.locator('#graph-generate').click();
   await page.locator('#graph-cancel').waitFor();
   await page.waitForFunction(() => !document.querySelector('#graph-cancel').disabled);
-  const beforeLostDelete = counters.DELETE; dropDelete = true;
+  const beforeLostDelete = counters.DELETE, beforeLostBrowserDelete = browserRequests.DELETE; dropDelete = true;
   await page.locator('#graph-cancel').click();
   await page.locator('#graph-status').filter({ hasText: '关系整理已取消' }).waitFor();
   assert.equal(counters.DELETE, beforeLostDelete + 1);
+  assert.equal(browserRequests.DELETE, beforeLostBrowserDelete + 1);
   await settledContinuation();
-  const cancelledReads = counters.GET;
-  await page.waitForTimeout(2300); assert.equal(counters.GET, cancelledReads);
+  await assertReadPollingStopped();
+  assert.deepEqual(lostResponses.map(response => response.method), ['POST', 'DELETE']);
   checks.push('Final invalidation read failures retry; online refresh reconciles without POST; lost DELETE response recovers cancellation and stops polling');
   await page.locator('#graph-generate').click();
   await page.locator('#graph-cancel').waitFor();
@@ -236,7 +275,7 @@ try {
   assert.equal(await page.locator('#graph').textContent(), '');
   checks.push('Late start response cannot overwrite a newer listening; completed state can restart; destroy clears controls/timers');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed: true, checks, counters, screenshots: directory || null, provider: 'Local fixture only; zero external/model calls' }, null, 2));
+  console.log(JSON.stringify({ passed: true, checks, counters, browserRequests, lostResponses, screenshots: directory || null, provider: 'Local fixture only; zero external/model calls' }, null, 2));
 } finally {
   holdGet?.resolve(); holdPost?.resolve(); holdDelete?.resolve();
   await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
