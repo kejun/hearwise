@@ -134,3 +134,36 @@ test('记录已删除时停止轮询，不按网络故障无限重试', async t 
   poller.start('a'); await settle(); t.mock.timers.tick(30000);
   assert.equal(calls, 1);
 });
+
+test('关系待处理保持轮询，但未启用的历史关系不制造后台工作', () => {
+  const related = relations => snapshot({}, { processing: { relations } });
+  assert.deepEqual(processingView(related({ enabled: false, state: 'not_generated', pendingJobs: 8 })), { text: '已处理', pending: 0, canRetry: false });
+  assert.deepEqual(processingView(related({ enabled: true, state: 'queued', pendingJobs: 2 })), { text: '关系稍后补齐', pending: 2, canRetry: false });
+  assert.match(processingView(related({ enabled: true, runningJobs: 1 })).text, /关系整理中/);
+  assert.match(processingView(related({ enabled: true, partialJobs: 1 })).text, /关系部分完成/);
+  assert.match(processingView(related({ enabled: true, failedJobs: 1 })).text, /关系整理失败/);
+  assert.match(processingView(related({ enabled: true, state: 'waiting_key', pendingJobs: 1 })).text, /需 API Key/);
+});
+
+test('停止收听后仍会等待关系完成，而不是只等条目', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let calls = 0;
+  const poller = createProcessingPoller({ isCurrent: () => true, read: async () => {
+    calls++; return snapshot({}, { processing: { relations: calls < 3 ? { enabled: true, pendingJobs: 1 } : { enabled: true, state: 'complete' } } });
+  } });
+  t.after(() => poller.stop());
+  poller.start('a'); await settle(); t.mock.timers.tick(2000); await settle(); assert.equal(calls, 2);
+  t.mock.timers.tick(2000); await settle(); assert.equal(calls, 3);
+  t.mock.timers.tick(20000); assert.equal(calls, 3);
+});
+
+test('关系鉴权受阻时即使服务器仍持有旧 Key，也停止无效轮询', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let calls = 0;
+  const poller = createProcessingPoller({ isCurrent: () => true, read: async () => {
+    calls++; return snapshot({}, { processingAvailable: true, processing: { relations: { enabled: true, state: 'waiting_key', pendingJobs: 2 } } });
+  } });
+  t.after(() => poller.stop());
+  poller.start('a'); await settle(); t.mock.timers.tick(10000); await settle();
+  assert.equal(calls, 1);
+});

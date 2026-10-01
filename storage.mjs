@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { migrateRelations, relationMethods } from './relation-storage.mjs';
 
 const now = () => new Date().toISOString();
 const normalized = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
@@ -13,6 +14,7 @@ export class ListeningStore {
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000');
     this.migrate();
     this.recoverKnowledgeCheckpoints();
+    this.recoverRelationJobs();
     this.db.prepare("UPDATE listening_runs SET state='interrupted', ended_at=? WHERE state='active'").run(now());
     this.db.prepare("UPDATE extraction_jobs SET state='pending', updated_at=? WHERE state='running'").run(now());
   }
@@ -24,7 +26,7 @@ export class ListeningStore {
   }
   migrate() {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 5) throw new Error(`不支持的数据库版本：${version}`);
+    if (version > 6) throw new Error(`不支持的数据库版本：${version}`);
     if (version === 0) this.tx(() => {
       this.db.exec(`
         CREATE TABLE listenings (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -110,6 +112,7 @@ export class ListeningStore {
       this.db.exec(`ALTER TABLE listenings ADD COLUMN notes TEXT NOT NULL DEFAULT '';
         PRAGMA user_version = 5;`);
     });
+    if (version < 6) this.tx(() => migrateRelations(this));
   }
   createRun(listeningId, settings, title) {
     return this.tx(() => {
@@ -207,7 +210,7 @@ export class ListeningStore {
     const knowledge = this.knowledge(id);
     const jobs = this.db.prepare('SELECT * FROM extraction_jobs WHERE listening_id=? ORDER BY from_sequence').all(id).map(job => this.publicKnowledgeJob(job));
     const processing = this.processing(id);
-    return { listening, runs, segments, latestSegment, segmentCount, knowledge, jobs, processing, page, pageSize };
+    return { listening, runs, segments, latestSegment, segmentCount, knowledge, jobs, processing, graph: this.graphMetadata(id), graph_revision: listening.graph_revision, page, pageSize };
   }
   speechRun(listeningId, runId) {
     if (typeof listeningId !== 'string' || typeof runId !== 'string') return null;
@@ -269,7 +272,7 @@ export class ListeningStore {
     knowledge.visibleChangeCount = visibleIds.size;
     knowledge.bufferedSegments = this.db.prepare(`SELECT COUNT(*) AS n FROM segments
       WHERE listening_id=? AND sequence_no>(SELECT COALESCE(MAX(to_sequence),0) FROM extraction_jobs WHERE listening_id=?)`).get(id, id).n;
-    return { ...translations, knowledge };
+    return { ...translations, knowledge, relations: this.relationProcessing(id) };
   }
   segmentsQuery(listeningId, { runId = null, latest = null, afterSequence = null, beforeSequence = null, ids = null, limit = 50 } = {}) {
     if (!this.hasListening(listeningId)) return null;
@@ -752,3 +755,5 @@ export class ListeningStore {
     });
   }
 }
+
+Object.assign(ListeningStore.prototype, relationMethods);

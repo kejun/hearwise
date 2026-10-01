@@ -15,7 +15,7 @@ export function knowledgeRetryDelay(error, attempt) {
 }
 
 export function createKnowledgeScheduler({
-  store, listeningIds, keyFor, translationBusy, execute,
+  store, listeningIds, keyFor, translationBusy, execute, provider,
   onChange = () => {}, onError = () => {}, onIdle = () => {}, onLog = () => {},
   now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = timer => clearTimeout(timer),
   ...options
@@ -66,6 +66,7 @@ export function createKnowledgeScheduler({
   function coolDown(key, delay) {
     if (!Number.isFinite(delay) || delay <= 0) return;
     keyCooldowns.set(key, Math.max(keyCooldowns.get(key) || 0, now() + delay));
+    provider?.coolDown(key, delay);
   }
   async function perform(job, key, startedAt) {
     try {
@@ -133,7 +134,8 @@ export function createKnowledgeScheduler({
         Number(job.ready_at) || 0,
         lastStarted.has(id) ? lastStarted.get(id) + config.minStartIntervalMs : 0,
         busy ? Date.parse(job.created_at) + config.translationGraceMs : 0,
-        keyCooldowns.get(key) || 0
+        keyCooldowns.get(key) || 0,
+        provider?.readyAt(key) || 0
       );
       if (readyAt > time) { nextWake = Math.min(nextWake, readyAt); continue; }
       store.markJob(job.id, 'running');

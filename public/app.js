@@ -3,6 +3,7 @@ import { INTERIM_TRANSLATION_MAX_LENGTH, validateInterimTranslation } from './tr
 import { processingView, createProcessingPoller } from './processing-state.js';
 import { createSpeechController } from './speech-controller.js';
 import { speechConfig } from './speech-protocol.js';
+import { createKnowledgeGraph, readKnowledgeView, saveKnowledgeView } from './knowledge-graph.js';
 
 const $ = id => document.getElementById(id);
 const els = {
@@ -83,6 +84,7 @@ let lastTranslationAt = 0;
 let startAfterSave = false;
 let testController;
 let listeningId = null;
+let listeningGeneration = 0;
 let detail = null;
 let detailPage = 0;
 let historyPage = 0;
@@ -124,6 +126,28 @@ els.knowledgeTrack.addEventListener('click', event => {
   syncKnowledgeTrack();
 });
 syncKnowledgeTrack();
+let knowledgeView = readKnowledgeView(localStorage);
+const knowledgeGraph = createKnowledgeGraph({
+  root: $('knowledge-graph'), getKey: () => saved.key,
+  onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
+  onStarted: id => { if (id === listeningId) { fetchDetail().catch(() => {}); startPolling(); } },
+  loadSegment: loadKnowledgeEvidence,
+  locateSegment: locateKnowledgeEvidence,
+  onNodes: items => { if (detail?.listening.id === listeningId) { detail.knowledge = items; renderKnowledge(); } },
+  runNumber: segment => detail?.runs.find(run => run.id === segment.run_id)?.run_no || '?'
+});
+function setKnowledgeView(value) {
+  knowledgeView = value === 'graph' ? 'graph' : 'list';
+  saveKnowledgeView(localStorage, knowledgeView);
+  els.knowledgeList.hidden = knowledgeView !== 'list';
+  knowledgeGraph.setActive(knowledgeView === 'graph');
+  $('knowledge-view-list').setAttribute('aria-pressed', String(knowledgeView === 'list'));
+  $('knowledge-view-graph').setAttribute('aria-pressed', String(knowledgeView === 'graph'));
+  syncKnowledgeToggleAll();
+}
+$('knowledge-view-list').addEventListener('click', () => setKnowledgeView('list'));
+$('knowledge-view-graph').addEventListener('click', () => setKnowledgeView('graph'));
+setKnowledgeView(knowledgeView);
 let connectionGeneration = 0; // 每次连接递增；旧连接的事件/定时器不得污染新会话
 let activeRunId = null;
 let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，final 到达前保留不闪空窗
@@ -766,7 +790,38 @@ function renderTranscript() {
   }
   els.loadMore.hidden = !detail || detail.segments.length >= detail.segmentCount;
 }
+// Fetch by stable segment UUID, independent of transcript pagination.
+async function loadKnowledgeEvidence(segmentId, signal) {
+  const requestedId = listeningId;
+  const requestedGeneration = listeningGeneration;
+  if (!requestedId) throw new Error('请先选择收听记录');
+  const loaded = detail?.segments.find(segment => segment.id === segmentId);
+  if (loaded?.translation_state === 'complete') return loaded;
+  const response = await fetch(`/api/listenings/${encodeURIComponent(requestedId)}/segments?ids=${encodeURIComponent(segmentId)}`, { signal });
+  const result = await response.json();
+  if (listeningId !== requestedId || listeningGeneration !== requestedGeneration || signal?.aborted) throw new Error('已切换收听记录，请重新选择证据');
+  if (!response.ok) throw new Error(result.error || '原文依据读取失败');
+  const segment = result.items?.find(row => row.id === segmentId);
+  if (!segment) throw new Error('原文依据不存在或已删除');
+  return segment;
+}
+function locateKnowledgeEvidence(segment) {
+  if (!detail || segment.listening_id && segment.listening_id !== listeningId) return;
+  const index = detail.segments.findIndex(row => row.id === segment.id);
+  if (index < 0) detail.segments.push(segment); else detail.segments[index] = segment;
+  detail.segments.sort((a, b) => a.sequence_no - b.sequence_no);
+  renderTranscript();
+  const card = document.getElementById(`segment-${segment.id}`);
+  if (!card) return;
+  const panel = card.closest('details'); if (panel) panel.open = true;
+  card.tabIndex = -1;
+  card.scrollIntoView({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  card.focus({ preventScroll: true });
+}
 function renderKnowledge() {
+  knowledgeGraph.select(listeningId);
+  const graphNodes = knowledgeGraph.setNodes(detail?.knowledge || []);
+  if (detail && graphNodes) detail.knowledge = graphNodes;
   els.knowledgeCount.textContent = String(detail?.knowledge.length || 0);
   // 全量重建会丢展开状态：重建前记录 open 条目，重建后恢复（实时 knowledge-upserted 会频繁触发重建）
   const openIds = new Set();
@@ -797,10 +852,13 @@ function renderKnowledge() {
     for (const mention of item.mentions || []) {
       const link = el('a', '', `“${mention.surface_text}”`);
       link.href = `#segment-${mention.segment_id}`;
-      link.addEventListener('click', event => {
-        if (!document.getElementById(`segment-${mention.segment_id}`)) {
-          event.preventDefault(); showError('该证据句尚未加载，请加载更多句子');
-        }
+      link.addEventListener('click', async event => {
+        event.preventDefault();
+        const selectedId = listeningId;
+        try {
+          const segment = await loadKnowledgeEvidence(mention.segment_id);
+          if (selectedId === listeningId) locateKnowledgeEvidence(segment);
+        } catch (error) { if (selectedId === listeningId) showError(error.message); }
       });
       evidence.append(link);
     }
@@ -811,11 +869,12 @@ function renderKnowledge() {
 // 知识条目「全部展开/收起」：按钮在 summary 内，点击不得触发面板自身折叠
 function syncKnowledgeToggleAll() {
   const cards = els.knowledgeList.querySelectorAll('details.knowledge-item');
-  els.knowledgeToggleAll.hidden = !cards.length;
+  els.knowledgeToggleAll.hidden = knowledgeView !== 'list' || !cards.length;
   if (cards.length) els.knowledgeToggleAll.textContent = [...cards].some(card => !card.open) ? '全部展开' : '全部收起';
 }
 // 追踪新增知识：面板折叠时先展开，再平滑滚动到卡片并短暂高亮；仅在开关开启时生效
 function focusKnowledgeItem(itemId) {
+  if (knowledgeView === 'graph') { knowledgeGraph.highlight(itemId, trackKnowledge); return; }
   if (!trackKnowledge || itemId == null) return;
   const card = els.knowledgeList.querySelector(`details.knowledge-item[data-id="${String(itemId)}"]`);
   if (!card) return;
@@ -842,6 +901,9 @@ function renderProcessing() {
   const view = processingView(detail);
   els.processingStatus.textContent = view.text;
   els.retryProcessing.hidden = !view.canRetry;
+  knowledgeGraph.setProcessing(detail.processing?.relations);
+  const revision = detail.graph?.graphRevision ?? detail.graph?.revision ?? detail.graph_revision;
+  if (revision != null) knowledgeGraph.invalidate(listeningId, revision);
 }
 function renderRecordMetadata() {
   if (!detail) return;
@@ -940,6 +1002,7 @@ function renderDetail() {
 async function fetchDetail(page = 1, append = false) {
   if (!listeningId) return;
   const requestedId = listeningId;
+  const generationAtStart = listeningGeneration;
   const metadataAtStart = metadataVersion;
   const processingAtStart = liveProcessing;
   const controller = new AbortController();
@@ -953,7 +1016,7 @@ async function fetchDetail(page = 1, append = false) {
     throw error;
   } finally { clearTimeout(timeout); }
   if (!response.ok) throw Object.assign(new Error(result.error || '无法读取收听记录'), { status: response.status });
-  if (listeningId !== requestedId) return;
+  if (listeningId !== requestedId || generationAtStart !== listeningGeneration) return;
   const segments = new Map(result.segments.map(s => [s.id, s]));
   if (detail?.listening.id === result.listening.id) for (const old of detail.segments) {
     if (!segments.has(old.id) || (phase === 'listening' && old.translation_state === 'complete' && segments.get(old.id).translation_state !== 'complete')) segments.set(old.id, old);
@@ -975,6 +1038,7 @@ async function fetchDetail(page = 1, append = false) {
     result.listening = { ...result.listening, title: detail.listening.title, notes: detail.listening.notes };
   }
   detail = result; detailPage = append ? page : Math.max(1, detailPage); renderDetail();
+  void knowledgeGraph.refresh();
 }
 function showListening() {
   els.listeningView.hidden = false; els.historyView.hidden = true;
@@ -1034,7 +1098,9 @@ async function selectListening(id) {
   closeRecordEditor();
   speech.stop();
   detailPoller.stop();
+  listeningGeneration++;
   listeningId = id; detail = null; detailPage = 0; liveSegments.clear(); liveKnowledge.clear(); liveProcessing = null;
+  knowledgeGraph.select(id);
   await fetchDetail();
   if (listeningId !== id || !detail) return;
   const lastRun = detail.runs.at(-1);
@@ -1053,7 +1119,9 @@ function resetListening() {
   speech.stop();
   detailPoller.stop();
   clearInterval(segmentPollTimer);
+  listeningGeneration++;
   listeningId = null; detail = null; detailPage = 0; currentSentenceId = null; currentSegmentId = null;
+  knowledgeGraph.select(null);
   activeRunId = null; provisionalFor = null;
   liveSegments.clear(); liveKnowledge.clear(); liveProcessing = null;
   clearTranslationWork();
@@ -1218,7 +1286,9 @@ async function start(preselected) {
       if (gen !== connectionGeneration || socket !== connection) return;
       const message = JSON.parse(event.data);
       if (message.type === 'listening-ready') {
+        if (listeningId !== message.listeningId) listeningGeneration++;
         listeningId = message.listeningId;
+        knowledgeGraph.select(listeningId);
         if (gen === connectionGeneration) activeRunId = message.runId;
         setPhase('listening');
         fetchDetail().catch(error => showError(error.message));
@@ -1252,6 +1322,9 @@ async function start(preselected) {
           renderKnowledge();
           focusKnowledgeItem(message.item.id); // 追踪开关开启时定位高亮（含更新已有条目）
         }
+      }
+      if (message.type === 'graph-invalidated' && message.listeningId === listeningId) {
+        knowledgeGraph.invalidate(message.listeningId, message.graphRevision);
       }
       if (message.type === 'processing-updated' && (!message.listeningId || message.listeningId === listeningId)) {
         if (message.processing) {

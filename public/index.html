@@ -73,7 +73,19 @@
           <div class="record-editor-actions"><button class="switch-button" id="save-record" type="submit">保存</button><button class="switch-button" id="cancel-record" type="button">取消</button></div>
         </form>
         <p class="record-feedback" id="record-edit-status" role="status" aria-live="polite"></p>
-        <details class="knowledge-panel" open><summary>对话知识 <span id="knowledge-count">0</span><button class="toggle-all" id="knowledge-toggle-all" type="button" hidden>全部展开</button><button class="toggle-all knowledge-track" id="knowledge-track" type="button" aria-pressed="false" title="开启后，新知识出现时自动滚动到对应卡片并短暂高亮">追踪新增</button></summary><div id="knowledge-list" class="knowledge-list"></div></details>
+        <details class="knowledge-panel" open>
+          <summary>对话知识 <span id="knowledge-count">0</span></summary>
+          <div class="knowledge-view-toolbar">
+            <div class="knowledge-view-switch" role="group" aria-label="知识视图">
+              <button id="knowledge-view-list" type="button" aria-pressed="true" aria-controls="knowledge-list">列表</button>
+              <button id="knowledge-view-graph" type="button" aria-pressed="false" aria-controls="knowledge-graph">图谱</button>
+            </div>
+            <button class="toggle-all" id="knowledge-toggle-all" type="button" hidden>全部展开</button>
+            <button class="toggle-all knowledge-track" id="knowledge-track" type="button" aria-pressed="false" title="列表中追踪新卡片；图谱中高亮更新，不移动当前视图">追踪新增</button>
+          </div>
+          <div id="knowledge-list" class="knowledge-list"></div>
+          <div id="knowledge-graph" class="knowledge-graph" hidden></div>
+        </details>
         <details class="runs-panel" id="runs-panel" open><summary><h3>收听片段</h3></summary><div id="runs-list"></div></details>
         <details class="transcript-panel" open><summary class="transcript-head"><h3>原文与译文</h3><select class="download-select" id="download-select" aria-label="下载原文或译文"><option value="" selected>下载…</option><option value="original">下载原文</option><option value="translation">下载译文</option></select></summary>
           <div class="transcript-speech" id="transcript-speech-controls" aria-label="全文语音播报" hidden>
