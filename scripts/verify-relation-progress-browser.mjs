@@ -15,10 +15,10 @@ const limits = { maxWindowRequests: 3, requestTimeoutMs: 30000, maxConcurrent: 2
 const nodes = [{ id: 'kodak', canonical_name: 'Eastman Kodak', display_label: 'organization', content_version: 1, short_description: '对话中提到的相机公司' },
   { id: 'brownie', canonical_name: 'Brownie camera', display_label: 'product', content_version: 1 }];
 const relation = { id: 'edge', subject_item_id: 'kodak', object_item_id: 'brownie', predicate: 'released', assertions: [{ id: 'claim', status: 'active', modality: 'asserted', polarity: 'positive', statement: 'Kodak released the Brownie camera.' }] };
-const savedRelations = { a: [relation], b: [] }, postBodies = [];
+const savedRelations = { a: [relation], b: [] }, postBodies = [], failedReads = [];
 const statuses = { a: { enabled: false, state: 'not_generated', limits }, b: { enabled: false, state: 'not_generated', limits } };
 const counters = { GET: 0, POST: 0, DELETE: 0 };
-let revision = 1, roundNumber = 0, holdGet, holdPost, holdDelete, dropPost = false, dropDelete = false, failGets = 0, rejectNextRetry = false, startedEvents = 0, browser;
+let revision = 1, roundNumber = 0, holdGet, holdPost, holdDelete, dropPost = false, dropDelete = false, failRecoveryReadAfterPost = false, failGets = 0, rejectNextRetry = false, startedEvents = 0, browser;
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const until = async check => {
   const deadline = Date.now() + 10000;
@@ -45,7 +45,7 @@ const server = http.createServer(async (req, res) => {
   if (!id) { res.writeHead(404); return res.end(); }
   counters[req.method]++;
   if (req.method === 'GET') {
-    if (failGets > 0) { failGets--; res.writeHead(503, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: '临时读取失败' })); }
+    if (failGets > 0) { failGets--; failedReads.push({ listeningId: id, roundId: statuses[id].round?.id }); res.writeHead(503, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: '临时读取失败' })); }
     const data = structuredClone({ listeningId: id, graphRevision: revision, nodes: id === 'a' ? nodes : [{ id: 'other', canonical_name: '另一段收听', type: 'term' }], relations: statuses[id].enabled ? savedRelations[id] : [], status: statuses[id] });
     const gate = holdGet; holdGet = null; if (gate) await gate.promise;
     res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(data));
@@ -99,6 +99,11 @@ try {
     assert.equal(counters[method], before + 1, 'the fixture must accept the mutation exactly once');
     assert.equal(accepted.status.state, method === 'POST' ? 'running' : 'cancelled');
     lostResponses.push({ method, roundId: accepted.status.round.id });
+    if (method === 'POST' && failRecoveryReadAfterPost) {
+      // Arm only after this POST was accepted. A preceding terminal-detail GET
+      // must not consume the failure intended for the lost-response recovery.
+      failRecoveryReadAfterPost = false; failGets++;
+    }
     await route.abort('failed');
   });
   async function assertReadPollingStopped() {
@@ -232,12 +237,16 @@ try {
   assert.match(await page.locator('#graph-status').textContent(), /等待相关译文/);
   assert.equal(await page.locator('#graph-generate').isDisabled(), true);
   await page.evaluate(value => window.graph.setProcessing(value), statuses.a);
+  await settledContinuation();
+  await until(() => inFlightReads.size === 0);
   // The server accepts a start, but its response and the first recovery GET are lost.
   // Recovery must only read, then poll to completion without an SSE event or another click.
-  const beforeLostPost = counters.POST, beforeLostBrowserPost = browserRequests.POST;
-  dropPost = true; failGets = 1;
+  const beforeLostPost = counters.POST, beforeLostBrowserPost = browserRequests.POST, failuresBeforeLostPost = failedReads.length;
+  dropPost = true; failRecoveryReadAfterPost = true;
   await page.locator('#graph-generate').click();
   await page.locator('#graph-status').filter({ hasText: '服务器操作状态尚未确认' }).waitFor();
+  assert.equal(failedReads.length, failuresBeforeLostPost + 1);
+  assert.equal(failedReads.at(-1).roundId, lostResponses.find(response => response.method === 'POST').roundId, 'the failed GET must reconcile the accepted lost-response POST');
   assert.equal(await page.locator('#graph-generate').isDisabled(), true);
   await page.locator('#graph-generate').evaluate(el => { el.dispatchEvent(new Event('click')); });
   assert.equal(counters.POST, beforeLostPost + 1);
@@ -351,7 +360,7 @@ try {
   assert.equal(await page.locator('#graph').textContent(), '');
   checks.push('Late start response cannot overwrite a newer listening; completed state can restart; destroy clears controls/timers');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed: true, checks, counters, browserRequests, lostResponses, screenshots: directory || null, provider: 'Local fixture only; zero external/model calls' }, null, 2));
+  console.log(JSON.stringify({ passed: true, checks, counters, browserRequests, lostResponses, failedReads, screenshots: directory || null, provider: 'Local fixture only; zero external/model calls' }, null, 2));
 } finally {
   holdGet?.resolve(); holdPost?.resolve(); holdDelete?.resolve();
   await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
