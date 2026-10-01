@@ -1,4 +1,5 @@
-import { extractRelations, buildRelationInput, raceRelationAbort, RELATION_CONTRACT_VERSION, RELATION_MODEL, RELATION_REQUEST_TIMEOUT_MS } from './relations.mjs';
+import { safeRelationReason } from './relation-diagnostics.mjs';
+import { extractRelations, buildRelationRequest, raceRelationAbort, RELATION_CONTRACT_VERSION, RELATION_MODEL, RELATION_REQUEST_TIMEOUT_MS } from './relations.mjs';
 
 export const RELATION_MAX_REQUESTS = 3;
 export function relationRetryDelay(error, requestCount) {
@@ -13,6 +14,7 @@ export function relationRetryDelay(error, requestCount) {
   return delay <= 300000 ? delay : null;
 }
 const safeCode = error => error?.status ? `HTTP_${error.status}` :
+  safeRelationReason(error?.reason) !== 'UNKNOWN_REASON' ? safeRelationReason(error.reason) :
   ['RELATION_INVALID_RESPONSE', 'RELATION_OUTPUT_LIMIT'].includes(error?.code) ? error.code :
     ['TimeoutError', 'AbortError'].includes(error?.name) ? 'REQUEST_TIMEOUT' : 'REQUEST_FAILED';
 const stopped = status => ['paused', 'cancelled'].includes(status?.state) ||
@@ -40,7 +42,7 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
     try {
       if ((job.prompt_version && job.prompt_version !== RELATION_CONTRACT_VERSION) ||
         (job.model_version && job.model_version !== RELATION_MODEL)) throw Object.assign(new Error('RELATION_CONTRACT_CHANGED'), { reason: 'RELATION_CONTRACT_CHANGED' });
-      buildRelationInput(job.input);
+      buildRelationRequest(job.input);
     } catch (error) {
       const code = error?.reason || 'RELATION_INPUT_INVALID';
       store.failRelationJob(job.id, { code, terminal: true });
@@ -90,10 +92,10 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
       if (!store.hasListening(id) || requestSignal.aborted) return { kind: 'discarded' };
       if (stopped(store.relationProcessing?.(id))) return { kind: 'discarded' };
       const result = store.commitRelationJob(job.id, { relations: parsed.relations,
-        rejected: parsed.rejected || [], returnedCount: parsed.returnedCount, usage: parsed.usage || null });
+        rejected: parsed.rejected || [], returnedCount: parsed.returnedCount, coverageLimited: parsed.coverageLimited === true, usage: parsed.usage || null });
       if (result?.stale) return { kind: 'discarded', reason: 'stale' };
       notify(onChange, id, result);
-      return { kind: 'terminal', outcome: parsed.rejected?.length || input.coverage_limited ? 'partial' :
+      return { kind: 'terminal', outcome: parsed.rejected?.length || input.coverage_limited || parsed.coverageLimited ? 'partial' :
         parsed.relations.length ? 'ok' : 'empty', ...result };
     } catch (error) {
       if (!store.hasListening(id)) return { kind: 'discarded' };

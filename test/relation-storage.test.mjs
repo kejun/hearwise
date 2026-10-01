@@ -583,3 +583,140 @@ test('a selective retry cannot reopen a cancelled late-result fence', t => {
   assert.equal(h.store.graph(h.run.listeningId).relations.length, 0);
   assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'cancelled');
 });
+
+test('v2 rejection metadata is bounded, allowlisted and persisted without source or model strings', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId); const job = h.reserve();
+  const metadata = { schema_version: 2, stage: 'identity', row_shape: 'object', evidence_count: 5,
+    unknown_evidence_count: 999, focus_evidence_count: -1, subject_mention_known: false, object_mention_known: true,
+    subject_endpoint_known: true, object_endpoint_known: true, has_legacy_supports: false,
+    raw_row: 'PRIVATE ATLAS SOURCE', quote: 'PRIVATE ORIGINAL', subject_item_id: 'SECRET_ID', field: 'SECRET FIELD', token: 'Bearer SECRET' };
+  h.store.commitRelationJob(job.id, { relations: [], rejected: [{ code: 'MENTION_ENDPOINT_MISMATCH', index: 0, metadata }], returnedCount: 1 });
+  const saved = h.store.getRelationJob(job.id).rejected[0];
+  assert.deepEqual(saved.metadata, { schema_version: 2, stage: 'identity', row_shape: 'object', evidence_count: 5,
+    unknown_evidence_count: 99, subject_mention_known: false, object_mention_known: true,
+    subject_endpoint_known: true, object_endpoint_known: true, has_legacy_supports: false });
+  assert.doesNotMatch(JSON.stringify(saved), /PRIVATE|SECRET|Bearer/);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).diagnostics.rejectionStages.identity, 1);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).diagnostics.rejectionReasons[0].code, 'MENTION_ENDPOINT_MISMATCH');
+  h.reopen(); assert.deepEqual(h.store.getRelationJob(job.id).rejected[0], saved);
+});
+
+test('v2 registry clipping is persisted as partial coverage without an automatic paid replay', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId); const job = h.reserve();
+  const fingerprint = job.input_fingerprint;
+  h.store.commitRelationJob(job.id, { relations: [relation(job, { status: 'needs_review' })], returnedCount: 1, coverageLimited: true });
+  const graph = h.store.graph(h.run.listeningId);
+  assert.equal(graph.status.state, 'partial'); assert.equal(graph.status.diagnostics.coverageLimitedWindows, 1);
+  assert.equal(graph.status.diagnostics.reviewRelationCount, 1); assert.equal(graph.status.diagnostics.reviewAssertionCount, 1);
+  assert.equal(h.store.getRelationJob(job.id).input_fingerprint, fingerprint);
+  assert.equal(h.store.getRelationJob(job.id).input.coverage_limited, true);
+  assert.equal(h.job(), null); h.reopen(); assert.equal(h.job(), null);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).diagnostics.coverageLimitedWindows, 1);
+  assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 1);
+});
+
+test('v1 pending and interrupted requests are fenced without another attempt, explicit retry creates v2 only for problems', t => {
+  const h = fixture(t); h.seed();
+  for (let i = 2; i <= 18; i++) h.store.addSegment(h.run.listeningId, h.run.runId, { id: `protocol-${i}`, text: 'Acme released Camera.' });
+  h.store.enableRelations(h.run.listeningId);
+  const completed = h.reserve(); h.store.commitRelationJob(completed.id, { relations: [relation(completed)] });
+  const running = h.reserve(); const pending = h.store.nextRelationJob(h.run.listeningId, { quietMs: 0, maxConcurrent: 2 });
+  assert.ok(pending);
+  h.store.db.exec("UPDATE relation_jobs SET prompt_version='relations-v1'");
+  for (const row of h.store.db.prepare('SELECT id,input_json FROM relation_jobs').all()) {
+    const input = JSON.parse(row.input_json); input.prompt_version = 'relations-v1';
+    for (const candidate of input.candidates) delete candidate.mentions;
+    const oldFingerprint = hash(JSON.stringify({ ...input, input_fingerprint: undefined, window_revision: undefined, existing_assertions: undefined, coverage_limited: undefined }));
+    input.input_fingerprint = oldFingerprint;
+    h.store.db.prepare('UPDATE relation_jobs SET input_json=?,input_fingerprint=? WHERE id=?').run(JSON.stringify(input), oldFingerprint, row.id);
+  }
+  h.reopen();
+  assert.equal(h.store.getRelationJob(completed.id).state, 'complete');
+  assert.equal(h.store.getRelationJob(completed.id).prompt_version, 'relations-v1', 'legacy protocol metadata is not relabeled');
+  for (const old of [running, pending]) {
+    const job = h.store.getRelationJob(old.id);
+    assert.equal(job.state, 'failed'); assert.equal(job.last_error, 'RELATION_CONTRACT_CHANGED');
+    assert.equal(job.request_count, old.request_count); assert.equal(h.store.beginRelationRequest(old.id), null);
+  }
+  assert.equal(h.job(), null); assert.equal(h.store.graph(h.run.listeningId).relations.length, 1);
+  const status = h.store.relationProcessing(h.run.listeningId);
+  assert.equal(status.diagnostics.failureReasons[0].code, 'RELATION_CONTRACT_CHANGED');
+  h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: status.round.epoch });
+  const retry = h.reserve(); assert.equal(retry.prompt_version, 'relations-v2'); assert.equal(retry.window_id, running.window_id);
+  h.store.commitRelationJob(retry.id, { relations: [] });
+  const next = h.reserve(); assert.equal(next.window_id, pending.window_id); assert.equal(next.prompt_version, 'relations-v2');
+  h.store.commitRelationJob(next.id, { relations: [] });
+  assert.equal(h.job(), null); assert.equal(h.store.getRelationJob(completed.id).request_count, 1);
+});
+
+test('terminal legacy cache survives upgrade, restart and redundant mention dirtiness without new requests', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const job = h.reserve(); h.store.commitRelationJob(job.id, { relations: [relation(job)], rejected: [{ code: 'FIELD_INVALID' }] });
+  const input = job.input; input.prompt_version = 'relations-v1'; for (const c of input.candidates) delete c.mentions;
+  const fingerprint = hash(JSON.stringify({ ...input, input_fingerprint: undefined, window_revision: undefined, existing_assertions: undefined, coverage_limited: undefined }));
+  input.input_fingerprint = fingerprint;
+  h.store.db.prepare("UPDATE relation_jobs SET prompt_version='relations-v1',input_json=?,input_fingerprint=?,returned_count=NULL,accepted_count=NULL WHERE id=?")
+    .run(JSON.stringify(input), fingerprint, job.id);
+  h.store.db.prepare('UPDATE relation_windows SET last_fingerprint=? WHERE id=?').run(fingerprint, job.window_id);
+  h.reopen();
+  assert.equal(h.job(), null); assert.equal(h.store.getRelationJob(job.id).prompt_version, 'relations-v1');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).diagnostics.returnedCount, null);
+  h.store.db.prepare('INSERT INTO knowledge_mentions(item_id,segment_id,surface_text) VALUES(?,?,?)').run(job.input.candidates[0].id, h.segment.id, h.segment.original_text);
+  assert.equal(h.job(), null, 'redundant provenance does not bypass the settled legacy cache');
+  h.reopen(); assert.equal(h.job(), null); assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 1);
+  assert.equal(h.store.graph(h.run.listeningId).relations.length, 1);
+});
+
+test('v2 storage budgets the actual evidence wire before reserving a paid attempt', async t => {
+  const { buildRelationRequest } = await import('../relations.mjs');
+  const text = 'Acme released Camera. ' + '甲'.repeat(13970);
+  const h = fixture(t, text); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const job = h.job();
+  assert.equal(job.request_count, 0); assert.equal(job.input.coverage_limited, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(buildRelationRequest(job.input).body)) <= RELATION_LIMITS.requestBytes);
+  assert.ok(job.input.focus_segments[0].text.length < text.length);
+  assert.equal(job.input.focus_segments[0].source_revision, hash(text), 'full original revision remains the storage fence');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).requestCount, 0);
+});
+
+test('v2 workflow rejects an oversized wire envelope before reservation, even when normalized input fits', async () => {
+  const { buildRelationRequest, RELATION_CONTRACT_VERSION } = await import('../relations.mjs');
+  const { createRelationWorkflow } = await import('../relation-workflow.mjs');
+  const input = { listening_id: 'local', focus_segments: [{ id: 's1', text: 'Acme launched Camera. ' + '甲'.repeat(13970) }],
+    context_segments: [], candidates: [{ id: 'a', canonical_name: 'Acme', type: 'other' }, { id: 'b', canonical_name: 'Camera', type: 'other' }], existing_assertions: [] };
+  assert.ok(Buffer.byteLength(JSON.stringify(buildRelationInput(input))) < RELATION_LIMITS.requestBytes);
+  assert.throws(() => buildRelationRequest(input), error => error.reason === 'INPUT_BUDGET_EXCEEDED');
+  let requests = 0, calls = 0, failure;
+  const store = { hasListening: () => true, relationProcessing: () => ({ state: 'running' }),
+    failRelationJob: (_id, error) => { failure = error; }, beginRelationRequest: () => { requests++; } };
+  const workflow = createRelationWorkflow({ store, extract: async () => { calls++; } });
+  const result = await workflow.execute({ id: 'job', listening_id: 'local', prompt_version: RELATION_CONTRACT_VERSION, input }, 'fixture-key');
+  assert.equal(result.outcome, 'failed'); assert.equal(failure.code, 'INPUT_BUDGET_EXCEEDED');
+  assert.equal(requests, 0); assert.equal(calls, 0);
+});
+
+test('v2 workflow forwards registry coverage and preserves precise root protocol failure codes', async t => {
+  const { createRelationWorkflow } = await import('../relation-workflow.mjs');
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId);
+  const workflow = createRelationWorkflow({ store: h.store, extract: async () => ({ relations: [], rejected: [], returnedCount: 0, coverageLimited: true }) });
+  assert.equal((await workflow.execute(h.job(), 'fixture-key')).outcome, 'partial');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).diagnostics.coverageLimitedWindows, 1);
+  h.store.retryProblemRelations(h.run.listeningId, { expectedEpoch: h.store.relationProcessing(h.run.listeningId).round.epoch });
+  const failure = createRelationWorkflow({ store: h.store, extract: async () => {
+    throw Object.assign(new Error('PRIVATE raw model response'), { code: 'RELATION_INVALID_RESPONSE', reason: 'CONTRACT_VERSION_INVALID' });
+  } });
+  const job = h.job(); await failure.execute(job, 'fixture-key');
+  assert.equal(h.store.getRelationJob(job.id).last_error, 'CONTRACT_VERSION_INVALID');
+  assert.doesNotMatch(h.store.getRelationJob(job.id).last_error, /PRIVATE/);
+});
+
+test('an obsolete in-flight protocol cannot commit or reopen its window and late usage is retained', t => {
+  const h = fixture(t); h.seed(); h.store.enableRelations(h.run.listeningId); const job = h.reserve();
+  h.store.db.prepare("UPDATE relation_jobs SET prompt_version='relations-v1' WHERE id=?").run(job.id);
+  const result = h.store.commitRelationJob(job.id, { relations: [relation(job)], usage: { total_tokens: 13 } });
+  assert.equal(result.stale, true); assert.equal(result.reason, 'RELATION_CONTRACT_CHANGED');
+  assert.equal(h.store.graph(h.run.listeningId).relations.length, 0); assert.equal(h.job(), null);
+  assert.equal(h.store.getRelationJob(job.id).request_count, 1);
+  assert.equal(h.store.getRelationJob(job.id).last_error, 'RELATION_CONTRACT_CHANGED');
+  assert.equal(h.store.relationProcessing(h.run.listeningId).usageLastHour.totalTokens, 13);
+});

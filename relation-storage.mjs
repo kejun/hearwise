@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { safeRelationReason, readRelationDiagnostics } from './relation-diagnostics.mjs';
-import { buildRelationInput, canonicalizeRelation, isExplicitRelationCorrection, RELATION_LIMITS, RELATION_REQUEST_TIMEOUT_MS } from './relations.mjs';
+import { safeRelationReason, safeRejectedMetadata, readRelationDiagnostics } from './relation-diagnostics.mjs';
+import { buildRelationRequest, RELATION_CONTRACT_VERSION, canonicalizeRelation, isExplicitRelationCorrection, RELATION_LIMITS, RELATION_REQUEST_TIMEOUT_MS } from './relations.mjs';
 
 export const RELATION_WINDOW_SIZE = 6;
 export const RELATION_CONTEXT_SIZE = 3;
@@ -41,11 +41,41 @@ function stopRound(store, round, reason, now, state = 'paused') {
   store.db.prepare('UPDATE listenings SET relation_waiting_key=0 WHERE id=?').run(round.listening_id);
   return true;
 }
-const PROMPT_VERSION = 'relations-v1';
+const PROMPT_VERSION = RELATION_CONTRACT_VERSION;
 const MODEL_VERSION = 'qwen3.8-flash';
+function fenceObsoleteRelationJobs(store, listeningId = null) {
+  const jobs = store.db.prepare(`SELECT id,window_id,window_revision FROM relation_jobs WHERE state IN ('pending','running')
+    AND (prompt_version!=? OR model_version!=?) AND (? IS NULL OR listening_id=?)`)
+    .all(PROMPT_VERSION, MODEL_VERSION, listeningId, listeningId);
+  for (const job of jobs) {
+    store.db.prepare("UPDATE relation_jobs SET state='failed',last_error='RELATION_CONTRACT_CHANGED',updated_at=? WHERE id=?").run(stamp(), job.id);
+    // Preserve successes and changed source windows. The obsolete request itself
+    // is never upgraded/replayed automatically or allowed to reset attempts.
+    store.db.prepare("UPDATE relation_windows SET state='failed',ready_at=0,last_error='RELATION_CONTRACT_CHANGED' WHERE id=? AND state='pending' AND revision=?")
+      .run(job.window_id, job.window_revision);
+  }
+  return jobs.length;
+}
+
 const hash = value => createHash('sha256').update(value).digest('hex');
 const stableHash = value => hash(JSON.stringify(value));
+const relationInputFingerprint = input => stableHash({ ...input, input_fingerprint: undefined, window_revision: undefined, prompt_version: undefined,
+  existing_assertions: undefined, coverage_limited: undefined,
+  candidates: input.candidates.map(({ mentions, ...candidate }) => candidate) });
 const stamp = () => new Date().toISOString();
+// Protocol/diagnostic projection changes cannot reopen settled paid results.
+// Keep original prompt_version and unknown counts; normalize only the cache key.
+function normalizeRelationFingerprints(store) {
+  for (const row of store.db.prepare('SELECT id,window_id,input_json,input_fingerprint FROM relation_jobs').all()) {
+    const input = JSON.parse(row.input_json);
+    const fingerprint = relationInputFingerprint(input);
+    if (fingerprint === row.input_fingerprint && input.input_fingerprint === fingerprint) continue;
+    input.input_fingerprint = fingerprint;
+    store.db.prepare('UPDATE relation_jobs SET input_fingerprint=?,input_json=? WHERE id=?').run(fingerprint, JSON.stringify(input), row.id);
+    store.db.prepare('UPDATE relation_windows SET last_fingerprint=? WHERE id=? AND last_fingerprint=?').run(fingerprint, row.window_id, row.input_fingerprint);
+  }
+}
+
 const norm = value => String(value).normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
 
 // SQL triggers make dirtiness durable in the same transaction as every writer,
@@ -137,14 +167,7 @@ export function migrateRelations(store) {
   // The fingerprint no longer treats generated assertion coverage as source
   // identity. Upgrade saved snapshots too, so migration alone cannot replay a
   // paid complete/partial result or discard a recoverable pending attempt.
-  for (const row of db.prepare('SELECT id,window_id,input_json,input_fingerprint FROM relation_jobs').all()) {
-    const input = JSON.parse(row.input_json);
-    const fingerprint = stableHash({ ...input, input_fingerprint: undefined, window_revision: undefined,
-      existing_assertions: undefined, coverage_limited: undefined });
-    input.input_fingerprint = fingerprint;
-    db.prepare('UPDATE relation_jobs SET input_fingerprint=?,input_json=? WHERE id=?').run(fingerprint, JSON.stringify(input), row.id);
-    db.prepare('UPDATE relation_windows SET last_fingerprint=? WHERE id=? AND last_fingerprint=?').run(fingerprint, row.window_id, row.input_fingerprint);
-  }
+  normalizeRelationFingerprints(store);
   // Replace deployed v6 triggers, not just triggers on fresh databases.
   for (const row of db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'relation_%'").all()) db.exec(`DROP TRIGGER ${row.name}`);
   const clock = "CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)";
@@ -238,6 +261,8 @@ function inputFor(store, window) {
   const candidates = recalled.slice(0, 48).sort((a, b) => a.id.localeCompare(b.id)).map(item => ({ id: item.id, listening_id: item.listening_id,
     canonical_name: item.canonical_name, type: item.type, display_label: item.display_label,
     certainty: item.certainty,
+    mentions: item.mentions.filter(mention => typeof mention.surface_text === 'string' && mention.surface_text.length <= 2000)
+      .slice(0, 48).map(mention => ({ segment_id: mention.segment_id, surface_text: mention.surface_text })),
     aliases: [...item.aliases].sort((a, b) => Number(text.includes(norm(b))) - Number(text.includes(norm(a))) || a.localeCompare(b)).slice(0, 12),
     identity_revision: stableHash([item.canonical_name, item.type, item.display_label, [...item.aliases].sort(), item.certainty]) }));
   const candidateIds = new Set(candidates.map(c => c.id));
@@ -266,15 +291,19 @@ function inputFor(store, window) {
       subject_item_id: a.subject_item_id, object_item_id: a.object_item_id, predicate: a.predicate,
       statement: a.statement, polarity: a.polarity, modality: a.modality, conditions: a.conditions,
       time_scope: a.time_scope, attribution: a.attribution, status: a.status })),
-    coverage_limited: clipped || recalled.length > candidates.length || existing.length > 48 || recalled.some(c => c.aliases.length > 12),
+    coverage_limited: clipped || recalled.length > candidates.length || existing.length > 48 || recalled.some(c => c.aliases.length > 12 || c.mentions.length > 48 || c.mentions.some(m => typeof m.surface_text !== 'string' || m.surface_text.length > 2000)),
     candidate_count: recalled.length };
   // Enforce the actual wire-byte budget as well as character counts (CJK text
   // occupies multiple bytes). Prefer keeping focus source over optional context.
   for (;;) {
-    try { buildRelationInput(input); break; } catch (error) {
+    try { buildRelationRequest(input); break; } catch (error) {
       if (error.reason !== 'INPUT_BUDGET_EXCEEDED') throw error;
       input.coverage_limited = true;
       if (input.existing_assertions.length) { input.existing_assertions.pop(); continue; }
+      // Source mention records are optional provenance checks; drop them before
+      // sacrificing actual source evidence or names when the envelope is large.
+      const mentionedCandidate = input.candidates.find(c => c.mentions.length);
+      if (mentionedCandidate) { mentionedCandidate.mentions.pop(); continue; }
       const aliasCandidate = input.candidates.find(c => c.aliases.length);
       if (aliasCandidate) { aliasCandidate.aliases.pop(); continue; }
       const translated = [...input.context_segments, ...input.focus_segments].find(s => s.translation?.length);
@@ -289,7 +318,7 @@ function inputFor(store, window) {
   input.input_mode = [...input.focus_segments, ...input.context_segments].some(s => s.translation) ? 'bilingual' : 'source_only';
   // Existing assertion changes do not invalidate a parallel, independent window.
   // Corrections are checked against their saved identity and current status at commit.
-  input.input_fingerprint = stableHash({ ...input, window_revision: undefined, existing_assertions: undefined, coverage_limited: undefined });
+  input.input_fingerprint = relationInputFingerprint(input);
   return { input, pendingTranslation: segments.some(s => s.translation_state === 'pending') };
 }
 
@@ -340,6 +369,7 @@ function validateEntry(store, job, entry) {
 
 export const relationMethods = {
   recoverRelationJobs() {
+    this.tx(() => { normalizeRelationFingerprints(this); fenceObsoleteRelationJobs(this); });
     this.db.prepare("UPDATE relation_jobs SET state=CASE WHEN request_count>=max_requests THEN 'failed' ELSE 'pending' END,last_error='REQUEST_INTERRUPTED',updated_at=? WHERE state='running'").run(stamp());
     this.db.exec("UPDATE relation_windows SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE state='pending' AND EXISTS (SELECT 1 FROM relation_jobs j WHERE j.window_id=relation_windows.id AND j.window_revision=relation_windows.revision AND j.state='failed')");
     // Legacy work without a run record still needs an explicit resume. Restart
@@ -483,6 +513,7 @@ export const relationMethods = {
       const l = this.db.prepare('SELECT * FROM listenings WHERE id=? AND relation_enabled=1').get(listeningId);
       const round = currentRound(this, listeningId);
       if (!l || round?.state !== 'active') return null;
+      fenceObsoleteRelationJobs(this, listeningId);
       this.db.prepare("UPDATE relation_jobs SET state='superseded',updated_at=? WHERE listening_id=? AND epoch!=? AND state IN ('pending','running')").run(stamp(), listeningId, l.relation_epoch);
       const running = this.db.prepare("SELECT * FROM relation_jobs WHERE listening_id=? AND state='running'").all(listeningId);
       const concurrency = Math.max(1, Math.min(2, Number.isInteger(maxConcurrent) ? maxConcurrent : 1));
@@ -549,6 +580,9 @@ export const relationMethods = {
     return this.tx(() => {
       const job = this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId);
       if (!job || job.state !== 'pending' || job.ready_at > now) return null;
+      if (job.prompt_version !== PROMPT_VERSION || job.model_version !== MODEL_VERSION) {
+        fenceObsoleteRelationJobs(this, job.listening_id); return null;
+      }
       const round = currentRound(this, job.listening_id);
       if (round?.state !== 'active' || round.epoch !== job.epoch) return null;
       const window = this.db.prepare('SELECT * FROM relation_windows WHERE id=?').get(job.window_id);
@@ -594,13 +628,17 @@ export const relationMethods = {
       return publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
     });
   },
-  commitRelationJob(jobId, { relations = [], rejected = [], returnedCount, usage = null, now = Date.now() } = {}) {
+  commitRelationJob(jobId, { relations = [], rejected = [], returnedCount, coverageLimited = false, usage = null, now = Date.now() } = {}) {
     return this.tx(() => {
       const job = publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
       if (!job) return { stale: true, changed: false, missing: true };
       if (['complete', 'partial'].includes(job.state)) return { stale: false, changed: false, duplicate: true, graphRevision: this.graphMetadata(job.listening_id)?.graphRevision };
       const sanitizedUsage = safeUsage(usage);
       this.recordRelationUsage(jobId, { usage });
+      if (job.prompt_version !== PROMPT_VERSION || job.model_version !== MODEL_VERSION) {
+        fenceObsoleteRelationJobs(this, job.listening_id);
+        return { stale: true, changed: false, reason: 'RELATION_CONTRACT_CHANGED' };
+      }
       const window = this.db.prepare('SELECT w.*,l.relation_epoch FROM relation_windows w JOIN listenings l ON l.id=w.listening_id WHERE w.id=?').get(job.window_id);
       const round = currentRound(this, job.listening_id);
       if (!window || !['running', 'pending'].includes(job.state) || round?.state !== 'active' || window.relation_epoch !== job.epoch || inputFor(this, window).input.input_fingerprint !== job.input_fingerprint) {
@@ -610,7 +648,11 @@ export const relationMethods = {
         return { stale: true, changed: false, graphRevision: this.graphMetadata(job.listening_id)?.graphRevision };
       }
       if (!Array.isArray(relations) || relations.length > RELATION_LIMITS.relations || !Array.isArray(rejected)) throw new Error('RELATION_RESULT_LIMIT');
-      const rejects = rejected.slice(0, 64).map(r => ({ code: safeRelationReason(r.code || r.reason), ...(Number.isInteger(r.index) ? { index: r.index } : {}) }));
+      const rejects = rejected.slice(0, 64).map(r => {
+        const metadata = safeRejectedMetadata(r?.metadata);
+        return { code: safeRelationReason(r?.code || r?.reason),
+          ...(Number.isInteger(r?.index) && r.index >= 0 && r.index < 256 ? { index: r.index } : {}), ...(metadata ? { metadata } : {}) };
+      });
       let changed = false, accepted = 0, insertedRelations = 0;
       const time = stamp();
       for (const [index, raw] of relations.entries()) {
@@ -649,6 +691,12 @@ export const relationMethods = {
         accepted++; insertedRelations += Number(inserted);
       }
       if (changed) this.db.prepare('UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=?').run(job.listening_id);
+      // Registry clipping is result coverage, not new source identity. Persist
+      // it in the saved snapshot without dirtying/replaying a paid result.
+      if (coverageLimited === true) {
+        job.input.coverage_limited = true;
+        this.db.prepare('UPDATE relation_jobs SET input_json=? WHERE id=?').run(JSON.stringify(job.input), jobId);
+      }
       const state = rejects.length || job.input.coverage_limited ? 'partial' : 'complete';
       this.recordRelationUsage(jobId, { usage, outcome: state });
       const countedReturned = relations.length + rejected.length;

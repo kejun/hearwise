@@ -7,6 +7,7 @@ import { ListeningStore } from '../storage.mjs';
 import { createRelationScheduler } from '../relation-queue.mjs';
 import { createRelationWorkflow } from '../relation-workflow.mjs';
 import { extractRelations, buildRelationRequest, buildRelationInput, RELATION_SYSTEM_PROMPT } from '../relations.mjs';
+import { relationWireEnvelope, relationWireRow } from '../test-support/relation-wire-fixture.mjs';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 function seed(t, count = 24, limits) {
   const dir = mkdtempSync(path.join(tmpdir(), 'relation-throughput-'));
@@ -38,10 +39,10 @@ async function syntheticRun(t, maxConcurrent) {
       await new Promise(resolve => setTimeout(resolve, 25000)); active--;
       const subject = wire.candidates.find(n => n.canonical_name === 'Atlas'), object = wire.candidates.find(n => n.canonical_name === 'Nova');
       const s = wire.focus_segments[0];
-      return { ok: true, json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ relations: [{
+      return { ok: true, json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(relationWireEnvelope(wire, [relationWireRow(wire, {
         subject_item_id: subject.id, object_item_id: object.id, predicate: 'released', statement: 'Atlas 推出了 Nova', polarity: 'positive',
         modality: 'asserted', conditions: null, time_scope: null, attribution: null, status: 'active', correction_of: null,
-        supports: [{ segment_id: s.id, quote: s.text, role: 'relation' }] }] }) } }], usage: { total_tokens: 100 } }) };
+        supports: [{ segment_id: s.id, quote: s.text, role: 'relation' }] })])) } }], usage: { total_tokens: 100 } }) };
     } }) });
   const queue = createRelationScheduler({ store: h.store, keyFor: () => 'mock-key', execute: workflow.execute, maxConcurrent });
   queue.schedule(h.id, true); await settle();
@@ -96,7 +97,7 @@ test('two-slot hung transports exhaust finite per-window retries and finish with
   queue.pump(); t.mock.timers.tick(600000); await settle(); assert.equal(signals.length, 9);
 });
 
-test('compact representative wire payload removes bookkeeping without shortening source or translations', () => {
+test('bounded v2 registry preserves full source and translations while removing durable bookkeeping', () => {
   const id = i => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
   const input = { listening_id: id(100), window_id: `${id(100)}:0`, window_revision: 42, input_fingerprint: 'f'.repeat(64),
     focus_segments: Array.from({ length: 6 }, (_, i) => ({ id: id(i), sequence_no: i + 4, text: `Company ${i} released Product ${i}.`, translation: `公司 ${i} 发布了产品 ${i}。` })),
@@ -105,8 +106,11 @@ test('compact representative wire payload removes bookkeeping without shortening
   const request = buildRelationRequest(input), old = { model: 'qwen3.8-flash', enable_thinking: false, temperature: 0, max_tokens: 6000,
     messages: [{ role: 'system', content: RELATION_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(buildRelationInput(input)) }] };
   const before = Buffer.byteLength(JSON.stringify(old)), after = Buffer.byteLength(JSON.stringify(request.body));
-  assert.ok(after < before * 0.7);
+  assert.ok(after <= 90000, 'registry remains within the request byte budget');
   const wire = JSON.parse(request.body.messages[1].content);
+  assert.equal(wire.contract_version, 'relations-v2'); assert.ok(wire.evidence_version);
+  assert.ok(wire.evidence.length > 0); assert.ok(wire.mentions.length > 0);
+  assert.doesNotMatch(request.body.messages[1].content, /input_fingerprint|source_revision|window_revision|00000000-0000-4000/);
   assert.deepEqual(wire.focus_segments.map(s => s.text), input.focus_segments.map(s => s.text));
   assert.deepEqual(wire.context_segments.map(s => s.translation), input.context_segments.map(s => s.translation));
   console.info(JSON.stringify({ syntheticPayloadBytesBefore: before, syntheticPayloadBytesAfter: after, reductionPercent: Number(((before - after) / before * 100).toFixed(1)) }));

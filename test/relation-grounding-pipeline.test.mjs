@@ -1,4 +1,4 @@
-// Model-shaped JSON through the actual compact-ID extractor, semantic validation,
+// Synthetic model-shaped v2 JSON through the evidence-ID extractor, semantic validation,
 // workflow, SQLite commit, diagnostics, and graph filtering. Stub transport only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -6,6 +6,7 @@ import { ListeningStore } from '../storage.mjs';
 import { createRelationWorkflow } from '../relation-workflow.mjs';
 import { extractRelations } from '../relations.mjs';
 import { filterGraph } from '../public/knowledge-graph.js';
+import { relationWireEnvelope, relationWireRow } from '../test-support/relation-wire-fixture.mjs';
 
 const probes = [
   { label: 'baseline grounded edge', text: 'Atlas launched Nova.', accepted: 1 },
@@ -14,8 +15,8 @@ const probes = [
   { label: 'unrelated past', text: 'Atlas launched Nova. Delta acquired Echo in 2020.', quote: 'Atlas launched Nova.', accepted: 1 },
   { label: 'product introduction', text: 'Atlas introduced Nova.', accepted: 1 },
   { label: 'Chinese launch synonym', text: 'Atlas 上线了 Nova。', accepted: 1 },
-  { label: 'unique exact quote null offsets', text: 'Atlas launched Nova.', offsets: { start: null, end: null }, accepted: 1 },
-  { label: 'unique exact quote wrong offsets', text: 'Atlas launched Nova.', offsets: { start: 0, end: 12 }, accepted: 1 },
+  { label: 'server-generated exact offsets need no model character counts', text: 'Atlas launched Nova.', accepted: 1 },
+  { label: 'unknown evidence span never guesses a replacement', text: 'Atlas launched Nova.', unknownEvidence: true, reason: 'EVIDENCE_ID_INVALID' },
   { label: 'omitted nullable qualifiers', text: 'Atlas launched Nova.', fields: { conditions: undefined, attribution: undefined, time_scope: undefined }, accepted: 1 },
   { label: 'true negation retained', text: 'Atlas did not launch Nova.', fields: { polarity: 'negative' }, accepted: 1 },
   { label: 'true plan retained', text: 'Atlas will launch Nova.', fields: { modality: 'planned' }, accepted: 1 },
@@ -23,7 +24,7 @@ const probes = [
   { label: 'true plan cannot be omitted', text: 'Atlas will launch Nova.', reason: 'SEMANTIC_PLAN_DROPPED' },
   { label: 'attribution preceding short quote cannot be omitted', text: 'According to Delta, Atlas launched Nova.', quote: 'Atlas launched Nova.', reason: 'SEMANTIC_ATTRIBUTION_DROPPED' },
   { label: 'condition preceding quote cannot be omitted', text: 'If approved, Atlas will launch Nova.', quote: 'Atlas will launch Nova.', fields: { modality: 'planned' }, reason: 'SEMANTIC_CONDITION_DROPPED' },
-  { label: 'duplicate exact quote with bad offsets stays ambiguous', text: 'Atlas launched Nova. Atlas launched Nova.', quote: 'Atlas launched Nova.', offsets: { start: 1, end: 3 }, reason: 'QUOTE_NOT_EXACT_OR_AMBIGUOUS' },
+  { label: 'repeated exact clauses have deterministic distinct evidence IDs', text: 'Atlas launched Nova. Atlas launched Nova.', quote: 'Atlas launched Nova.', repeatedEvidence: true, accepted: 1 },
   { label: 'mandatory polarity never guessed', text: 'Atlas launched Nova.', fields: { polarity: undefined }, reason: 'QUALIFICATION_INVALID' },
   { label: 'introducing a product to someone is not a release', text: 'Atlas introduced Nova to Delta.', reason: 'SEMANTIC_PREDICATE_UNSUPPORTED' },
 ];
@@ -44,12 +45,20 @@ for (const probe of probes) test(`full relation pipeline: ${probe.label}`, async
         requests++;
         const body = JSON.parse(req.body), wire = JSON.parse(body.messages[1].content);
         assert.equal(body.model, 'qwen3.8-flash'); assert.equal(body.enable_thinking, false);
-        const row = { subject_item_id: wire.candidates.find(c => c.canonical_name === 'Atlas').id,
+        const proposal = { subject_item_id: wire.candidates.find(c => c.canonical_name === 'Atlas').id,
           object_item_id: wire.candidates.find(c => c.canonical_name === 'Nova').id,
           predicate: 'released', statement: 'Atlas 推出了 Nova', polarity: 'positive', modality: 'asserted',
           conditions: null, time_scope: null, attribution: null, status: 'active', correction_of: null,
-          supports: [{ segment_id: wire.focus_segments[0].id, quote: probe.quote || probe.text, role: 'relation', ...(probe.offsets || {}) }], ...(probe.fields || {}) };
-        return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ relations: [row] }) }, finish_reason: 'stop' }], usage: { total_tokens: 100 } }) };
+          supports: [{ segment_id: wire.focus_segments[0].id, quote: probe.quote || probe.text, role: 'relation' }], ...(probe.fields || {}) };
+        const row = relationWireRow(wire, proposal);
+        if (probe.unknownEvidence) row.evidence_ids = ['evidence-not-in-this-request'];
+        if (probe.repeatedEvidence) {
+          const repeated = wire.evidence.filter(span => span.quote.trim() === probe.quote);
+          for (const span of repeated) assert.equal(probe.text.slice(span.start, span.end), span.quote);
+          assert.ok(repeated.length >= 2); assert.notEqual(repeated[0].id, repeated[1].id);
+          assert.notEqual(repeated[0].start, repeated[1].start);
+        }
+        return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(relationWireEnvelope(wire, [row])) }, finish_reason: 'stop' }], usage: { total_tokens: 100 } }) };
       } });
       return parsed;
     } });

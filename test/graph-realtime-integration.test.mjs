@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { performance } from 'node:perf_hooks';
 import WebSocket from 'ws';
 import { graphFixture } from '../test-support/graph-fixture.mjs';
+import { relationWireEnvelope } from '../test-support/relation-wire-fixture.mjs';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, timeout = 7000) {
   const end = Date.now() + timeout;
@@ -25,7 +26,7 @@ for (const graphEnabled of [false, true]) test(`synthetic ${graphEnabled ? 'held
     relationStarted = true;
     await held;
     relationFinished = true;
-    return { relations: [] };
+    return relationWireEnvelope(input);
   } });
   t.after(async () => { release(); await fixture.close(); });
   if (graphEnabled) {

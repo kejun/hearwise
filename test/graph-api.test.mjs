@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { graphFixture } from '../test-support/graph-fixture.mjs';
+import { relationWireEnvelope, relationWireRow } from '../test-support/relation-wire-fixture.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(read, condition, timeout = 18000) {
@@ -51,7 +52,8 @@ test('graph generation resumes restored pending knowledge instead of waiting beh
     return seeded;
   }, modelResponse: body => {
     if (body.model === 'qwen-mt-flash') return undefined;
-    return JSON.parse(body.messages.at(-1).content).candidates ? { relations: [] } : { items: [] };
+    const input = JSON.parse(body.messages.at(-1).content);
+    return input.candidates ? relationWireEnvelope(input) : { items: [] };
   } });
   t.after(() => fixture.close());
   const id = fixture.seeded.listeningId;
@@ -74,12 +76,12 @@ test('graph DELETE cancels an in-flight request, preserves nodes and allows expl
     const subject = input.candidates.find(item => item.canonical_name === 'Eastman Kodak');
     const object = input.candidates.find(item => item.canonical_name === 'Brownie camera');
     const segment = input.focus_segments.find(item => item.text.includes('Eastman Kodak released'));
-    return !subject || !object || !segment ? { relations: [] } : { relations: [{
+    return !subject || !object || !segment ? relationWireEnvelope(input) : relationWireEnvelope(input, [relationWireRow(input, {
       subject_item_id: subject.id, object_item_id: object.id, predicate: 'released',
       statement: 'Eastman Kodak released the Brownie camera in 1900.', polarity: 'positive', modality: 'asserted',
       conditions: null, time_scope: '1900', attribution: null, status: 'active', correction_of: null,
       supports: [{ segment_id: segment.id, quote: segment.text, role: 'relation' }]
-    }] };
+    })]);
   } });
   t.after(async () => { release(); await fixture.close(); });
   const url = `${fixture.base}/api/listenings/${fixture.seeded.first.listeningId}/graph`;
@@ -143,12 +145,12 @@ test('explicit problem-window retry recovers rejected output and diagnostics wit
     const subject = input.candidates.find(c => c.canonical_name === 'Eastman Kodak');
     const object = input.candidates.find(c => c.canonical_name === 'Brownie camera');
     const segment = input.focus_segments.find(s => s.text.includes('Eastman Kodak released'));
-    if (!subject || !object || !segment) return { relations: [] };
+    if (!subject || !object || !segment) return relationWireEnvelope(input);
     responses++;
-    return { relations: [{ subject_item_id: subject.id, object_item_id: object.id, predicate: 'released',
+    return relationWireEnvelope(input, [relationWireRow(input, { subject_item_id: subject.id, object_item_id: object.id, predicate: 'released',
       statement: 'Eastman Kodak released Brownie camera in 1900.', polarity: responses === 1 ? undefined : 'positive',
       modality: 'asserted', status: 'active', time_scope: '1900',
-      supports: [{ segment_id: segment.id, quote: segment.text, role: 'relation' }] }] };
+      supports: [{ segment_id: segment.id, quote: segment.text, role: 'relation' }] })]);
   } });
   t.after(() => fixture.close());
   const url = `${fixture.base}/api/listenings/${fixture.seeded.first.listeningId}/graph`;

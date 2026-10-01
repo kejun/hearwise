@@ -52,3 +52,14 @@ test('failed or pending jobs do not falsely report that the model returned zero 
     assert.equal(diagnostics.failureReasons[0].code, 'RELATION_INVALID_RESPONSE');
   } finally { store.close(); }
 });
+
+test('v2 safe rejection metadata drops arbitrary fields and malformed types', async () => {
+  const { safeRejectedMetadata } = await import('../relation-diagnostics.mjs');
+  for (const bad of [null, [], 'PRIVATE', { schema_version: 1, stage: 'identity' }, { schema_version: 2, stage: 'PRIVATE' }]) {
+    assert.equal(safeRejectedMetadata(bad), undefined);
+  }
+  assert.deepEqual(safeRejectedMetadata({ schema_version: 2, stage: 'protocol', row_shape: 'PRIVATE', evidence_count: Infinity,
+    unknown_evidence_count: -1, focus_evidence_count: 101, subject_mention_known: 'SECRET', has_legacy_supports: true,
+    quote: 'PRIVATE', endpoints: ['SECRET'], field: 'Bearer key' }),
+  { schema_version: 2, stage: 'protocol', focus_evidence_count: 99, has_legacy_supports: true });
+});

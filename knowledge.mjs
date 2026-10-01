@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { normalizeIdentity, findIdentitySpans } from './identity-grounding.mjs';
 
 const promptDocument = readFileSync(new URL('./docs/knowledge-extraction-prompt.md', import.meta.url), 'utf8');
 export const SYSTEM_PROMPT = promptDocument.match(/## System Message：固定提示词\s*```text\n([\s\S]*?)\n```/)?.[1];
@@ -54,7 +55,7 @@ function sanitizeItem(item, focus, candidates, sourceText) {
     const name = alias.trim();
     if (aliases.includes(name)) continue;
     // 无原文依据的别名直接丢弃，不再拒绝整条
-    if (sourceText.some(text => findVerbatim(text, name)) || existingAliases.includes(name)) aliases.push(name);
+    if (sourceText.some(text => identityInSource(text, name)) || existingAliases.includes(name)) aliases.push(name);
   }
   const evidence = [];
   if (Array.isArray(item.evidence)) for (const entry of item.evidence.slice(0, 12)) {
@@ -92,7 +93,8 @@ const broadNames = new Set(['ai', '人工智能', '互联网', '摄影', '相机
 export const CONTRACT_REVISION = 'v2.1';
 export const LABEL_TYPES = Object.freeze({ person: 'person', organization: 'other', product: 'other', work: 'other',
   method: 'term', event: 'event', place: 'other' });
-const identityName = value => typeof value === 'string' ? value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ') : '';
+const identityName = normalizeIdentity;
+const identityInSource = (source, name) => findIdentitySpans(source, name)[0]?.quote || null;
 const trimmed = value => typeof value === 'string' ? value.trim() : value;
 const hasLabel = label => typeof label === 'string' && Object.hasOwn(LABEL_TYPES, label);
 const issue = (code, path, details = {}) => ({ code, path, details });
@@ -138,7 +140,7 @@ function repairAnchor(rawItem, input) {
       names: [target.canonical_name, ...(target.aliases || [])], canonical_name: name };
   }
   for (const segment of input.focus_segments) {
-    const quote = findVerbatim(segment.text, name);
+    const quote = identityInSource(segment.text, name);
     if (!quote) continue;
     // 只有输入中已确认的别名关系可支持从无效目标改为已有目标；同名不够。
     const related = candidates.filter(c => identityName(c.canonical_name) !== identityName(name) &&
@@ -212,7 +214,7 @@ function validateV2Item(rawItem, input, sourceIndex) {
     if (!candidate) add('OBSERVED_TARGET_UNKNOWN', 'observed_candidate_id');
     else if (type && (candidate.type !== type || candidate.display_label !== label)) add('OBSERVED_LABEL_MISMATCH', 'observed_candidate_id');
   }
-  if (action === 'create' && name && name.length <= 120 && !input.focus_segments.some(s => findVerbatim(s.text, name)) &&
+  if (action === 'create' && name && name.length <= 120 && !input.focus_segments.some(s => identityInSource(s.text, name)) &&
       (!candidate || candidate.canonical_name !== name)) add('NAME_NOT_IN_FOCUS', 'canonical_name');
   const needsContent = ['create', 'update'].includes(action);
   const description = needsContent ? text('short_description', 240, 'DESCRIPTION_REQUIRED') : null;
@@ -220,7 +222,7 @@ function validateV2Item(rawItem, input, sourceIndex) {
   const correction = text('correction_reason', 200, null);
   const sourceText = [...input.focus_segments, ...(input.context_segments || [])].map(s => s.text);
   const aliases = Array.isArray(item.aliases) ? [...new Set(item.aliases.filter(a => typeof a === 'string' && a.trim() && a.trim().length <= 120 &&
-    sourceText.some(original => findVerbatim(original, a))).slice(0, 12).map(a => a.trim()))] : [];
+    sourceText.some(original => identityInSource(original, a))).slice(0, 12).map(a => a.trim()))] : [];
   const clean = { action, type, display_label: label, canonical_name: name, role, reason,
     existing_item_id: ['update', 'repeat'].includes(action) ? target?.id || null : null,
     observed_candidate_id: candidate?.id || null, aliases, correction_reason: correction,
