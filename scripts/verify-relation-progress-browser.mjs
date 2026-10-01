@@ -257,7 +257,7 @@ try {
   statuses.a = { ...statuses.a, state: 'partial', pendingJobs: 0, runningJobs: 0, canRetryProblems: true, retryableWindows: 2,
     progress: { totalWindows: 10, completedWindows: 8, partialWindows: 2, remainingWindows: 2 }, round: { ...statuses.a.round, finishedAt: Date.now() } }; revision++;
   await page.locator('#graph-status').filter({ hasText: '关系部分完成' }).waitFor();
-  assert.match(await page.locator('#graph-status').textContent(), /已有结果保留/);
+  assert.match(await page.locator('#graph-status').textContent(), /已保存关系可继续查看/);
   assert.match(await page.locator('#graph-progress').textContent(), /其中 2 个部分完成/);
   assert.equal(await page.locator('#graph-generate').isHidden(), true);
   assert.equal(await page.locator('#graph-retry').isVisible(), true);
