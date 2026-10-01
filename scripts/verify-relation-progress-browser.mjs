@@ -262,7 +262,7 @@ try {
   assert.equal(await page.locator('#graph-generate').isHidden(), true);
   assert.equal(await page.locator('#graph-retry').isVisible(), true);
   assert.equal(await page.locator('#graph-retry').isEnabled(), true);
-  assert.match(await page.locator('#graph-retry').textContent(), /重试失败和部分窗口.*2 个/);
+  assert.match(await page.locator('#graph-retry').textContent(), /重试未完成窗口.*2 个/);
   await assertReadPollingStopped();
   assert.equal(counters.POST, beforeLostPost + 1);
   assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
