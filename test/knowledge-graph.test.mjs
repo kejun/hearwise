@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { GRAPH_NODE, routeGraphRelation } from '../public/knowledge-graph-layout.js';
 import assert from 'node:assert/strict';
 import { readKnowledgeView, saveKnowledgeView, filterGraph, stableGraphLayout, relationLabel, assertionQualifiers,
   createGraphSnapshotLoader, graphStatusText, graphWorkActive, graphProgressText, graphUsageText, graphCostText, graphDiagnosticsText, acceptGraphProcessing } from '../public/knowledge-graph.js';
@@ -44,8 +45,35 @@ test('stable layout retains all positions through arrivals, rename, filtering an
   assert.equal(new Set([...second.values()].map(p => `${p.x},${p.y}`)).size, later.length);
   assert.deepEqual(stableGraphLayout(nodes.slice().reverse(), [relation]), first);
   const large = stableGraphLayout(Array.from({ length: 250 }, (_, i) => ({ id: `node-${i}` })), []);
+  const narrow = stableGraphLayout(nodes, [relation], new Map(), 2);
+  assert.ok([...narrow.values()].every(p => p.col < 2));
   assert.equal(large.size, 250);
   assert.equal(new Set([...large.values()].map(p => `${p.col},${p.row}`)).size, 250);
+});
+
+test('compact routing avoids unrelated nodes in a dense map, including parallel edges', () => {
+  const many = Array.from({ length: 30 }, (_, i) => ({ id: `n${String(i).padStart(2, '0')}` }));
+  const positions = stableGraphLayout(many, []);
+  assert.ok(GRAPH_NODE.width * GRAPH_NODE.height < 216 * 84 / 2);
+  for (let i = 0; i < many.length; i++) for (let j = i + 1; j < many.length; j++) for (const lane of [0, 1, 2]) {
+    const edge = { subject_item_id: many[i].id, object_item_id: many[j].id };
+    const route = routeGraphRelation(edge, positions, lane, 3);
+    assert.ok(route.points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
+    for (const [id, node] of positions) {
+      if ([edge.subject_item_id, edge.object_item_id].includes(id)) continue;
+      // Sample the entire rendered segment, not just its midpoint or waypoints.
+      for (let k = 1; k < route.points.length; k++) {
+        const a = route.points[k - 1], b = route.points[k], steps = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y));
+        for (let t = 0; t <= steps; t++) {
+          const x = a.x + (b.x - a.x) * t / steps, y = a.y + (b.y - a.y) * t / steps;
+          assert.ok(!(x > node.x && x < node.x + GRAPH_NODE.width && y > node.y && y < node.y + GRAPH_NODE.height), `${i}→${j} lane ${lane} crosses ${id}`);
+        }
+      }
+    }
+  }
+  const crossing = routeGraphRelation({ subject_item_id: 'n00', object_item_id: 'n04' }, positions);
+  assert.ok(crossing.points.length > 2, 'a row of intervening nodes requires a detour');
+  assert.notDeepEqual(crossing.points, routeGraphRelation({ subject_item_id: 'n00', object_item_id: 'n04' }, positions, 1, 2).points);
 });
 
 test('edge and detail labels do not flatten negative, planned, uncertain, temporal or attributed claims', () => {
@@ -129,13 +157,12 @@ test('round progress separates current round from historical usage and freezes t
   assert.match(graphProgressText({ state: 'running', round: { ...state.round, startedAt: new Date(startedAt).toISOString(), deadlineAt: new Date(startedAt + 120000).toISOString() } }, startedAt + 9000).round, /9 秒/);
 });
 
-test('cost copy promises full-history work with per-window safety and no fabricated token quota', () => {
-  assert.match(graphCostText({ limits: { maxWindowRequests: 3, requestTimeoutMs: 30000, maxConcurrent: 2 } }), /不设整轮 token、请求数或处理时长上限.*窗口最多尝试 3 次.*最长 30 秒.*2 个并行/);
-  assert.doesNotMatch(graphCostText({ limits: { maxRequests: 12, maxEstimatedTokens: 120000 }, round: { deadlineAt: 120000, startedAt: 0 } }), /12 次|120,000|保守估算|达到上限|下一轮/);
-  assert.match(graphCostText(), /全部尚未完成或已变化.*保留已有关系.*没有可靠关系也会正常完成.*仅请求失败或未处理完整的窗口可重试.*取消后已发出的请求仍可能计费/);
+test('cost notice is concise while detailed usage keeps unknown charges honest', () => {
+  assert.ok(graphCostText().length < 70);
+  assert.match(graphCostText(), /原文、译文和条目.*千问.*模型费用.*随时取消.*仍可能计费/);
+  assert.doesNotMatch(graphCostText(), /窗口|并行|token|上限/);
   assert.match(graphUsageText(), /暂不可用.*不代表免费/);
   assert.match(graphUsageText({ requests: 7, measuredRequests: 4, totalTokens: 9200, inputTokens: 8000, outputTokens: 1200 }), /过去 1 小时.*7 次.*9,200 tokens.*3 次请求用量未知.*仍可能产生费用/);
-  assert.match(graphUsageText({ requests: 2, measuredRequests: 0, totalTokens: 0 }), /2 次请求用量未知/);
 });
 
 test('processing updates allow new same-round work but fence cancelled and older rounds', () => {

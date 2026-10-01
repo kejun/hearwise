@@ -49,11 +49,28 @@ try {
   await page.locator('#graph-search').fill('no such entity');
   assert.match(await page.locator('#graph-count').textContent(), /0 \/ 11/);
   await page.locator('#graph-search').fill('');
-  const before = await page.locator('.graph-zoom-value').textContent();
+  assert.equal(await page.locator('.graph-zoom-value').count(), 0);
+  const before = await page.locator('.graph-world').evaluate(el => el.style.transform);
   await page.locator('#graph-zoom-in').click();
-  assert.notEqual(await page.locator('.graph-zoom-value').textContent(), before);
+  assert.notEqual(await page.locator('.graph-world').evaluate(el => el.style.transform), before);
   await page.locator('#graph-fit').click();
   await page.locator('#graph-viewport').focus(); await page.keyboard.press('+'); await page.keyboard.press('0');
+  const originalView = await page.locator('#graph-viewport').evaluate(el => ({ left: el.scrollLeft, top: el.scrollTop, scale: el.querySelector('.graph-world').style.transform }));
+  await page.locator('#graph-fullscreen').click();
+  assert.equal(await page.locator('#graph-fullscreen-dialog').evaluate(el => el.open && el.matches(':modal')), true);
+  assert.equal(await page.locator('#graph-fullscreen').getAttribute('aria-pressed'), 'true');
+  assert.ok((await page.locator('#graph-viewport').boundingBox()).height > 600);
+  assert.equal(await page.locator('.graph-job-panel').evaluate(el => el.closest('dialog') === null), true);
+  await source.focus(); await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#graph-details').isHidden(), true);
+  assert.equal(await page.locator('#graph-fullscreen-dialog').evaluate(el => el.open), true, 'first Escape closes details');
+  await screenshot('graph-desktop-fullscreen.png');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#graph-fullscreen-dialog').evaluate(el => el.open), false);
+  assert.equal(await page.locator('#graph-fullscreen').evaluate(el => el === document.activeElement), true);
+  assert.deepEqual(await page.locator('#graph-viewport').evaluate(el => ({ left: el.scrollLeft, top: el.scrollTop, scale: el.querySelector('.graph-world').style.transform })), originalView);
+  assert.equal(await page.evaluate(() => document.body.style.overflow), '');
+  checks.push('Fullscreen fills the viewport, traps focus, closes details before Escape exit, and restores zoom/scroll/focus');
   await page.getByRole('button', { name: '打开设置', exact: true }).click();
   await page.getByRole('tab', { name: '连接设置', exact: true }).click();
   await page.getByLabel('API Key', { exact: true }).fill('mock-graph-key');
@@ -79,6 +96,14 @@ try {
   await page.locator('#graph-fit').click();
   await page.locator('#graph-viewport').scrollIntoViewIfNeeded();
   await screenshot('graph-mobile-overview.png');
+  await page.locator('#graph-fullscreen').click();
+  const mobileFull = await page.locator('#graph-fullscreen-dialog').boundingBox();
+  assert.equal(mobileFull.width, 390); assert.equal(mobileFull.height, 844);
+  assert.ok((await page.locator('#graph-viewport').boundingBox()).height > 450);
+  assert.ok(await page.locator('#graph-fullscreen-dialog').evaluate(el => el.scrollWidth <= el.clientWidth));
+  await screenshot('graph-mobile-fullscreen.png');
+  await page.locator('#graph-fullscreen').click();
+
   // Semantic node list provides full-size keyboard/touch controls even at low zoom.
   await page.locator('.graph-results > summary').click();
   const result = page.locator(`[data-result-node-id="${fixture.seeded.first.nodes[0].id}"]`);
@@ -120,6 +145,11 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('[data-node-id]').length >= 36);
   await page.locator('#graph-search').fill('特别长');
   assert.match(await page.locator('#graph-count').textContent(), /1 \/ /);
+  const longName = page.locator('[data-node-id="stress-0"]');
+  assert.match(await longName.getAttribute('title'), /完整换行与图谱名称省略显示/);
+  assert.equal(await longName.locator('strong').evaluate(el => el.scrollWidth > el.clientWidth), true);
+  const compactSize = await longName.evaluate(el => ({ width: el.offsetWidth, height: el.offsetHeight }));
+  assert.deepEqual(compactSize, { width: 156, height: 40 });
   await page.locator('[data-node-id="stress-0"]').click();
   assert.match(await page.locator('#graph-detail-title').textContent(), /完整换行/);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -127,7 +157,25 @@ try {
   await page.locator('#graph-close').click(); await page.locator('#graph-search').fill('');
   await page.setViewportSize({ width: 1360, height: 1000 });
   await page.locator('#graph-fit').click(); await page.locator('#graph-viewport').scrollIntoViewIfNeeded();
+  await page.locator('#graph-relayout').click();
+  const nodeCrossings = await page.evaluate(() => {
+    const nodes = [...document.querySelectorAll('.graph-node:not([hidden])')].map(el => ({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight }));
+    let crossings = 0;
+    for (const line of document.querySelectorAll('.graph-edges > path')) {
+      const total = line.getTotalLength();
+      for (let length = 2; length < total - 2; length += 2) {
+        const p = line.getPointAtLength(length);
+        if (nodes.some(n => p.x > n.x + 1 && p.x < n.x + n.w - 1 && p.y > n.y + 1 && p.y < n.y + n.h - 1)) crossings++;
+      }
+    }
+    return crossings;
+  });
+  assert.equal(nodeCrossings, 0, 'no edge crosses a node in the dense fixture');
   await screenshot('graph-desktop-dense-fixture.png');
+  await page.locator('#graph-fullscreen').click();
+  await screenshot('graph-desktop-dense-fullscreen.png');
+  await page.locator('#graph-fullscreen').click();
+
   checks.push('Synthetic dense map and long names stay searchable, keyboard accessible and within viewport; qualifiers remain visible');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: true, checks, screenshots: directory || null,

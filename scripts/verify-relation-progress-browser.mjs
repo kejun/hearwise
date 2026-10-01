@@ -37,7 +37,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/style.css"><title>关系整理进度验证</title><body style="padding:20px;background:#f6f7f1"><main style="max-width:960px;margin:auto"><h1 style="font-size:20px;color:#315f4d">本次收听 · 知识图谱</h1><p>浏览器测试示例，使用本地模拟状态</p><div id="graph" class="knowledge-graph"></div></main><script type="module">import { createKnowledgeGraph } from '/knowledge-graph.js'; window.key=''; window.started=[]; window.required=0; window.graph=createKnowledgeGraph({root:document.querySelector('#graph'), getKey:()=>window.key,onRequireKey:()=>window.required++,onStarted:id=>window.started.push(id),loadSegment:async()=>({}),locateSegment:()=>{}}); graph.select('a'); graph.setActive(true);</script></body></html>`);
   }
-  if (['/style.css', '/knowledge-graph.js'].includes(req.url)) {
+  if (['/style.css', '/knowledge-graph.js', '/knowledge-graph-layout.js'].includes(req.url)) {
     res.writeHead(200, { 'content-type': req.url.endsWith('css') ? 'text/css' : 'text/javascript' });
     return res.end(await readFile(new URL(`../public${req.url}`, import.meta.url)));
   }
@@ -130,8 +130,9 @@ try {
   }
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.locator('#graph-status').filter({ hasText: '尚未生成' }).waitFor();
-  await page.locator('#graph-cost').filter({ hasText: '不设整轮 token、请求数或处理时长上限' }).waitFor();
-  assert.match(await page.locator('#graph-cost').textContent(), /窗口最多尝试 3 次.*30 秒.*2 个并行/);
+  await page.locator('#graph-cost').filter({ hasText: '产生模型费用' }).waitFor();
+  assert.ok((await page.locator('#graph-cost').textContent()).length < 70);
+  assert.equal(await page.locator('#graph-usage').isVisible(), false);
   assert.match(await page.locator('#graph-usage').textContent(), /不代表免费/);
   await page.locator('#graph-generate').click();
   assert.equal(await page.evaluate(() => window.required), 1); assert.equal(counters.POST, 0);
@@ -361,7 +362,15 @@ try {
   assert.equal(await page.locator('[data-relation-id="edge"]').count(), 1);
   assert.equal(await page.locator('#graph-retry-panel').isHidden(), true);
   checks.push('Diagnostics expose rejection reasons and unknown legacy/unparsed counts; mobile selective retry needs cost confirmation, preserves edges, fences epoch changes and never retries a 409 automatically');
+  await page.locator('#graph-fullscreen').click();
+  await page.evaluate(() => window.graph.setActive(false));
+  assert.equal(await page.locator('#graph-fullscreen-dialog').evaluate(el => el.open), false);
+  assert.equal(await page.evaluate(() => document.body.style.overflow), '');
+  await page.evaluate(() => window.graph.setActive(true));
+  await page.locator('#graph-fullscreen').click();
   await page.evaluate(() => window.graph.destroy());
+  assert.equal(await page.evaluate(() => document.body.style.overflow), '');
+  assert.equal(await page.locator('dialog[open]').count(), 0);
   assert.equal(await page.locator('#graph').textContent(), '');
   checks.push('Late start response cannot overwrite a newer listening; completed state can restart; destroy clears controls/timers');
   assert.deepEqual(errors, []);
