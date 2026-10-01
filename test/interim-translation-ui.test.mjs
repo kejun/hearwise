@@ -19,10 +19,11 @@ function app(t, preferences = []) {
     if (elements.has(id)) return elements.get(id);
     const classes = new Set(), events = new Map(), styles = new Map();
     const node = {
-      value: '', _text: '', children: null,
+      value: '', _text: '', children: null, dataset: {},
       get textContent() { return this.children ? this.children.map(child => child.textContent).join('') : this._text; },
       set textContent(text) { this.children = null; this._text = text; },
       replaceChildren(...children) { this.children = children; }, hidden: false, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
+      append(...children) { this.children = [...(this.children || []), ...children]; },
       style: { setProperty: (name, value) => styles.set(name, value), getPropertyValue: name => styles.get(name) }, setAttribute() {}, focus() {}, querySelectorAll: () => [],
       getBoundingClientRect: () => ({ bottom: 100 }),
       setCustomValidity(message) { this.validationMessage = message; },
@@ -47,8 +48,8 @@ function app(t, preferences = []) {
     readKnowledgeView, saveKnowledgeView, createKnowledgeGraph: () => ({ select() {}, setNodes() {}, setActive() {}, setProcessing() {}, invalidate() {}, highlight() {}, refresh() {} }),
     ...translationParams, createCaptionFrontier, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },
-    document: { createElement: () => ({ textContent: '', className: '' }), getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
-    window: { addEventListener() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },
+    document: { createElement: () => element(Symbol()), getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
+    window: { addEventListener() {}, scrollTo() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, body: options?.body ? JSON.parse(options.body) : null, resolve, reject })); }
@@ -314,6 +315,101 @@ function metadataApp(t) {
   a.run(`els.historyView.hidden = true; listeningId = 'record-1'; detail = { listening: { id: 'record-1', title: '原始标题', notes: '' }, runs: [] }; renderRecordMetadata();`);
   return a;
 }
+function historyDetail(id, { pending = false, title = id } = {}) {
+  const latest = { id: `${id}-last`, asr_sentence_id: '1', run_id: `${id}-run`, sequence_no: 1,
+    original_text: `${id} original`, translation_text: `${id} 译文`, translation_state: 'complete' };
+  return { listening: { id, title }, runs: [{ id: `${id}-run`, run_no: 1, state: 'complete', source_lang: 'en', target_lang: 'Chinese', audio_source: 'microphone' }],
+    segments: [latest], latestSegment: latest, knowledge: [], jobs: [], segmentCount: 1,
+    processingAvailable: true, processing: { pendingTranslations: pending ? 1 : 0 } };
+}
+test('慢网打开历史记录：响应前立即进入加载页，响应后显示内容且完成记录不重复读取', async t => {
+  const a = app(t);
+  a.final('旧译文');
+  a.run('els.listeningView.hidden = true; els.historyView.hidden = false');
+  const opening = a.run('selectListening("record-2", "目标记录")');
+  assert.equal(a.element('history-view').hidden, true);
+  assert.equal(a.element('listening-view').hidden, false);
+  assert.equal(a.element('record-loading-title').textContent, '目标记录');
+  assert.equal(a.element('record-loading').hidden, false);
+  assert.equal(a.element('live-panel').hidden, true);
+  assert.equal(a.element('record-panel').hidden, true);
+  assert.equal(a.requests.length, 1);
+  await a.reply(0, 200, historyDetail('record-2', { title: '目标记录' })); await opening;
+  assert.equal(a.element('record-loading').hidden, true);
+  assert.equal(a.element('live-panel').hidden, false);
+  assert.equal(a.element('record-title').textContent, '目标记录');
+  assert.equal(a.element('original').textContent, 'record-2 original');
+  assert.equal(a.element('translation').textContent, 'record-2 译文');
+  assert.equal(a.requests.length, 1);
+});
+
+test('历史加载中返回列表会取消请求，迟到成功不会重新打开详情', async t => {
+  const a = app(t);
+  const opening = a.run('selectListening("old", "旧记录")');
+  const back = a.run('showHistory()');
+  assert.equal(a.requests[0].options.signal.aborted, true);
+  assert.equal(a.element('history-view').hidden, false);
+  await a.reply(0, 200, historyDetail('old')); await opening;
+  await a.reply(1, 200, { items: [], total: 0, pageSize: 20 }); await back;
+  assert.equal(a.element('history-view').hidden, false);
+  assert.equal(a.element('listening-view').hidden, true);
+  assert.equal(a.element('record-loading').hidden, true);
+  assert.equal(a.run('listeningId'), null);
+  assert.equal(a.run('detail'), null);
+});
+
+test('历史 A→B→A 的迟到响应和失败不得覆盖最新记录', async t => {
+  const a = app(t);
+  const first = a.run('selectListening("a", "第一次 A")');
+  const second = a.run('selectListening("b", "B")');
+  const third = a.run('selectListening("a", "第二次 A")');
+  assert.equal(a.requests[0].options.signal.aborted, true);
+  assert.equal(a.requests[1].options.signal.aborted, true);
+  await a.reply(2, 200, historyDetail('a', { title: '最新 A' })); await third;
+  await a.reply(0, 200, historyDetail('a', { title: '过期 A' })); await first;
+  a.requests[1].reject(new Error('过期错误')); await second;
+  assert.equal(a.element('record-title').textContent, '最新 A');
+  assert.equal(a.element('original').textContent, 'a original');
+  assert.equal(a.element('record-loading').hidden, true);
+  assert.equal(a.element('hint').classList.contains('error'), false);
+});
+
+test('历史读取失败和超时显示可重试状态，新建收听取消等待且可以正常使用', async t => {
+  const a = app(t);
+  const opening = a.run('selectListening("a", "测试记录")');
+  a.requests[0].reject(new Error('网络不可用')); await opening;
+  assert.equal(a.element('record-loading-status').textContent, '网络不可用');
+  assert.equal(a.element('record-loading-retry').hidden, false);
+  await a.run('start()');
+  assert.equal(a.requests.length, 1, '详情未加载时不能误启动录音');
+  a.element('record-loading-retry').emit('click');
+  assert.equal(a.element('record-loading-retry').hidden, true);
+  a.requests[1].options.signal.addEventListener('abort', () => a.requests[1].reject(new Error('aborted')));
+  await a.tick(10000);
+  assert.match(a.element('record-loading-status').textContent, /超时/);
+  a.element('record-loading-retry').emit('click');
+  await a.reply(2, 200, historyDetail('a')); await a.flush();
+  assert.equal(a.element('record-loading').hidden, true);
+  const next = a.run('selectListening("b", "另一记录")');
+  a.run('newListening()');
+  assert.equal(a.requests[3].options.signal.aborted, true);
+  await a.reply(3, 200, historyDetail('b')); await next;
+  assert.equal(a.run('listeningId'), null);
+  assert.equal(a.element('record-panel').hidden, true);
+  assert.equal(a.element('live-panel').hidden, false);
+  assert.equal(a.element('listening-controls').hidden, false);
+  assert.equal(a.element('original').textContent, '开始聆听后，实时识别的文字会出现。');
+});
+
+test('仍在处理的历史记录继续轮询，完成后停止', async t => {
+  const a = app(t);
+  const opening = a.run('selectListening("a")');
+  await a.reply(0, 200, historyDetail('a', { pending: true })); await opening;
+  assert.equal(a.requests.length, 2);
+  await a.reply(1, 200, historyDetail('a')); await a.tick(5000);
+  assert.equal(a.requests.length, 2);
+});
+
 test('历史标题备注编辑可取消、重复打开、清空备注，空标题不提交', async t => {
   const a = metadataApp(t);
   a.element('edit-record').emit('click');
