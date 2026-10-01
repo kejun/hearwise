@@ -95,7 +95,7 @@ test('invalid targets remain errors and action is never silently changed', () =>
 });
 
 test('evidence has precise 300/301 boundary; a valid citation preserves the item and reports bad citations', () => {
-  const quote = 'Atlas' + 'x'.repeat(295);
+  const quote = 'Atlas ' + 'x'.repeat(294);
   const value = input({ focus_segments: [{ id: 's1', text: `${quote}x` }] });
   assert.equal(parse([item({ evidence: [{ segment_id: 's1', quote }] })], value).items.length, 1);
   const invalid = parse([item({ evidence: [{ segment_id: 's1', quote: `${quote}x` }] })], value);
@@ -236,4 +236,17 @@ test('prompt documents one classification, evidence limits and journalist-as-sub
   assert.match(SYSTEM_PROMPT_V2, /300 字符/);
   assert.match(SYSTEM_PROMPT_V2, /不要按职业一律排除人物/);
   assert.match(SYSTEM_PROMPT_V2, /example-k1/);
+});
+
+// Identity acceptance and relation grounding share the same equivalence rules.
+test('node identity grounding rejects substrings and retains exact normalized name surfaces', () => {
+  for (const text of ['atlas developed Nova.', 'Ａｔｌａｓ developed Nova.']) {
+    const result = parse([item({ evidence: [{ segment_id: 's1', quote: text }] })], input({ focus_segments: [{ id: 's1', text }] }));
+    assert.equal(result.items.length, 1, text);
+    assert.equal(result.items[0].evidence[0].quote, text);
+  }
+  const text = 'Atlasian developed Nova.';
+  const result = parse([item({ evidence: [{ segment_id: 's1', quote: text }] })], input({ focus_segments: [{ id: 's1', text }] }));
+  assert.equal(result.items.length, 0);
+  assert.ok(result.rejected[0].issues.some(issue => issue.code === 'NAME_NOT_IN_FOCUS'));
 });

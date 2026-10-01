@@ -1,6 +1,11 @@
 // Diagnostics are an allowlisted, content-free boundary. Never expose raw model
 // text, exception messages, inputs, identifiers, or credentials as a reason.
 export const RELATION_REASON_LABELS = Object.freeze({
+  COREFERENCE_UNSUPPORTED: '指代缺少可验证的关系依据', COREFERENCE_EXPLICIT_ENDPOINT_CONFLICT: '句中明确身份与所选端点冲突',
+  QUALIFIER_CONTENT_INVALID: '限定字段与所选证据内容不一致',
+  CONTRACT_VERSION_INVALID: '模型未返回当前关系协议版本', EVIDENCE_VERSION_INVALID: '证据版本与本次请求不一致',
+  EVIDENCE_ID_INVALID: '所选证据不在本次证据登记表中', EVIDENCE_SCOPE_INVALID: '关系证据超出当前窗口或缺少焦点依据',
+  MENTION_ID_INVALID: '所选身份提及不在本次登记表中', MENTION_ENDPOINT_MISMATCH: '身份提及与关系端点不匹配',
   FIELD_INVALID: '字段格式不正确', RELATION_INVALID: '关系结构不正确',
   ENDPOINT_INVALID: '关系两端不在候选节点中', ENDPOINT_LISTENING_MISMATCH: '节点不属于本次收听',
   PREDICATE_INVALID: '关系类型不受支持', QUALIFICATION_INVALID: '缺少或无效的肯否、时态或状态',
@@ -40,6 +45,21 @@ export const RELATION_REASON_LABELS = Object.freeze({
 export function safeRelationReason(code) {
   return typeof code === 'string' && Object.hasOwn(RELATION_REASON_LABELS, code) ? code : 'UNKNOWN_REASON';
 }
+// The persisted v2 debugging envelope contains enums, booleans and bounded
+// counts only. Model objects/identifiers/source snippets are never copied.
+export function safeRejectedMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) || metadata.schema_version !== 2 ||
+      !['protocol', 'identity', 'semantic'].includes(metadata.stage)) return undefined;
+  const safe = { schema_version: 2, stage: metadata.stage };
+  if (['null', 'array', 'object', 'scalar'].includes(metadata.row_shape)) safe.row_shape = metadata.row_shape;
+  for (const key of ['evidence_count', 'unknown_evidence_count', 'focus_evidence_count']) {
+    if (Number.isInteger(metadata[key]) && metadata[key] >= 0) safe[key] = Math.min(99, metadata[key]);
+  }
+  for (const key of ['subject_mention_known', 'object_mention_known', 'subject_endpoint_known', 'object_endpoint_known', 'has_legacy_supports']) {
+    if (typeof metadata[key] === 'boolean') safe[key] = metadata[key];
+  }
+  return safe;
+}
 export function relationReasonSummary(rows) {
   const counts = new Map();
   for (const row of rows) {
@@ -67,13 +87,20 @@ export function readRelationDiagnostics(db, listeningId) {
     JOIN knowledge_items s ON s.id=r.subject_item_id AND s.listening_id=r.listening_id
     JOIN knowledge_items o ON o.id=r.object_item_id AND o.listening_id=r.listening_id
     WHERE r.listening_id=? AND a.status IN ('active','needs_review')`).get(listeningId).n;
+  const reviewAssertions = db.prepare(`SELECT COUNT(*) AS n FROM relation_assertions a JOIN relations r ON r.id=a.relation_id
+    WHERE r.listening_id=? AND a.status='needs_review'`).get(listeningId).n;
+  const reviewRelations = db.prepare(`SELECT COUNT(DISTINCT r.id) AS n FROM relation_assertions a JOIN relations r ON r.id=a.relation_id
+    WHERE r.listening_id=? AND a.status='needs_review'`).get(listeningId).n;
+  const stages = { protocol: 0, identity: 0, semantic: 0, unknown: 0 };
+  for (const rejected of rejects) stages[safeRejectedMetadata(rejected?.metadata)?.stage || 'unknown']++;
   return { scope: 'latest_result_per_window', resultJobs: results.length, measuredJobs: known.length, unknownJobs,
     returnedCount: unknownJobs ? null : sum('returned_count'),
     validatorAcceptedCount: unknownJobs ? null : sum('validator_accepted_count'),
     acceptedCount: unknownJobs ? null : sum('accepted_count'), rejectedCount: rejects.length,
     insertedRelationCount: unknownJobs ? null : sum('inserted_relation_count'),
     deduplicatedCount: unknownJobs ? null : sum('deduplicated_count'),
-    storedRelationCount: stored, visibleRelationCount: visible,
+    storedRelationCount: stored, visibleRelationCount: visible, reviewRelationCount: reviewRelations, reviewAssertionCount: reviewAssertions,
+    rejectionStages: stages,
     coverageLimitedWindows: results.filter(j => { try { return JSON.parse(j.input_json).coverage_limited; } catch { return false; } }).length,
     rejectionReasons: relationReasonSummary(rejects), failureReasons: relationReasonSummary(failures) };
 }

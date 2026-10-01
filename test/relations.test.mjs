@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { relationWireEnvelope, relationWireRow } from '../test-support/relation-wire-fixture.mjs';
 import { buildRelationInput, buildRelationRequest, canonicalizeRelation, exactRelationQuote, parseRelations, extractRelations,
   RELATION_SYSTEM_PROMPT, RELATION_MODEL } from '../relations.mjs';
 const hash = t => createHash('sha256').update(t).digest('hex');
@@ -136,13 +137,15 @@ test('bounded synonyms retain source, direction and uncertainty protections', ()
   const request = buildRelationRequest(input), wire = JSON.parse(request.body.messages[1].content);
   assert.equal(wire.candidates[1].type, 'product');
   const sent = relation(text, { subject_item_id: 'n0', object_item_id: 'n1', supports: [{ segment_id: 's0', quote: text, role: 'relation' }] });
-  assert.equal(request.parse(JSON.stringify({ relations: [sent] })).relations[0].status, 'needs_review');
+  assert.equal(request.parse(JSON.stringify(relationWireEnvelope(wire, [relationWireRow(wire, sent)]))).relations[0].status, 'needs_review');
   const v2 = buildRelationRequest(inputFor(text, { candidates: [candidate('a', 'Atlas', { type: 'other', display_label: 'organization' }),
     candidate('b', 'Nova', { type: 'other', display_label: 'product' })] }));
   assert.equal(JSON.parse(v2.body.messages[1].content).candidates[1].display_label, 'product');
-  assert.equal(v2.parse(JSON.stringify({ relations: [sent] })).relations[0].status, 'needs_review');
+  const wireV2 = JSON.parse(v2.body.messages[1].content);
+  assert.equal(v2.parse(JSON.stringify(relationWireEnvelope(wireV2, [relationWireRow(wireV2, sent)]))).relations[0].status, 'needs_review');
   const conflicting = buildRelationRequest(inputFor(text, { candidates: [candidate('a', 'Atlas'), candidate('b', 'Nova', { type: 'person', display_label: 'product' })] }));
-  assert.equal(conflicting.parse(JSON.stringify({ relations: [sent] })).rejected[0].code, 'SEMANTIC_PREDICATE_UNSUPPORTED');
+  const conflictingWire = JSON.parse(conflicting.body.messages[1].content);
+  assert.equal(conflicting.parse(JSON.stringify(relationWireEnvelope(conflictingWire, [relationWireRow(conflictingWire, sent)]))).rejected[0].code, 'SEMANTIC_PREDICATE_UNSUPPORTED');
   for (const type of ['person', 'other', undefined]) {
     assert.equal(code(parse([relation(text)], inputFor(text, { candidates: [candidate('a', 'Atlas'), candidate('b', 'Nova', { type })] }))), 'SEMANTIC_PREDICATE_UNSUPPORTED');
   }
@@ -278,7 +281,7 @@ test('mocked HTTP uses existing model and endpoint and captures only numeric usa
     request = { url, ...options };
     const wire = JSON.parse(JSON.parse(options.body).messages[1].content);
     const row = relation(undefined, { subject_item_id: wire.candidates[0].id, object_item_id: wire.candidates[1].id, supports: [{ segment_id: wire.focus_segments[0].id, quote: wire.focus_segments[0].text, role: 'relation' }] });
-    return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ relations: [row] }) } }],
+    return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(relationWireEnvelope(wire, [relationWireRow(wire, row)])) } }],
       usage: { prompt_tokens: 44, completion_tokens: 12, total_tokens: 56, hidden: 'omit' } }) };
   } });
   assert.equal(request.url, 'https://local.test/chat');
@@ -368,16 +371,19 @@ test('short wire IDs preserve all source, translation, identity, qualifiers and 
   assert.deepEqual(wire.candidates[0].aliases, ['阿特拉斯']);
   assert.equal(wire.existing_assertions[0].subject_item_id, wire.candidates[0].id);
   assert.doesNotMatch(request.body.messages[1].content, /uuid|source_revision|translation_revision|listening_id|window_revision|input_fingerprint/);
-  assert.ok(Buffer.byteLength(request.body.messages[1].content) < Buffer.byteLength(JSON.stringify(buildRelationInput(input))));
+  assert.equal(wire.contract_version, 'relations-v2');
+  assert.ok(wire.evidence_version);
+  assert.ok(wire.evidence.length > 0); assert.ok(wire.mentions.length >= 2);
+  assert.ok(Buffer.byteLength(JSON.stringify(request.body)) <= 90000);
   const row = relation(input.focus_segments[0].text, { subject_item_id: wire.candidates[0].id, object_item_id: wire.candidates[1].id,
     polarity: 'negative', supports: [{ segment_id: wire.focus_segments[0].id, quote: input.focus_segments[0].text, role: 'relation' }] });
-  const parsed = request.parse(JSON.stringify({ relations: [row] }));
+  const parsed = request.parse(JSON.stringify(relationWireEnvelope(wire, [relationWireRow(wire, row)])));
   assert.equal(parsed.rejected.length, 0); assert.equal(parsed.relations[0].polarity, 'negative');
   assert.equal(parsed.relations[0].subject_item_id, input.candidates[0].id);
   assert.equal(parsed.relations[0].supports[0].segment_id, input.focus_segments[0].id);
   assert.equal(parsed.relations[0].supports[0].source_revision, input.focus_segments[0].source_revision);
-  const escaped = { ...row, subject_item_id: input.candidates[0].id };
-  assert.equal(request.parse(JSON.stringify({ relations: [escaped] })).rejected[0].code, 'ENDPOINT_INVALID');
+  const escaped = { ...relationWireRow(wire, row), subject_item_id: input.candidates[0].id };
+  assert.equal(request.parse(JSON.stringify(relationWireEnvelope(wire, [escaped]))).rejected[0].code, 'ENDPOINT_INVALID');
 });
 
 test('short wire projection cannot hide cross-listening or needs-review endpoints', () => {
@@ -386,7 +392,7 @@ test('short wire projection cannot hide cross-listening or needs-review endpoint
     const wire = JSON.parse(request.body.messages[1].content);
     const row = relation(undefined, { subject_item_id: wire.candidates[0].id, object_item_id: wire.candidates[1].id,
       supports: [{ segment_id: wire.focus_segments[0].id, quote: wire.focus_segments[0].text, role: 'relation' }] });
-    const parsed = request.parse(JSON.stringify({ relations: [row] }));
+    const parsed = request.parse(JSON.stringify(relationWireEnvelope(wire, [relationWireRow(wire, row)])));
     if (extra.listening_id) assert.equal(parsed.rejected[0].code, 'ENDPOINT_LISTENING_MISMATCH');
     else assert.equal(parsed.relations[0].status, 'needs_review');
   }
@@ -404,23 +410,23 @@ test('wire projection keeps durable full-source hashes when the saved prompt was
   const request = buildRelationRequest(input), wire = JSON.parse(request.body.messages[1].content);
   const row = relation(undefined, { subject_item_id: wire.candidates[0].id, object_item_id: wire.candidates[1].id,
     supports: [{ segment_id: wire.focus_segments[0].id, quote: wire.focus_segments[0].text, role: 'relation' }] });
-  const result = request.parse(JSON.stringify({ relations: [row] }));
+  const result = request.parse(JSON.stringify(relationWireEnvelope(wire, [relationWireRow(wire, row)])));
   assert.equal(result.rejected.length, 0);
   assert.equal(result.relations[0].supports[0].source_revision, input.focus_segments[0].source_revision);
 });
 
 test('wire IDs round-trip cross-sentence anchors, symmetric direction and explicit correction targets', () => {
   const cases = [
-    { input: inputFor('It launched Nova.', { context_segments: [segment('context', 'Atlas is a company.')] }),
+    { expectedStatement: 'Atlas 推出 Nova', input: inputFor('It launched Nova.', { context_segments: [segment('context', 'Atlas is a company.')] }),
       row: relation('It launched Nova.', { supports: [{ segment_id: 's1', quote: 'It launched Nova.', role: 'relation' },
         { segment_id: 'context', quote: 'Atlas', role: 'subject_reference' }] }) },
-    { input: inputFor('Atlas partners with Nova.', { candidates: [candidate('z', 'Atlas'), candidate('a', 'Nova')] }),
+    { expectedStatement: 'Nova 合作 Atlas', input: inputFor('Atlas partners with Nova.', { candidates: [candidate('z', 'Atlas'), candidate('a', 'Nova')] }),
       row: relation('Atlas partners with Nova.', { subject_item_id: 'z', object_item_id: 'a', predicate: 'partners_with' }) },
-    { input: inputFor('Correction: Atlas did not launch Nova.', { existing_assertions: [{ id: 'previous', subject_item_id: 'a', object_item_id: 'b',
+    { expectedStatement: 'Atlas 未推出 Nova', input: inputFor('Correction: Atlas did not launch Nova.', { existing_assertions: [{ id: 'previous', subject_item_id: 'a', object_item_id: 'b',
         predicate: 'released', statement: 'Atlas launched Nova.', polarity: 'positive', modality: 'asserted', conditions: null, time_scope: null, attribution: null }] }),
       row: relation('Correction: Atlas did not launch Nova.', { polarity: 'negative', correction_of: 'previous' }) }
   ];
-  for (const { input, row } of cases) {
+  for (const { input, row, expectedStatement } of cases) {
     const request = buildRelationRequest(input), wire = JSON.parse(request.body.messages[1].content);
     const nodes = new Map(input.candidates.map((c, i) => [c.id, wire.candidates[i].id]));
     const originalSegments = [...input.context_segments, ...input.focus_segments], sentSegments = [...wire.context_segments, ...wire.focus_segments];
@@ -428,6 +434,17 @@ test('wire IDs round-trip cross-sentence anchors, symmetric direction and explic
     const sent = { ...row, subject_item_id: nodes.get(row.subject_item_id), object_item_id: nodes.get(row.object_item_id),
       correction_of: row.correction_of ? wire.existing_assertions[0].id : null,
       supports: row.supports.map(s => ({ ...s, segment_id: segments.get(s.segment_id) })) };
-    assert.deepEqual(request.parse(JSON.stringify({ relations: [sent] })), parse([row], buildRelationInput(input)));
+    const expected = parse([row], buildRelationInput(input));
+    expected.relations.forEach(relation => {
+      relation.statement = expectedStatement;
+      if (row.supports.some(support => support.role !== 'relation')) relation.status = 'needs_review';
+    });
+    const parsed = request.parse(JSON.stringify(relationWireEnvelope(wire, [relationWireRow(wire, sent)])));
+    assert.equal(parsed.rejected.length, 0);
+    assert.equal(parsed.returnedCount, expected.returnedCount);
+    assert.deepEqual(parsed.relations.map(({ supports, ...relation }) => relation), expected.relations.map(({ supports, ...relation }) => relation));
+    assert.ok(parsed.relations[0].supports.some(support => support.role === 'relation'));
+    assert.ok(parsed.relations[0].supports.every(support => originalSegments.some(segment => segment.id === support.segment_id && segment.text.slice(support.start, support.end) === support.quote)));
+    for (const support of row.supports.filter(support => support.role !== 'relation')) assert.ok(parsed.relations[0].supports.some(actual => actual.role === support.role && actual.segment_id === support.segment_id && actual.quote === support.quote));
   }
 });
