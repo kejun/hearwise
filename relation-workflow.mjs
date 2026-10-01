@@ -1,4 +1,4 @@
-import { extractRelations, buildRelationInput, raceRelationAbort, RELATION_CONTRACT_VERSION, RELATION_MODEL } from './relations.mjs';
+import { extractRelations, buildRelationInput, raceRelationAbort, RELATION_CONTRACT_VERSION, RELATION_MODEL, RELATION_REQUEST_TIMEOUT_MS } from './relations.mjs';
 
 export const RELATION_MAX_REQUESTS = 3;
 export function relationRetryDelay(error, requestCount) {
@@ -13,7 +13,7 @@ export function relationRetryDelay(error, requestCount) {
   return delay <= 300000 ? delay : null;
 }
 const safeCode = error => error?.status ? `HTTP_${error.status}` :
-  error?.code === 'RELATION_INVALID_RESPONSE' ? 'RELATION_INVALID_RESPONSE' :
+  ['RELATION_INVALID_RESPONSE', 'RELATION_OUTPUT_LIMIT'].includes(error?.code) ? error.code :
     ['TimeoutError', 'AbortError'].includes(error?.name) ? 'REQUEST_TIMEOUT' : 'REQUEST_FAILED';
 const stopped = status => ['paused', 'cancelled'].includes(status?.state) ||
   (status?.round?.state && status.round.state !== 'active');
@@ -21,7 +21,7 @@ const stopped = status => ['paused', 'cancelled'].includes(status?.state) ||
 // One dispatch is at most one request. Request budgets are durable before the
 // HTTP call and must not reset when the scheduler/process restarts.
 export function createRelationWorkflow({ store, endpoint, extract = extractRelations, provider,
-  now = () => Date.now(), onChange = () => {}, onError = () => {}, requestTimeoutMs = 30000 }) {
+  now = () => Date.now(), onChange = () => {}, onError = () => {}, requestTimeoutMs = RELATION_REQUEST_TIMEOUT_MS }) {
   const notify = (fn, ...args) => { try { fn(...args); } catch { /* Committed state is authoritative. */ } };
   async function execute(job, key, signal) {
     if (!job || !store.hasListening(job.listening_id) || signal?.aborted) return { kind: 'discarded' };

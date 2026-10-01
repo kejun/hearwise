@@ -3,6 +3,8 @@ import { KNOWLEDGE_MODEL } from './knowledge.mjs';
 
 export const RELATION_CONTRACT_VERSION = 'relations-v1';
 export const RELATION_MODEL = KNOWLEDGE_MODEL;
+export const RELATION_MAX_OUTPUT_TOKENS = 6000;
+export const RELATION_REQUEST_TIMEOUT_MS = 30000;
 export const RELATION_LIMITS = Object.freeze({ candidates: 48, segments: 12, sourceChars: 14000,
   translationChars: 14000, relations: 24, supports: 12, responseChars: 50000, requestBytes: 90000 });
 export const RELATION_PREDICATES = Object.freeze({
@@ -51,7 +53,7 @@ export const RELATION_SYSTEM_PROMPT = `你是对话关系整理器。只使用�
 仅允许谓词：${Object.keys(RELATION_PREDICATES).join(', ')}。partners_with、compared_with 为对称；其他有方向。没有合适谓词就不输出，禁止 related_to。不会因为两家公司被提及就生成合作或竞争关系。
 所有限定必须显式保留：polarity=positive|negative，modality=asserted|planned|uncertain。计划不等于已完成；否定不等于肯定；不计划不等于计划；转述不等于无来源事实。conditions/time_scope/attribution 为原文中逐字限定（或 null），时间不明不能补成现在。若原话指示假设、条件、过去或转述，不能省略。statement 是简短完整的中文表述且保留所有限定。status=active|needs_review；原译文冲突或身份不稳需暂缓，不能返回 active。
 更正只有原文明说之前说错/更正/撤回时才允许，correction_of 只能用 existing_assertions 中同两端同谓词的 id。时间变化或不同来源说法不是更正。普通遗漏不能撤回旧关系。
-只返回 JSON {"relations":[{"subject_item_id":"候选id","object_item_id":"候选id","predicate":"released","statement":"A 推出了 B","polarity":"positive","modality":"asserted","conditions":null,"time_scope":null,"attribution":null,"status":"active","correction_of":null,"supports":[{"segment_id":"原句id","quote":"原文逐字引用","role":"relation","start":0,"end":12}]}]}。最多24条，每条最多12条支持；不输出解释、Markdown或额外字段。
+只返回 JSON {"relations":[{"subject_item_id":"候选id","object_item_id":"候选id","predicate":"released","statement":"A 推出了 B","polarity":"positive","modality":"asserted","conditions":null,"time_scope":null,"attribution":null,"status":"active","correction_of":null,"supports":[{"segment_id":"原句id","quote":"原文逐字引用","role":"relation","start":0,"end":12}]}]}。最多24条，每条最多12条支持；不输出解释、Markdown或额外字段。statement 保持简短；quote 仅取足以证明关系、身份及限定的最短完整逐字子串；唯一子串省略 start/end，重复子串才填写索引。不得为缩短输出省略必要证据或限定。
 校验例：原文“A 与 B 都在今天被提及”→空；“A 计划收购 B”→acquired/planned；“A 未收购 B”→acquired/negative；“据 C 称，A 推出了 B”必须保留 C 的转述；“B was founded by A”→A founded B。即使有逐字引用，也不能据此虚构不被原话支持的关系。`;
 
 function candidateNames(candidate) {
@@ -262,6 +264,53 @@ export function buildRelationInput(input) {
   return result;
 }
 
+// Transport-only projection: UUIDs, revision hashes and listening/window metadata
+// are for local fencing, not model reasoning. Preserve every evidence/qualifier
+// character while using short request-scoped IDs in both directions. The durable
+// contract/fingerprint stays unchanged, so this does not replay completed work.
+export function buildRelationRequest(input) {
+  const bounded = buildRelationInput(input);
+  const nodes = new Map(bounded.candidates.map((c, i) => [c.id, `n${i}`]));
+  const segments = new Map([...bounded.context_segments, ...bounded.focus_segments].map((s, i) => [s.id, `s${i}`]));
+  const assertions = new Map(bounded.existing_assertions.map((a, i) => [a.id, `a${i}`]));
+  const segment = s => ({ id: segments.get(s.id), sequence_no: s.sequence_no, text: s.text, ...(s.translation ? { translation: s.translation } : {}) });
+  const wire = {
+    focus_segments: bounded.focus_segments.map(segment), context_segments: bounded.context_segments.map(segment),
+    candidates: bounded.candidates.map(c => ({ id: nodes.get(c.id), canonical_name: c.canonical_name,
+      ...(c.aliases.length ? { aliases: c.aliases } : {}), certainty: c.certainty })),
+    existing_assertions: bounded.existing_assertions.map(a => ({ ...a, id: assertions.get(a.id),
+      subject_item_id: nodes.get(a.subject_item_id), object_item_id: nodes.get(a.object_item_id) }))
+  };
+  const body = { model: RELATION_MODEL, enable_thinking: false, temperature: 0, max_completion_tokens: RELATION_MAX_OUTPUT_TOKENS,
+    response_format: { type: 'json_object' },
+    messages: [{ role: 'system', content: RELATION_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(wire) }] };
+  const reverse = map => new Map([...map].map(([id, short]) => [short, id]));
+  const nodeIds = reverse(nodes), segmentIds = reverse(segments), assertionIds = reverse(assertions);
+  const originals = new Map([...bounded.context_segments, ...bounded.focus_segments].map(s => [s.id, s]));
+  return { body, bounded, parse(raw) {
+    // Validate *before* restoring IDs: the model can only reference this request's
+    // short-ID whitelist. Unknown/real UUIDs never bypass that scope. Validate a
+    // second time against authoritative IDs to canonicalize symmetric directions
+    // and preserve original hashes, correction targets and cross-listening fences.
+    const parsed = parseRelations(raw, { ...wire, listening_id: bounded.listening_id });
+    const restored = parsed.relations.map(r => ({ ...r,
+      subject_item_id: nodeIds.get(r.subject_item_id), object_item_id: nodeIds.get(r.object_item_id),
+      correction_of: r.correction_of ? assertionIds.get(r.correction_of) : null,
+      supports: r.supports.map(s => ({ ...s, segment_id: segmentIds.get(s.segment_id),
+        source_revision: originals.get(segmentIds.get(s.segment_id)).source_revision })) }));
+    const checked = [], rejected = [...parsed.rejected];
+    restored.forEach((r, index) => {
+      try { checked.push(validateRelation(r, bounded)); }
+      catch (error) { rejected.push({ index, code: error.reason || 'RELATION_INVALID' }); }
+    });
+    return { relations: checked, rejected, returnedCount: parsed.returnedCount };
+  } };
+}
+
+// UTF-8 bytes upper-bound prompt tokens conservatively; include the unchanged
+// output ceiling and framing margin. Never refund unknown/billable responses.
+export const estimateRelationRequestTokens = input => Buffer.byteLength(JSON.stringify(buildRelationRequest(input).body)) + RELATION_MAX_OUTPUT_TOKENS + 1024;
+
 // Reject promptly even when an injected transport ignores AbortSignal. The
 // original operation still has rejection handlers and may report billable usage.
 export function raceRelationAbort(operation, signal) {
@@ -275,8 +324,8 @@ export function raceRelationAbort(operation, signal) {
 }
 
 export async function extractRelations(key, input, endpoint, { signal, fetchImpl = fetch, now = () => Date.now(),
-  onUsage = () => {}, requestTimeoutMs = 30000 } = {}) {
-  const bounded = buildRelationInput(input);
+  onUsage = () => {}, requestTimeoutMs = RELATION_REQUEST_TIMEOUT_MS } = {}) {
+  const request = buildRelationRequest(input);
   if (signal?.aborted) throw signal.reason;
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new DOMException('Relation request timed out', 'TimeoutError')), requestTimeoutMs);
@@ -284,8 +333,7 @@ export async function extractRelations(key, input, endpoint, { signal, fetchImpl
   const operation = (async () => {
     const response = await fetchImpl(endpoint, { method: 'POST', headers: {
       Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: RELATION_MODEL, enable_thinking: false, temperature: 0, max_tokens: 6000,
-        messages: [{ role: 'system', content: RELATION_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(bounded) }] }),
+      body: JSON.stringify(request.body),
       signal: requestSignal });
     let result;
     try { result = await response.json(); }
@@ -306,7 +354,8 @@ export async function extractRelations(key, input, endpoint, { signal, fetchImpl
       throw Object.assign(new Error(`关系服务 HTTP ${response.status}`), { status: response.status,
         retryAfterMs: Number.isFinite(delay) ? delay : 0, usage });
     }
-    try { return { ...parseRelations(result?.choices?.[0]?.message?.content, bounded), usage }; }
+    if (result?.choices?.[0]?.finish_reason === 'length') throw Object.assign(new Error('Relation output limit reached'), { code: 'RELATION_OUTPUT_LIMIT', usage });
+    try { return { ...request.parse(result?.choices?.[0]?.message?.content), usage }; }
     catch (error) { error.usage = usage; throw error; }
   })();
   try { return await raceRelationAbort(operation, requestSignal); }
