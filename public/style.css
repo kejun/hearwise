@@ -245,3 +245,6 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .graph-retry-panel p{margin:0}.graph-retry-panel .graph-button{white-space:normal}
 #graph-retry{border-color:#c5b08c;color:#75582d;background:#fff8ea}
 .graph-retry-panel[hidden],.graph-diagnostics[hidden]{display:none}
+
+.graph-diagnostics>summary{cursor:pointer;font-weight:600}
+.graph-diagnostics[open]>summary{margin-bottom:8px}

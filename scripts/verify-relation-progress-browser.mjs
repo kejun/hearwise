@@ -257,12 +257,12 @@ try {
   statuses.a = { ...statuses.a, state: 'partial', pendingJobs: 0, runningJobs: 0, canRetryProblems: true, retryableWindows: 2,
     progress: { totalWindows: 10, completedWindows: 8, partialWindows: 2, remainingWindows: 2 }, round: { ...statuses.a.round, finishedAt: Date.now() } }; revision++;
   await page.locator('#graph-status').filter({ hasText: '关系部分完成' }).waitFor();
-  assert.match(await page.locator('#graph-status').textContent(), /已有结果保留/);
+  assert.match(await page.locator('#graph-status').textContent(), /已保存关系可继续查看/);
   assert.match(await page.locator('#graph-progress').textContent(), /其中 2 个部分完成/);
   assert.equal(await page.locator('#graph-generate').isHidden(), true);
   assert.equal(await page.locator('#graph-retry').isVisible(), true);
   assert.equal(await page.locator('#graph-retry').isEnabled(), true);
-  assert.match(await page.locator('#graph-retry').textContent(), /重试失败和部分窗口.*2 个/);
+  assert.match(await page.locator('#graph-retry').textContent(), /重试未完成窗口.*2 个/);
   await assertReadPollingStopped();
   assert.equal(counters.POST, beforeLostPost + 1);
   assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
@@ -318,10 +318,15 @@ try {
   assert.equal(counters.POST, beforeFinalSnapshotPosts);
   await assertReadPollingStopped();
   checks.push('Terminal detail triggers authoritative graph GET, fences a delayed zero-edge response and displays a real stored edge without generation or SSE');
+  assert.equal(await page.locator('#graph-diagnostics').getAttribute('open'), null, 'diagnostics are collapsed by default');
+  await page.locator('#graph-diagnostics>summary').click();
+  assert.notEqual(await page.locator('#graph-diagnostics').getAttribute('open'), null);
+  await page.locator('#graph-diagnostics>summary').click();
+
   await updateStatus({ state: 'partial', partialJobs: 1, canRetryProblems: true, retryableWindows: 1,
     progress: { totalWindows: 2, completedWindows: 2, partialWindows: 1, remainingWindows: 0 } });
   await page.locator('#graph-retry').waitFor();
-  assert.match(await page.locator('#graph-diagnostics').textContent(), /模型返回 3 项.*最终接收 1 项.*拒绝 2 项/);
+  assert.match(await page.locator('#graph-diagnostics').textContent(), /模型返回 3 项.*最终接收 1 项.*已忽略候选 2 项/);
   assert.match(await page.locator('#graph-diagnostics').textContent(), /缺少跨句指代依据.*CROSS_SENTENCE_REFERENCE_REQUIRED/);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile diagnostics must not overflow');

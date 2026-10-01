@@ -7,7 +7,7 @@ import { ListeningStore } from '../storage.mjs';
 import { createRelationScheduler } from '../relation-queue.mjs';
 import { createRelationWorkflow } from '../relation-workflow.mjs';
 import { extractRelations, buildRelationRequest, buildRelationInput, RELATION_SYSTEM_PROMPT } from '../relations.mjs';
-import { relationWireEnvelope, relationWireRow } from '../test-support/relation-wire-fixture.mjs';
+import { relationWireEnvelope, relationWireRow, relationSource } from '../test-support/relation-wire-fixture.mjs';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 function seed(t, count = 24, limits) {
   const dir = mkdtempSync(path.join(tmpdir(), 'relation-throughput-'));
@@ -42,7 +42,7 @@ async function syntheticRun(t, maxConcurrent) {
       return { ok: true, json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(relationWireEnvelope(wire, [relationWireRow(wire, {
         subject_item_id: subject.id, object_item_id: object.id, predicate: 'released', statement: 'Atlas 推出了 Nova', polarity: 'positive',
         modality: 'asserted', conditions: null, time_scope: null, attribution: null, status: 'active', correction_of: null,
-        supports: [{ segment_id: s.id, quote: s.text, role: 'relation' }] })])) } }], usage: { total_tokens: 100 } }) };
+        supports: [{ segment_id: s.id, quote: relationSource(wire, s.id), role: 'relation' }] })])) } }], usage: { total_tokens: 100 } }) };
     } }) });
   const queue = createRelationScheduler({ store: h.store, keyFor: () => 'mock-key', execute: workflow.execute, maxConcurrent });
   queue.schedule(h.id, true); await settle();
@@ -97,7 +97,7 @@ test('two-slot hung transports exhaust finite per-window retries and finish with
   queue.pump(); t.mock.timers.tick(600000); await settle(); assert.equal(signals.length, 9);
 });
 
-test('bounded v2 registry preserves full source and translations while removing durable bookkeeping', () => {
+test('compact v3 wire preserves full source and translations without repeated text or mention IDs', () => {
   const id = i => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
   const input = { listening_id: id(100), window_id: `${id(100)}:0`, window_revision: 42, input_fingerprint: 'f'.repeat(64),
     focus_segments: Array.from({ length: 6 }, (_, i) => ({ id: id(i), sequence_no: i + 4, text: `Company ${i} released Product ${i}.`, translation: `公司 ${i} 发布了产品 ${i}。` })),
@@ -108,10 +108,10 @@ test('bounded v2 registry preserves full source and translations while removing 
   const before = Buffer.byteLength(JSON.stringify(old)), after = Buffer.byteLength(JSON.stringify(request.body));
   assert.ok(after <= 90000, 'registry remains within the request byte budget');
   const wire = JSON.parse(request.body.messages[1].content);
-  assert.equal(wire.contract_version, 'relations-v2'); assert.ok(wire.evidence_version);
-  assert.ok(wire.evidence.length > 0); assert.ok(wire.mentions.length > 0);
+  assert.equal(wire.contract_version, 'relations-v3'); assert.ok(wire.evidence_version);
+  assert.ok(wire.evidence.length > 0); assert.equal(wire.mentions, undefined);
   assert.doesNotMatch(request.body.messages[1].content, /input_fingerprint|source_revision|window_revision|00000000-0000-4000/);
-  assert.deepEqual(wire.focus_segments.map(s => s.text), input.focus_segments.map(s => s.text));
+  assert.deepEqual(wire.focus_segments.map(s => relationSource(wire, s.id)), input.focus_segments.map(s => s.text));
   assert.deepEqual(wire.context_segments.map(s => s.translation), input.context_segments.map(s => s.translation));
   console.info(JSON.stringify({ syntheticPayloadBytesBefore: before, syntheticPayloadBytesAfter: after, reductionPercent: Number(((before - after) / before * 100).toFixed(1)) }));
 });
@@ -141,4 +141,21 @@ test('an available second slot still yields to foreground work and provider cool
   busy = false; cooldownUntil = Date.now() + 3000; queue.pump();
   t.mock.timers.tick(2999); await settle(); assert.equal(gates.length, 1);
   t.mock.timers.tick(1); await settle(); assert.equal(gates.length, 2);
+});
+
+test('32 analyzed windows with 92 filtered proposals settle once without partial failures or replay', async t => {
+  const h = seed(t, 192); let calls = 0;
+  const workflow = createRelationWorkflow({ store: h.store, extract: async () => {
+    const count = ++calls <= 28 ? 3 : 2;
+    return { relations: [], rejected: Array.from({ length: count }, () => ({ code: 'SEMANTIC_PREDICATE_UNSUPPORTED' })), returnedCount: count };
+  } });
+  for (let job; (job = h.store.nextRelationJob(h.id, { quietMs: 0 }));) {
+    const result = await workflow.execute(job, 'synthetic-only');
+    assert.equal(result.kind, 'terminal'); assert.equal(result.outcome, 'empty');
+  }
+  const status = h.store.relationProcessing(h.id);
+  assert.equal(calls, 32); assert.equal(status.requestCount, 32); assert.equal(status.diagnostics.rejectedCount, 92);
+  assert.equal(status.state, 'empty'); assert.equal(status.partialJobs, 0); assert.equal(status.failedJobs, 0);
+  assert.equal(status.canRetryProblems, false); assert.equal(status.progress.completedWindows, 32);
+  assert.equal(status.progress.remainingWindows, 0);
 });

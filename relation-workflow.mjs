@@ -95,8 +95,8 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
         rejected: parsed.rejected || [], returnedCount: parsed.returnedCount, coverageLimited: parsed.coverageLimited === true, usage: parsed.usage || null });
       if (result?.stale) return { kind: 'discarded', reason: 'stale' };
       notify(onChange, id, result);
-      return { kind: 'terminal', outcome: parsed.rejected?.length || input.coverage_limited || parsed.coverageLimited ? 'partial' :
-        parsed.relations.length ? 'ok' : 'empty', ...result };
+      return { kind: 'terminal', outcome: result?.state === 'partial' ? 'partial' :
+        result?.accepted ? 'ok' : 'empty', ...result };
     } catch (error) {
       if (!store.hasListening(id)) return { kind: 'discarded' };
       if (signal?.aborted || stopped(store.relationProcessing?.(id))) return { kind: 'discarded' };

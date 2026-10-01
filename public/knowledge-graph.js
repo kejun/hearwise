@@ -196,16 +196,10 @@ export function graphStatusText(status = {}, hasRelations = false) {
     return '正在整理关系…字幕与条目可继续使用';
   }
   if (status.failedJobs || ['failed', 'invalid'].includes(state)) return '关系整理失败，已有条目与关系仍可查看；可手动重试未完成内容';
-  if (status.partialJobs || state === 'partial') return '关系部分完成，仍有未能确认的内容；已有结果保留，可手动重试失败和部分窗口';
-  if (status.waitingNodes || status.waitingNodesJobs || state === 'waiting_nodes') return '等待更多已确认知识条目';
+  if (status.partialJobs || state === 'partial') return '关系部分完成，部分内容未处理完整；已保存关系可继续查看';
+  if (state === 'waiting_nodes') return '当前可关联的知识条目不足，条目可独立查看';
   if (['complete', 'empty', 'ok'].includes(state) || status.completedJobs || status.completeJobs) {
-    if (hasRelations) return '关系整理完成';
-    const diagnostics = status.diagnostics;
-    if (!diagnostics || diagnostics.returnedCount == null || diagnostics.unknownJobs) return '整理已结束，当前没有可展示的关系；返回与校验数量未记录或尚未取得，请查看诊断';
-    if (diagnostics.resultJobs === 0) return '整理已结束，尚无已记录的窗口结果，不能判断模型是否返回过关系';
-    if (diagnostics.returnedCount === 0) return '整理已结束，模型未返回关系候选';
-    if (diagnostics.acceptedCount === 0 && diagnostics.rejectedCount > 0) return '整理已结束，返回的关系候选未通过校验；请查看拒绝原因';
-    return '整理已结束，当前没有可展示的关系；候选与校验结果见下方';
+    return hasRelations ? '关系整理完成' : '关系整理完成，未发现有充分依据的关系；知识条目可独立查看';
   }
   if (hasRelations) return '已保存的对话关系';
   return '尚未生成关系，知识条目可先独立查看';
@@ -239,7 +233,7 @@ export function graphDiagnosticsText(status = {}) {
   if (!d) return status.state && status.state !== 'not_generated' ? ['诊断暂不可用；不能根据空图谱判断模型是否返回了关系候选。'] : [];
   const lines = [
     `服务端关系：当前可见 ${numberText(d.visibleRelationCount)} 条 · 已保存 ${numberText(d.storedRelationCount)} 条（含已失效关系）`,
-    `各窗口最近一次已记录结果（不是本轮累计）：模型返回 ${numberText(d.returnedCount)} 项 · 通过校验 ${numberText(d.validatorAcceptedCount)} 项 · 最终接收 ${numberText(d.acceptedCount)} 项 · 拒绝 ${numberText(d.rejectedCount)} 项`,
+    `各窗口最近一次已记录结果（不是本轮累计）：模型返回 ${numberText(d.returnedCount)} 项 · 通过校验 ${numberText(d.validatorAcceptedCount)} 项 · 最终接收 ${numberText(d.acceptedCount)} 项 · 已忽略候选 ${numberText(d.rejectedCount)} 项`,
     `写入新关系 ${numberText(d.insertedRelationCount)} 条 · 复用已有关系 ${numberText(d.deduplicatedCount)} 项（可能新增表述或依据）`,
     `已完成或部分完成的窗口结果：${numberText(d.resultJobs)} 个，其中 ${numberText(d.measuredJobs)} 个有完整数量记录 · ${numberText(d.coverageLimitedWindows)} 个窗口存在输入覆盖限制`
   ];
@@ -247,7 +241,7 @@ export function graphDiagnosticsText(status = {}) {
   if (d.unknownJobs || ['returnedCount', 'validatorAcceptedCount', 'acceptedCount', 'insertedRelationCount', 'deduplicatedCount'].some(key => d[key] == null)) {
     lines.push(`有 ${numberText(d.unknownJobs)} 个窗口的数量未记录或尚未取得（可能是历史记录、等待处理或解析失败）；未知不等于 0，也不能据此认定模型没有返回关系。`);
   }
-  for (const [field, title] of [['rejectionReasons', '拒绝原因'], ['failureReasons', '请求失败原因']]) {
+  for (const [field, title] of [['rejectionReasons', '未保存候选详情'], ['failureReasons', '请求失败原因']]) {
     const reasons = Array.isArray(d[field]) ? d[field] : [];
     if (reasons.length) lines.push(`${title}：${reasons.map(reason => `${reason.label || reason.code || '原因未记录'}（${numberText(reason.count)} 项${reason.label && reason.code ? `，${reason.code}` : ''}）`).join('；')}`);
   }
@@ -256,7 +250,7 @@ export function graphDiagnosticsText(status = {}) {
 
 export function graphCostText(status = {}) {
   const limits = status.limits || {};
-  return `点击后持续处理本次收听全部尚未完成或已变化的文本窗口，保留已有关系，不设整轮 token、请求数或处理时长上限。每个窗口最多尝试 ${numberText(limits.maxWindowRequests ?? 3)} 次，单次请求最长 ${durationText(limits.requestTimeoutMs ?? 30000)}，最多 ${numberText(limits.maxConcurrent ?? 2)} 个并行请求；失败和部分完成可选择重试，保留已有结果与成功窗口。会使用连接设置中的千问 API Key 发送相关最终原文、已完成译文和已有知识条目，产生额外模型费用。可随时取消；取消后已发出的请求仍可能计费。`;
+  return `点击后持续处理本次收听全部尚未完成或已变化的文本窗口，保留已有关系，不设整轮 token、请求数或处理时长上限。每个窗口最多尝试 ${numberText(limits.maxWindowRequests ?? 3)} 次，单次请求最长 ${durationText(limits.requestTimeoutMs ?? 30000)}，最多 ${numberText(limits.maxConcurrent ?? 2)} 个并行请求；没有可靠关系也会正常完成；仅请求失败或未处理完整的窗口可重试。会使用连接设置中的千问 API Key 发送相关最终原文、已完成译文和已有知识条目，产生额外模型费用。可随时取消；取消后已发出的请求仍可能计费。`;
 }
 
 export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, runNumber = () => '?' }) {
@@ -306,7 +300,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const status = element('p', 'graph-status'); status.id = 'graph-status'; status.setAttribute('role', 'status');
   const notice = element('p', 'graph-notice'); notice.id = 'graph-updates'; notice.setAttribute('role', 'status');
   const generate = button('生成本次收听的关系', 'graph-generate', () => { void startGeneration(); });
-  const retry = button('重试失败和部分窗口', 'graph-retry', () => showRetryConfirmation());
+  const retry = button('重试未完成窗口', 'graph-retry', () => showRetryConfirmation());
   const cancel = button('取消关系整理', 'graph-cancel', () => { void cancelGeneration(); });
   const costs = element('p', 'graph-cost'); costs.id = 'graph-cost'; generate.setAttribute('aria-describedby', 'graph-cost'); cancel.setAttribute('aria-describedby', 'graph-cost');
   const progress = element('p', 'graph-progress'); progress.id = 'graph-progress'; progress.setAttribute('role', 'status');
@@ -316,13 +310,14 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const actionNotice = element('p', 'graph-notice'); actionNotice.id = 'graph-action-notice'; actionNotice.setAttribute('role', 'status');
   const retryPanel = element('section', 'graph-retry-panel'); retryPanel.id = 'graph-retry-panel'; retryPanel.hidden = true;
   retryPanel.setAttribute('aria-label', '重试关系确认');
-  const retryWarning = element('p', '', '仅重新处理失败和部分完成的文本窗口；成功窗口和已保存关系保留。会再次发送相关原文、译文及知识条目给千问，可能产生额外模型费用。');
+  const retryWarning = element('p', '', '仅重新处理请求失败或未处理完整的文本窗口；没有可靠关系的窗口无需重试；成功窗口和已保存关系保留。会再次发送相关原文、译文及知识条目给千问，可能产生额外模型费用。');
   retryWarning.id = 'graph-retry-warning'; retry.setAttribute('aria-describedby', retryWarning.id);
   const confirmRetry = button('确认重试，可能产生费用', 'graph-retry-confirm', () => { void confirmSelectiveRetry(); });
   const dismissRetry = button('暂不重试', 'graph-retry-dismiss', () => { retryIntent = null; retryPanel.hidden = true; retry.focus({ preventScroll: true }); });
   const retryActions = element('div', 'graph-actions'); retryActions.append(confirmRetry, dismissRetry); retryPanel.append(retryWarning, retryActions);
   const jobPanel = element('section', 'graph-job-panel'); jobPanel.setAttribute('aria-label', '关系整理进度与费用');
-  const diagnostics = element('section', 'graph-diagnostics'); diagnostics.id = 'graph-diagnostics'; diagnostics.setAttribute('aria-label', '关系生成诊断');
+  const diagnostics = element('details', 'graph-diagnostics');
+  const diagnosticSummary = element('summary', '', '整理详情'); diagnostics.id = 'graph-diagnostics'; diagnostics.setAttribute('aria-label', '关系生成诊断');
   const usage = element('p', 'graph-cost'); usage.id = 'graph-usage';
   const disclaimer = element('p', 'graph-disclaimer', '连线表示对话中有这样的表述，不代表已经外部事实核查。计划、否定、推测和时间条件会保留。');
   const panel = element('section', 'graph-details'); panel.id = 'graph-details'; panel.hidden = true;
@@ -525,7 +520,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     generate.disabled = generating || cancelling || recovering || terminalSyncing || !listeningId || snapshotStatus.state !== 'waiting_key' && graphWorkActive(snapshotStatus);
     generate.hidden = ['failed', 'partial', 'invalid'].includes(snapshotStatus.state);
     retry.hidden = !retryableGraph(snapshotStatus) || graphWorkActive(snapshotStatus);
-    retry.textContent = `重试失败和部分窗口${snapshotStatus.retryableWindows ? `（${numberText(snapshotStatus.retryableWindows)} 个）` : ''}`;
+    retry.textContent = `重试未完成窗口${snapshotStatus.retryableWindows ? `（${numberText(snapshotStatus.retryableWindows)} 个）` : ''}`;
     retry.disabled = generating || cancelling || recovering || terminalSyncing || !Number.isInteger(snapshotStatus.round?.epoch);
     if (retryIntent && (retryIntent.id !== listeningId || retryIntent.gen !== generation || retryIntent.expectedEpoch !== snapshotStatus.round?.epoch || graphWorkActive(snapshotStatus))) retryIntent = null;
     retryPanel.hidden = !retryIntent;
@@ -536,7 +531,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     usage.textContent = graphUsageText(snapshotStatus.usageLastHour);
     costs.textContent = graphCostText(snapshotStatus);
     const diagnosticLines = graphDiagnosticsText(snapshotStatus);
-    diagnostics.replaceChildren(...diagnosticLines.map(text => element('p', '', text))); diagnostics.hidden = diagnosticLines.length === 0;
+    diagnostics.replaceChildren(diagnosticSummary, ...diagnosticLines.map(text => element('p', '', text))); diagnostics.hidden = diagnosticLines.length === 0;
     generate.textContent = generating ? '正在启动…' : recovering ? '正在确认服务器状态…' : ['failed', 'invalid'].includes(snapshotStatus.state) ? '重试未完成的关系' : snapshotStatus.state === 'partial' ? '检查新增或变化的内容' : generated ? '继续关系整理' : '生成本次收听的关系';
     loader.setPolling(!generating && !cancelling && graphWorkActive(snapshotStatus) && snapshotStatus.state !== 'waiting_key' && snapshotStatus.waitReason !== 'waiting_key' && snapshotStatus.keyAvailable !== false);
     renderProgress();

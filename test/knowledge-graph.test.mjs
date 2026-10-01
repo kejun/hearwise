@@ -59,10 +59,10 @@ test('edge and detail labels do not flatten negative, planned, uncertain, tempor
 test('status distinguishes opt-in, missing key, zero results, failure and partial completion', () => {
   assert.match(graphStatusText({ enabled: false, pendingJobs: 3 }), /尚未生成/);
   assert.match(graphStatusText({ state: 'waiting_key', pendingJobs: 2 }), /需.*API Key/);
-  assert.match(graphStatusText({ state: 'empty' }), /数量未记录或尚未取得/);
-  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 0, unknownJobs: 0, resultJobs: 1 } }), /模型未返回关系候选/);
-  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 0, unknownJobs: 0, resultJobs: 0 } }), /尚无已记录的窗口结果/);
-  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 3, acceptedCount: 0, rejectedCount: 3, unknownJobs: 0 } }), /候选未通过校验/);
+  assert.match(graphStatusText({ state: 'empty' }), /未发现有充分依据的关系/);
+  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 0, unknownJobs: 0, resultJobs: 1 } }), /未发现有充分依据的关系/);
+  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 0, unknownJobs: 0, resultJobs: 0 } }), /未发现有充分依据的关系/);
+  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 3, acceptedCount: 0, rejectedCount: 3, unknownJobs: 0 } }), /未发现有充分依据的关系/);
   assert.match(graphStatusText({ partialJobs: 1 }), /部分完成/);
   assert.match(graphStatusText({ failedJobs: 1 }), /失败/);
 });
@@ -132,7 +132,7 @@ test('round progress separates current round from historical usage and freezes t
 test('cost copy promises full-history work with per-window safety and no fabricated token quota', () => {
   assert.match(graphCostText({ limits: { maxWindowRequests: 3, requestTimeoutMs: 30000, maxConcurrent: 2 } }), /不设整轮 token、请求数或处理时长上限.*窗口最多尝试 3 次.*最长 30 秒.*2 个并行/);
   assert.doesNotMatch(graphCostText({ limits: { maxRequests: 12, maxEstimatedTokens: 120000 }, round: { deadlineAt: 120000, startedAt: 0 } }), /12 次|120,000|保守估算|达到上限|下一轮/);
-  assert.match(graphCostText(), /全部尚未完成或已变化.*失败和部分完成可选择重试.*保留已有结果与成功窗口.*取消后已发出的请求仍可能计费/);
+  assert.match(graphCostText(), /全部尚未完成或已变化.*保留已有关系.*没有可靠关系也会正常完成.*仅请求失败或未处理完整的窗口可重试.*取消后已发出的请求仍可能计费/);
   assert.match(graphUsageText(), /暂不可用.*不代表免费/);
   assert.match(graphUsageText({ requests: 7, measuredRequests: 4, totalTokens: 9200, inputTokens: 8000, outputTokens: 1200 }), /过去 1 小时.*7 次.*9,200 tokens.*3 次请求用量未知.*仍可能产生费用/);
   assert.match(graphUsageText({ requests: 2, measuredRequests: 0, totalTokens: 0 }), /2 次请求用量未知/);
@@ -257,7 +257,7 @@ test('lost POST response and failed recovery GET reach terminal UI without anoth
   t.mock.timers.tick(4000); await flush(); assert.match(dom.element('graph-status').textContent, /正在整理关系/);
   state = { ...state, state: 'partial', pendingJobs: 7, round: { ...state.round, finishedAt: Date.now() } };
   t.mock.timers.tick(2000); await flush();
-  assert.match(dom.element('graph-status').textContent, /部分完成.*已有结果保留/);
+  assert.match(dom.element('graph-status').textContent, /部分完成.*已保存关系可继续查看/);
   assert.equal(dom.element('graph-generate').textContent, '检查新增或变化的内容');
   assert.equal(dom.element('graph-generate').disabled, false);
   const finalGets = gets; t.mock.timers.tick(30000); await flush(); assert.equal(gets, finalGets); assert.equal(posts, 1);
@@ -289,9 +289,9 @@ test('diagnostics distinguish returned, rejected, deduplicated, visible and lega
     failureReasons: [{ code: 'RELATION_OUTPUT_LIMIT', count: 1, label: '模型输出被截断' }] };
   const text = graphDiagnosticsText({ state: 'partial', diagnostics: d }).join('\n');
   assert.match(text, /当前可见 4 条.*已保存 5 条/);
-  assert.match(text, /不是本轮累计.*模型返回 9 项.*通过校验 7 项.*最终接收 6 项.*拒绝 3 项/);
+  assert.match(text, /不是本轮累计.*模型返回 9 项.*通过校验 7 项.*最终接收 6 项.*已忽略候选 3 项/);
   assert.match(text, /写入新关系 4 条.*复用已有关系 2 项/);
-  assert.match(text, /拒绝原因.*缺少跨句指代依据.*CROSS_SENTENCE_REFERENCE_REQUIRED/);
+  assert.match(text, /未保存候选详情.*缺少跨句指代依据.*CROSS_SENTENCE_REFERENCE_REQUIRED/);
   assert.match(text, /请求失败原因.*模型输出被截断/);
   const legacy = graphDiagnosticsText({ state: 'empty', diagnostics: { ...d, measuredJobs: 0, unknownJobs: 3,
     returnedCount: null, validatorAcceptedCount: null, acceptedCount: null, insertedRelationCount: null, deduplicatedCount: null } }).join('\n');

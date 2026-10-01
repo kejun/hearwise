@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { normalizeIdentity } from './identity-grounding.mjs';
 import { safeRelationReason, safeRejectedMetadata, readRelationDiagnostics } from './relation-diagnostics.mjs';
 import { buildRelationRequest, RELATION_CONTRACT_VERSION, canonicalizeRelation, isExplicitRelationCorrection, RELATION_LIMITS, RELATION_REQUEST_TIMEOUT_MS } from './relations.mjs';
 
@@ -77,6 +78,23 @@ function normalizeRelationFingerprints(store) {
 }
 
 const norm = value => String(value).normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+
+// Reclassify old candidate-only filtering as a completed analysis. This is a
+// local status migration: preserve edges, diagnostics, unknown counts, epochs and
+// paid attempts. Coverage/storage problems and changed windows stay unsettled.
+const storageReasons = new Set(['INVALID_ENDPOINT_OR_PREDICATE', 'MISSING_ENDPOINT', 'INVALID_QUALIFIERS',
+  'INVALID_TEXT', 'INVALID_SUPPORTS', 'INVALID_SUPPORT', 'MISSING_FOCUS_RELATION', 'INVALID_CORRECTION', 'UNKNOWN_REASON']);
+function settleFilteredRelationResults(store) {
+  for (const job of store.db.prepare("SELECT id,window_id,window_revision,input_json,rejected_json FROM relation_jobs WHERE state='partial'").all()) {
+    let input, rejected;
+    try { input = JSON.parse(job.input_json); rejected = JSON.parse(job.rejected_json); } catch { continue; }
+    if (input.coverage_limited || !Array.isArray(rejected) || !rejected.length ||
+        rejected.some(row => storageReasons.has(safeRelationReason(row?.code)))) continue;
+    store.db.prepare("UPDATE relation_jobs SET state='complete' WHERE id=?").run(job.id);
+    store.db.prepare("UPDATE relation_windows SET state='complete',last_error=NULL WHERE id=? AND revision=? AND state='partial'")
+      .run(job.window_id, job.window_revision);
+  }
+}
 
 // SQL triggers make dirtiness durable in the same transaction as every writer,
 // including V1, V2 checkpoint commits, repeat-only mentions and future editors.
@@ -168,6 +186,7 @@ export function migrateRelations(store) {
   // identity. Upgrade saved snapshots too, so migration alone cannot replay a
   // paid complete/partial result or discard a recoverable pending attempt.
   normalizeRelationFingerprints(store);
+  settleFilteredRelationResults(store);
   // Replace deployed v6 triggers, not just triggers on fresh databases.
   for (const row of db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'relation_%'").all()) db.exec(`DROP TRIGGER ${row.name}`);
   const clock = "CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)";
@@ -255,15 +274,15 @@ function inputFor(store, window) {
   const mentions = store.db.prepare(`SELECT m.* FROM knowledge_mentions m JOIN segments s ON s.id=m.segment_id
     WHERE s.listening_id=? AND s.sequence_no BETWEEN ? AND ?`).all(window.listening_id, Math.max(1, window.from_sequence - RELATION_CONTEXT_SIZE), window.to_sequence);
   for (const item of all) { item.aliases = aliases.filter(a => a.item_id === item.id).map(a => a.alias); item.mentions = mentions.filter(m => m.item_id === item.id); }
-  const text = norm(segments.map(s => s.original_text).join('\n'));
-  const recalled = all.filter(item => item.mentions.some(m => ids.has(m.segment_id)) || [item.canonical_name, ...item.aliases].some(name => name && text.includes(norm(name))))
+  const text = normalizeIdentity(segments.map(s => s.original_text).join('\n'));
+  const recalled = all.filter(item => item.mentions.some(m => ids.has(m.segment_id)) || [item.canonical_name, ...item.aliases].some(name => name && text.includes(normalizeIdentity(name))))
     .sort((a, b) => Number(b.mentions.some(m => ids.has(m.segment_id))) - Number(a.mentions.some(m => ids.has(m.segment_id))) || a.id.localeCompare(b.id));
   const candidates = recalled.slice(0, 48).sort((a, b) => a.id.localeCompare(b.id)).map(item => ({ id: item.id, listening_id: item.listening_id,
     canonical_name: item.canonical_name, type: item.type, display_label: item.display_label,
     certainty: item.certainty,
     mentions: item.mentions.filter(mention => typeof mention.surface_text === 'string' && mention.surface_text.length <= 2000)
       .slice(0, 48).map(mention => ({ segment_id: mention.segment_id, surface_text: mention.surface_text })),
-    aliases: [...item.aliases].sort((a, b) => Number(text.includes(norm(b))) - Number(text.includes(norm(a))) || a.localeCompare(b)).slice(0, 12),
+    aliases: [...item.aliases].sort((a, b) => Number(text.includes(normalizeIdentity(b))) - Number(text.includes(normalizeIdentity(a))) || a.localeCompare(b)).slice(0, 12),
     identity_revision: stableHash([item.canonical_name, item.type, item.display_label, [...item.aliases].sort(), item.certainty]) }));
   const candidateIds = new Set(candidates.map(c => c.id));
   const existing = store.db.prepare(`SELECT a.*,r.subject_item_id,r.object_item_id,r.predicate FROM relation_assertions a JOIN relations r ON r.id=a.relation_id
@@ -369,7 +388,7 @@ function validateEntry(store, job, entry) {
 
 export const relationMethods = {
   recoverRelationJobs() {
-    this.tx(() => { normalizeRelationFingerprints(this); fenceObsoleteRelationJobs(this); });
+    this.tx(() => { normalizeRelationFingerprints(this); settleFilteredRelationResults(this); fenceObsoleteRelationJobs(this); });
     this.db.prepare("UPDATE relation_jobs SET state=CASE WHEN request_count>=max_requests THEN 'failed' ELSE 'pending' END,last_error='REQUEST_INTERRUPTED',updated_at=? WHERE state='running'").run(stamp());
     this.db.exec("UPDATE relation_windows SET state='failed',last_error='REQUEST_BUDGET_EXHAUSTED' WHERE state='pending' AND EXISTS (SELECT 1 FROM relation_jobs j WHERE j.window_id=relation_windows.id AND j.window_revision=relation_windows.revision AND j.state='failed')");
     // Legacy work without a run record still needs an explicit resume. Restart
@@ -465,8 +484,8 @@ export const relationMethods = {
       runningJobs: round?.state === 'active' ? jobs.runningJobs : 0, failedJobs: counts.failed || 0, partialJobs: counts.partial || 0,
       waitingNodes: counts.waiting_nodes || 0, requestCount: jobs.requestCount, nextReadyAt: ready.length ? Math.min(...ready) : null,
       waitReason: round?.wait_reason || null, limits: { ...RELATION_RUN_LIMITS },
-      progress: { totalWindows: rows.reduce((n, row) => n + row.n, 0), completedWindows: (counts.complete || 0) + (counts.partial || 0),
-        remainingWindows: actionable + (counts.failed || 0) + (counts.waiting_nodes || 0), partialWindows: counts.partial || 0 } };
+      progress: { totalWindows: rows.reduce((n, row) => n + row.n, 0), completedWindows: (counts.complete || 0) + (counts.partial || 0) + (counts.waiting_nodes || 0),
+        remainingWindows: actionable + (counts.failed || 0), partialWindows: counts.partial || 0 } };
     const requests = this.db.prepare('SELECT q.usage_json FROM relation_requests q JOIN relation_jobs j ON j.id=q.job_id WHERE j.listening_id=? AND q.started_at>=?').all(listeningId, Date.now() - 3600000);
     result.usageLastHour = usageSummary(requests);
     if (round) {
@@ -481,7 +500,7 @@ export const relationMethods = {
     result.canRetryProblems = result.retryableWindows > 0 && actionable === 0;
     result.state = !result.enabled ? 'not_generated' : round?.state === 'cancelled' ? 'cancelled' :
       round?.state === 'paused' || (round?.state === 'complete' && actionable) ? 'paused' :
-      l.relation_waiting_key && (result.pendingJobs || result.runningJobs) ? 'waiting_key' : result.runningJobs ? 'running' : result.pendingJobs ? 'queued' : result.failedJobs ? 'failed' : result.partialJobs ? 'partial' : result.waitingNodes ? 'waiting_nodes' : relations ? 'complete' : 'empty';
+      l.relation_waiting_key && (result.pendingJobs || result.runningJobs) ? 'waiting_key' : result.runningJobs ? 'running' : result.pendingJobs ? 'queued' : result.failedJobs ? 'failed' : result.partialJobs ? 'partial' : relations ? 'complete' : 'empty';
     return result;
   },
   relationDiagnostics(listeningId) {
@@ -697,7 +716,9 @@ export const relationMethods = {
         job.input.coverage_limited = true;
         this.db.prepare('UPDATE relation_jobs SET input_json=? WHERE id=?').run(JSON.stringify(job.input), jobId);
       }
-      const state = rejects.length || job.input.coverage_limited ? 'partial' : 'complete';
+      // Filtering a model proposal is an ordinary empty/partial set of edges,
+      // not unfinished work. Only actual coverage or commit problems are partial.
+      const state = rejects.some(row => storageReasons.has(row.code)) || job.input.coverage_limited ? 'partial' : 'complete';
       this.recordRelationUsage(jobId, { usage, outcome: state });
       const countedReturned = relations.length + rejected.length;
       if (returnedCount != null && returnedCount !== countedReturned) throw new Error('RELATION_RESULT_COUNT_MISMATCH');
