@@ -32,7 +32,8 @@ test('knowledge and graph share full model cooldown; MT 429 does not stop anothe
   assert.equal(provider.readyAt('b'), 0);
   now = 3100; assert.equal(provider.readyAt('a'), 0);
   provider.coolDown('a', 99999999); assert.equal(provider.readyAt('a'), now + 99999999);
-  provider.forget('a'); assert.equal(provider.readyAt('a'), 0);
+  provider.release('a'); assert.equal(provider.readyAt('a'), now + 99999999);
+  now += 99999999; assert.equal(provider.readyAt('a'), 0);
 });
 
 test('aborted admission never sends a request; metric callback cannot fail successful foreground work', async () => {

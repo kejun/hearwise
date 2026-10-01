@@ -220,7 +220,7 @@ function maybeReleaseKey(id) {
       activeTranslations.get(id) || translations.hasListening(id)) return;
   const key = keys.get(id);
   keys.delete(id);
-  if (key && ![...keys.values()].includes(key)) provider.forget(key);
+  if (key && ![...keys.values()].includes(key)) provider.release(key);
   knowledgeScheduler.pump();
   relationScheduler?.pump();
 }

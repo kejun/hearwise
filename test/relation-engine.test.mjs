@@ -222,3 +222,22 @@ test('deterministic input budget failure makes zero HTTP attempts and does not c
   assert.equal(h.store.db.prepare('SELECT request_count FROM relation_jobs WHERE id=?').get(job.id).request_count, 0);
   assert.equal(h.store.relationProcessing(h.run.listeningId).usageLastHour.requests, 0);
 });
+
+test('terminal 429 preserves Retry-After across key release and explicit same-key resubmit', async t => {
+  const provider = createProviderAdmission();
+  let h;
+  h = queueHarness(t, { provider, onIdle: id => {
+    if (h.queue.hasWork(id)) return;
+    const key = h.keys.get(id); h.keys.delete(id); provider.release(key);
+  } });
+  h.add('a', 'shared-key'); h.queue.pump();
+  const started = Date.now();
+  h.calls[0].resolve({ kind: 'terminal', outcome: 'failed', rateLimitMs: 600000 }); await settle();
+  assert.equal(h.keys.has('a'), false);
+  assert.equal(provider.readyAt('shared-key'), started + 600000);
+  h.add('a', 'shared-key'); h.queue.schedule('a', true);
+  assert.equal(h.calls.length, 1);
+  t.mock.timers.tick(599999); h.queue.pump(); assert.equal(h.calls.length, 1);
+  t.mock.timers.tick(1); h.queue.pump(); assert.equal(h.calls.length, 2);
+  h.calls[1].resolve(); await settle();
+});

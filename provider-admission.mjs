@@ -1,22 +1,27 @@
+import { createHash } from 'node:crypto';
+
 // Shared text-provider admission. Foreground requests never wait behind graph work.
 // Cooldowns are scoped to the knowledge/relation model, not ASR, MT or TTS.
 export function createProviderAdmission({ now = () => Date.now(), onMetric = () => {} } = {}) {
+  // Expiry metadata survives ordinary key release without retaining credentials.
   const cooldowns = new Map();
+  const fingerprint = key => createHash('sha256').update(String(key)).digest('hex');
   const active = new Map();
   function readyAt(key) {
-    const until = cooldowns.get(key) || 0;
-    if (until <= now()) { cooldowns.delete(key); return 0; }
+    for (const [id, until] of cooldowns) if (until <= now()) cooldowns.delete(id);
+    const until = cooldowns.get(fingerprint(key)) || 0;
+    if (until <= now()) return 0;
     return until;
   }
   function coolDown(key, delayMs) {
     if (Number.isFinite(delayMs) && delayMs > 0) {
-      cooldowns.set(key, Math.max(readyAt(key), now() + delayMs));
+      cooldowns.set(fingerprint(key), Math.max(readyAt(key), now() + delayMs));
     }
   }
   return {
     readyAt, coolDown,
     canStartBackground: () => ![...active].some(([priority, count]) => priority !== 'relations' && count > 0),
-    forget(key) { cooldowns.delete(key); },
+    release(key) { readyAt(key); },
     async run({ key, priority, signal }, request) {
       if (signal?.aborted) throw signal.reason;
       const started = now();

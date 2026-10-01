@@ -61,6 +61,8 @@ try {
   await page.locator('#graph-generate').click();
   await page.locator('[data-relation-id]').first().waitFor({ timeout: 20000 });
   const edge = page.locator('[data-relation-id]').first();
+  await page.locator('#graph-viewport').scrollIntoViewIfNeeded();
+  await screenshot('graph-desktop-overview.png');
   await edge.click();
   await page.locator('.graph-evidence-content').filter({ hasText: '第 104 句' }).first().waitFor();
   assert.match(await page.locator('#graph-details').textContent(), /最终译文：.*1900/s);
@@ -75,6 +77,8 @@ try {
   await page.locator('#graph-close').click(); await page.locator('#graph-local').click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('#graph-fit').click();
+  await page.locator('#graph-viewport').scrollIntoViewIfNeeded();
+  await screenshot('graph-mobile-overview.png');
   // Semantic node list provides full-size keyboard/touch controls even at low zoom.
   await page.locator('.graph-results > summary').click();
   const result = page.locator(`[data-result-node-id="${fixture.seeded.first.nodes[0].id}"]`);
@@ -100,6 +104,31 @@ try {
   assert.equal(await page.locator('#graph-details').isHidden(), true);
   assert.equal(await page.locator('#graph-search').inputValue(), '');
   checks.push('Browser preference survives reload; switching listening resets old nodes, relations and detail callbacks');
+  // Presentation-only stress fixture, clearly synthetic; it never enters storage/model calls.
+  const stressNodes = Array.from({ length: 36 }, (_, i) => ({ id: `stress-${i}`, type: i % 3 ? 'term' : 'person',
+    canonical_name: i === 0 ? '特别长的知识节点名称，用于检验窄屏详情完整换行与图谱名称省略显示' : `Synthetic topic ${i}`,
+    short_description: 'Synthetic layout fixture; not an extracted or verified fact.', content_version: 1, mentions: [] }));
+  const stressRelations = Array.from({ length: 52 }, (_, i) => ({ id: `stress-edge-${i}`,
+    subject_item_id: stressNodes[i % 36].id, object_item_id: stressNodes[(i * 7 + 1) % 36].id,
+    predicate: 'uses', assertions: [{ id: `stress-assertion-${i}`, statement: 'Synthetic relation for layout only.',
+      status: 'needs_review', polarity: i % 4 ? 'positive' : 'negative', modality: i % 3 ? 'asserted' : 'planned', supports: [] }] }))
+    .filter(r => r.subject_item_id !== r.object_item_id);
+  await page.route(`**/api/listenings/${fixture.seeded.second.listeningId}/graph`, route => route.fulfill({ status: 200,
+    contentType: 'application/json', body: JSON.stringify({ listeningId: fixture.seeded.second.listeningId,
+      graphRevision: 999999, nodes: stressNodes, relations: stressRelations, status: { enabled: true, state: 'complete' } }) }));
+  await page.locator('#graph-refresh').click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-node-id]').length >= 36);
+  await page.locator('#graph-search').fill('特别长');
+  assert.match(await page.locator('#graph-count').textContent(), /1 \/ /);
+  await page.locator('[data-node-id="stress-0"]').click();
+  assert.match(await page.locator('#graph-detail-title').textContent(), /完整换行/);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await screenshot('graph-mobile-long-name.png');
+  await page.locator('#graph-close').click(); await page.locator('#graph-search').fill('');
+  await page.setViewportSize({ width: 1360, height: 1000 });
+  await page.locator('#graph-fit').click(); await page.locator('#graph-viewport').scrollIntoViewIfNeeded();
+  await screenshot('graph-desktop-dense-fixture.png');
+  checks.push('Synthetic dense map and long names stay searchable, keyboard accessible and within viewport; qualifiers remain visible');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: true, checks, screenshots: directory || null,
     provider: 'local stub only; no live-model quality or latency benchmark' }, null, 2));
