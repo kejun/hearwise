@@ -15,9 +15,10 @@ const limits = { maxWindowRequests: 3, requestTimeoutMs: 30000, maxConcurrent: 2
 const nodes = [{ id: 'kodak', canonical_name: 'Eastman Kodak', display_label: 'organization', content_version: 1, short_description: '对话中提到的相机公司' },
   { id: 'brownie', canonical_name: 'Brownie camera', display_label: 'product', content_version: 1 }];
 const relation = { id: 'edge', subject_item_id: 'kodak', object_item_id: 'brownie', predicate: 'released', assertions: [{ id: 'claim', status: 'active', modality: 'asserted', polarity: 'positive', statement: 'Kodak released the Brownie camera.' }] };
+const savedRelations = { a: [relation], b: [] }, postBodies = [], failedReads = [];
 const statuses = { a: { enabled: false, state: 'not_generated', limits }, b: { enabled: false, state: 'not_generated', limits } };
 const counters = { GET: 0, POST: 0, DELETE: 0 };
-let revision = 1, roundNumber = 0, holdGet, holdPost, holdDelete, dropPost = false, dropDelete = false, failGets = 0, startedEvents = 0, browser;
+let revision = 1, roundNumber = 0, holdGet, holdPost, holdDelete, dropPost = false, dropDelete = false, failRecoveryReadAfterPost = false, failGets = 0, rejectNextRetry = false, startedEvents = 0, browser;
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const until = async check => {
   const deadline = Date.now() + 10000;
@@ -44,12 +45,25 @@ const server = http.createServer(async (req, res) => {
   if (!id) { res.writeHead(404); return res.end(); }
   counters[req.method]++;
   if (req.method === 'GET') {
-    if (failGets > 0) { failGets--; res.writeHead(503, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: '临时读取失败' })); }
-    const data = structuredClone({ listeningId: id, graphRevision: revision, nodes: id === 'a' ? nodes : [{ id: 'other', canonical_name: '另一段收听', type: 'term' }], relations: id === 'a' && statuses.a.enabled ? [relation] : [], status: statuses[id] });
+    if (failGets > 0) { failGets--; failedReads.push({ listeningId: id, roundId: statuses[id].round?.id }); res.writeHead(503, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: '临时读取失败' })); }
+    const data = structuredClone({ listeningId: id, graphRevision: revision, nodes: id === 'a' ? nodes : [{ id: 'other', canonical_name: '另一段收听', type: 'term' }], relations: statuses[id].enabled ? savedRelations[id] : [], status: statuses[id] });
     const gate = holdGet; holdGet = null; if (gate) await gate.promise;
     res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(data));
   }
-  if (req.method === 'POST') { statuses[id] = activeStatus(); revision++; }
+  if (req.method === 'POST') {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); postBodies.push(request);
+    if (request.retry === 'failed_partial') {
+      assert.equal(request.expectedEpoch, statuses[id].round.epoch);
+      if (rejectNextRetry) {
+        rejectNextRetry = false;
+        statuses[id] = { ...statuses[id], round: { ...statuses[id].round, id: `changed-${++roundNumber}`, epoch: roundNumber } }; revision++;
+        res.writeHead(409, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ code: 'RETRY_STATE_CHANGED', error: '整理状态已改变，请刷新后再重试' }));
+      }
+    }
+    statuses[id] = activeStatus(); revision++;
+  }
   if (req.method === 'DELETE') { statuses[id] = { ...statuses[id], state: 'cancelled', round: { ...statuses[id].round, state: 'cancelled', stopReason: 'USER_CANCELLED', finishedAt: Date.now() } }; revision++; }
   const data = structuredClone({ status: statuses[id], graphRevision: revision });
   const gate = req.method === 'POST' ? holdPost : holdDelete;
@@ -85,6 +99,11 @@ try {
     assert.equal(counters[method], before + 1, 'the fixture must accept the mutation exactly once');
     assert.equal(accepted.status.state, method === 'POST' ? 'running' : 'cancelled');
     lostResponses.push({ method, roundId: accepted.status.round.id });
+    if (method === 'POST' && failRecoveryReadAfterPost) {
+      // Arm only after this POST was accepted. A preceding terminal-detail GET
+      // must not consume the failure intended for the lost-response recovery.
+      failRecoveryReadAfterPost = false; failGets++;
+    }
     await route.abort('failed');
   });
   async function assertReadPollingStopped() {
@@ -218,12 +237,16 @@ try {
   assert.match(await page.locator('#graph-status').textContent(), /等待相关译文/);
   assert.equal(await page.locator('#graph-generate').isDisabled(), true);
   await page.evaluate(value => window.graph.setProcessing(value), statuses.a);
+  await settledContinuation();
+  await until(() => inFlightReads.size === 0);
   // The server accepts a start, but its response and the first recovery GET are lost.
   // Recovery must only read, then poll to completion without an SSE event or another click.
-  const beforeLostPost = counters.POST, beforeLostBrowserPost = browserRequests.POST;
-  dropPost = true; failGets = 1;
+  const beforeLostPost = counters.POST, beforeLostBrowserPost = browserRequests.POST, failuresBeforeLostPost = failedReads.length;
+  dropPost = true; failRecoveryReadAfterPost = true;
   await page.locator('#graph-generate').click();
   await page.locator('#graph-status').filter({ hasText: '服务器操作状态尚未确认' }).waitFor();
+  assert.equal(failedReads.length, failuresBeforeLostPost + 1);
+  assert.equal(failedReads.at(-1).roundId, lostResponses.find(response => response.method === 'POST').roundId, 'the failed GET must reconcile the accepted lost-response POST');
   assert.equal(await page.locator('#graph-generate').isDisabled(), true);
   await page.locator('#graph-generate').evaluate(el => { el.dispatchEvent(new Event('click')); });
   assert.equal(counters.POST, beforeLostPost + 1);
@@ -231,28 +254,32 @@ try {
   await page.locator('#graph-status').filter({ hasText: '正在整理关系' }).waitFor();
   assert.equal(counters.POST, beforeLostPost + 1);
   assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
-  statuses.a = { ...statuses.a, state: 'partial', pendingJobs: 0, runningJobs: 0,
+  statuses.a = { ...statuses.a, state: 'partial', pendingJobs: 0, runningJobs: 0, canRetryProblems: true, retryableWindows: 2,
     progress: { totalWindows: 10, completedWindows: 8, partialWindows: 2, remainingWindows: 2 }, round: { ...statuses.a.round, finishedAt: Date.now() } }; revision++;
   await page.locator('#graph-status').filter({ hasText: '关系部分完成' }).waitFor();
   assert.match(await page.locator('#graph-status').textContent(), /已有结果保留/);
   assert.match(await page.locator('#graph-progress').textContent(), /其中 2 个部分完成/);
-  assert.equal(await page.locator('#graph-generate').textContent(), '检查新增或变化的内容');
-  assert.equal(await page.locator('#graph-generate').isEnabled(), true);
+  assert.equal(await page.locator('#graph-generate').isHidden(), true);
+  assert.equal(await page.locator('#graph-retry').isVisible(), true);
+  assert.equal(await page.locator('#graph-retry').isEnabled(), true);
+  assert.match(await page.locator('#graph-retry').textContent(), /重试失败和部分窗口.*2 个/);
   await assertReadPollingStopped();
   assert.equal(counters.POST, beforeLostPost + 1);
   assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
   checks.push('Lost POST response plus failed recovery GET recovers through reads only; active polling reaches honest partial completion without SSE; no duplicate generation');
   await screenshot('relation-progress-desktop-partial.png');
   // A final invalidation can be the only signal; its failed GET must retry itself.
-  statuses.a = { ...statuses.a, state: 'failed' }; revision++; failGets = 1;
+  statuses.a = { ...statuses.a, state: 'failed', canRetryProblems: true, retryableWindows: 2 }; revision++; failGets = 1;
   await page.evaluate(revision => window.graph.invalidate('a', revision), revision);
   await page.locator('#graph-status').filter({ hasText: '临时读取失败' }).waitFor();
   await page.locator('#graph-status').filter({ hasText: '关系整理失败' }).waitFor();
-  assert.equal(await page.locator('#graph-generate').textContent(), '重试未完成的关系');
+  assert.equal(await page.locator('#graph-generate').isHidden(), true);
+  assert.equal(await page.locator('#graph-retry').isVisible(), true);
+  assert.equal(await page.locator('#graph-retry').isEnabled(), true);
   assert.equal(counters.POST, beforeLostPost + 1);
   assert.equal(browserRequests.POST, beforeLostBrowserPost + 1);
   // Online/visibility reconciliation also only reads the existing server state.
-  statuses.a = { ...statuses.a, state: 'complete', progress: { totalWindows: 10, completedWindows: 10, remainingWindows: 0 } }; revision++;
+  statuses.a = { ...statuses.a, state: 'complete', canRetryProblems: false, retryableWindows: 0, progress: { totalWindows: 10, completedWindows: 10, remainingWindows: 0 } }; revision++;
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await page.locator('#graph-status').filter({ hasText: '关系整理完成' }).waitFor();
   assert.equal(counters.POST, beforeLostPost + 1);
@@ -269,13 +296,71 @@ try {
   await assertReadPollingStopped();
   assert.deepEqual(lostResponses.map(response => response.method), ['POST', 'DELETE']);
   checks.push('Final invalidation read failures retry; online refresh reconciles without POST; lost DELETE response recovers cancellation and stops polling');
-  await page.locator('#graph-generate').click();
-  await page.locator('#graph-cancel').waitFor();
+  // A terminal detail update must retrieve final edges even without graph SSE.
+  const beforeFinalSnapshotPosts = counters.POST;
+  savedRelations.a = [];
+  await updateStatus(activeStatus());
+  assert.match(await page.locator('#graph-count').textContent(), /0 条关系/);
+  const staleZeroRead = holdGet = deferred(), readsBeforeTerminal = counters.GET;
+  await page.evaluate(() => { void window.graph.refresh(); }); await until(() => counters.GET > readsBeforeTerminal);
+  const diagnostics = { scope: 'latest_result_per_window', resultJobs: 2, measuredJobs: 2, unknownJobs: 0,
+    returnedCount: 3, validatorAcceptedCount: 2, acceptedCount: 1, rejectedCount: 2, insertedRelationCount: 1,
+    deduplicatedCount: 0, storedRelationCount: 1, visibleRelationCount: 1, coverageLimitedWindows: 0,
+    rejectionReasons: [{ code: 'CROSS_SENTENCE_REFERENCE_REQUIRED', count: 2, label: '缺少跨句指代依据' }], failureReasons: [] };
+  statuses.a = { ...statuses.a, state: 'complete', pendingJobs: 0, runningJobs: 0, waitReason: null, diagnostics,
+    progress: { totalWindows: 2, completedWindows: 2, remainingWindows: 0 }, round: { ...statuses.a.round, finishedAt: Date.now() } };
+  savedRelations.a = [relation]; revision++;
+  await page.evaluate(value => { window.graph.setProcessing(value); window.graph.setProcessing(value); }, statuses.a);
+  await page.locator('#graph-count').filter({ hasText: '1 条关系' }).waitFor();
+  await page.locator('[data-relation-id="edge"]').waitFor();
+  staleZeroRead.resolve(); await page.evaluate(() => new Promise(requestAnimationFrame));
+  assert.match(await page.locator('#graph-count').textContent(), /1 条关系/);
+  assert.equal(counters.POST, beforeFinalSnapshotPosts);
+  await assertReadPollingStopped();
+  checks.push('Terminal detail triggers authoritative graph GET, fences a delayed zero-edge response and displays a real stored edge without generation or SSE');
+  await updateStatus({ state: 'partial', partialJobs: 1, canRetryProblems: true, retryableWindows: 1,
+    progress: { totalWindows: 2, completedWindows: 2, partialWindows: 1, remainingWindows: 0 } });
+  await page.locator('#graph-retry').waitFor();
+  assert.match(await page.locator('#graph-diagnostics').textContent(), /模型返回 3 项.*最终接收 1 项.*拒绝 2 项/);
+  assert.match(await page.locator('#graph-diagnostics').textContent(), /缺少跨句指代依据.*CROSS_SENTENCE_REFERENCE_REQUIRED/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile diagnostics must not overflow');
+  await page.locator('#graph-retry').click();
+  assert.match(await page.locator('#graph-retry-warning').textContent(), /成功窗口.*保留.*额外模型费用/);
+  assert.equal(counters.POST, beforeFinalSnapshotPosts);
+  assert.ok((await page.locator('#graph-retry-confirm').boundingBox()).height >= 44);
+  await screenshot('relation-diagnostics-mobile-retry-confirmation.png');
+  await page.locator('#graph-retry-dismiss').click();
+  assert.equal(counters.POST, beforeFinalSnapshotPosts);
+  await updateStatus({ diagnostics: { ...diagnostics, measuredJobs: 1, unknownJobs: 1,
+    returnedCount: null, validatorAcceptedCount: null, acceptedCount: null, insertedRelationCount: null, deduplicatedCount: null } });
+  assert.match(await page.locator('#graph-diagnostics').textContent(), /模型返回 未知 项.*未知不等于 0/);
+  await screenshot('relation-diagnostics-mobile-unknown.png');
+  // A stale confirmation is a failed attempt, never permission to auto-resubmit.
+  rejectNextRetry = true;
+  const staleEpoch = statuses.a.round.epoch;
+  await page.locator('#graph-retry').click(); await page.locator('#graph-retry-confirm').click();
+  await page.locator('#graph-action-notice').filter({ hasText: '整理状态已改变' }).waitFor();
+  await page.waitForFunction(() => !document.querySelector('#graph-retry').disabled);
+  assert.equal(counters.POST, beforeFinalSnapshotPosts + 1);
+  assert.deepEqual(postBodies.at(-1), { key: 'local-fixture-key', retry: 'failed_partial', expectedEpoch: staleEpoch });
+  assert.equal(await page.locator('#graph-retry-panel').isHidden(), true);
+  const currentEpoch = statuses.a.round.epoch; holdPost = deferred();
+  await page.locator('#graph-retry').click();
+  await page.locator('#graph-retry-confirm').evaluate(el => { el.dispatchEvent(new Event('click')); el.dispatchEvent(new Event('click')); });
+  await until(() => counters.POST === beforeFinalSnapshotPosts + 2);
+  assert.deepEqual(postBodies.at(-1), { key: 'local-fixture-key', retry: 'failed_partial', expectedEpoch: currentEpoch });
+  holdPost.resolve(); holdPost = null;
+  await page.waitForFunction(() => !document.querySelector('#graph-cancel').hidden && !document.querySelector('#graph-cancel').disabled);
+  assert.equal(counters.POST, beforeFinalSnapshotPosts + 2);
+  assert.equal(await page.locator('[data-relation-id="edge"]').count(), 1);
+  assert.equal(await page.locator('#graph-retry-panel').isHidden(), true);
+  checks.push('Diagnostics expose rejection reasons and unknown legacy/unparsed counts; mobile selective retry needs cost confirmation, preserves edges, fences epoch changes and never retries a 409 automatically');
   await page.evaluate(() => window.graph.destroy());
   assert.equal(await page.locator('#graph').textContent(), '');
   checks.push('Late start response cannot overwrite a newer listening; completed state can restart; destroy clears controls/timers');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed: true, checks, counters, browserRequests, lostResponses, screenshots: directory || null, provider: 'Local fixture only; zero external/model calls' }, null, 2));
+  console.log(JSON.stringify({ passed: true, checks, counters, browserRequests, lostResponses, failedReads, screenshots: directory || null, provider: 'Local fixture only; zero external/model calls' }, null, 2));
 } finally {
   holdGet?.resolve(); holdPost?.resolve(); holdDelete?.resolve();
   await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));

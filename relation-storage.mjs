@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { safeRelationReason, readRelationDiagnostics } from './relation-diagnostics.mjs';
 import { buildRelationInput, canonicalizeRelation, isExplicitRelationCorrection, RELATION_LIMITS, RELATION_REQUEST_TIMEOUT_MS } from './relations.mjs';
 
 export const RELATION_WINDOW_SIZE = 6;
@@ -119,6 +120,12 @@ export function migrateRelations(store) {
     db.exec('ALTER TABLE relation_windows ADD COLUMN source_change_revision INTEGER NOT NULL DEFAULT 0');
     db.exec("UPDATE relation_windows SET source_change_revision=revision WHERE EXISTS (SELECT 1 FROM relation_supports s WHERE s.window_id=relation_windows.id AND s.state='stale')");
   }
+  const jobColumns = new Set(db.prepare('PRAGMA table_info(relation_jobs)').all().map(c => c.name));
+  for (const column of ['returned_count', 'validator_accepted_count', 'accepted_count', 'inserted_relation_count', 'deduplicated_count']) {
+    if (!jobColumns.has(column)) db.exec(`ALTER TABLE relation_jobs ADD COLUMN ${column} INTEGER`);
+  }
+  // NULL means unknown for older jobs; do not invent zeroes or replay them.
+  if (!windowColumns.has('min_result_epoch')) db.exec('ALTER TABLE relation_windows ADD COLUMN min_result_epoch INTEGER NOT NULL DEFAULT 0');
   // v8 removes whole-run quotas. Keep measured provider usage and the durable
   // per-window attempt journal; legacy paused/cancelled runs require explicit resume.
   const roundColumns = new Set(db.prepare('PRAGMA table_info(relation_rounds)').all().map(c => c.name));
@@ -206,7 +213,7 @@ export function migrateRelations(store) {
         AND NOT EXISTS (SELECT 1 FROM relation_supports p WHERE p.assertion_id=relation_assertions.id AND p.state='active' AND p.segment_id!=OLD.id);
       UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=OLD.listening_id;
     END;
-    PRAGMA user_version=8;
+    PRAGMA user_version=9;
   `);
 }
 
@@ -302,7 +309,7 @@ function validateEntry(store, job, entry) {
     if (!endpoint) throw new Error('MISSING_ENDPOINT');
     endpointNeedsReview ||= endpoint.certainty !== 'clear';
   }
-  if (!['positive', 'negative'].includes(entry.polarity) || !['asserted', 'planned', 'uncertain'].includes(entry.modality) || !['active', 'needs_review'].includes(entry.status || 'active')) throw new Error('INVALID_QUALIFIERS');
+  if (!['positive', 'negative'].includes(entry.polarity) || !['asserted', 'planned', 'uncertain'].includes(entry.modality) || !['active', 'needs_review'].includes(entry.status)) throw new Error('INVALID_QUALIFIERS');
   const statement = cleanText(entry.statement, 1000), conditions = cleanText(entry.conditions, 500, true),
     time_scope = cleanText(entry.time_scope, 300, true), attribution = cleanText(entry.attribution, 300, true);
   if (!Array.isArray(entry.supports) || !entry.supports.length || entry.supports.length > 12) throw new Error('INVALID_SUPPORTS');
@@ -328,7 +335,7 @@ function validateEntry(store, job, entry) {
       !supports.some(s => isExplicitRelationCorrection(s.quote))) throw new Error('INVALID_CORRECTION');
   }
   return { subject_item_id: subject, object_item_id: object, predicate, statement, polarity: entry.polarity,
-    modality: entry.modality, conditions, time_scope, attribution, correction_of: correction, status: endpointNeedsReview ? 'needs_review' : entry.status || 'active', supports };
+    modality: entry.modality, conditions, time_scope, attribution, correction_of: correction, status: endpointNeedsReview ? 'needs_review' : entry.status, supports };
 }
 
 export const relationMethods = {
@@ -366,6 +373,28 @@ export const relationMethods = {
         this.db.prepare("UPDATE relation_windows SET revision=revision+1,state='dirty',dirty_at=?,ready_at=0,last_error=NULL WHERE listening_id=? AND state IN ('failed','waiting_nodes','pending','dirty')").run(now, listeningId);
         this.db.prepare("UPDATE relation_jobs SET state='superseded',updated_at=? WHERE listening_id=? AND state IN ('pending','running')").run(stamp(), listeningId);
       }
+      return this.graphMetadata(listeningId);
+    });
+  },
+  retryProblemRelations(listeningId, { expectedEpoch, now = Date.now() } = {}) {
+    return this.tx(() => {
+      const listening = this.db.prepare('SELECT * FROM listenings WHERE id=?').get(listeningId);
+      if (!listening) return null;
+      const round = currentRound(this, listeningId);
+      // An explicit retry is compare-and-swap fenced: duplicate/lost responses,
+      // stale tabs and an in-flight run must never reset the paid attempt budget.
+      if (!Number.isInteger(expectedEpoch) || expectedEpoch !== listening.relation_epoch ||
+          this.db.prepare("SELECT 1 FROM relation_windows WHERE listening_id=? AND state IN ('dirty','pending')").get(listeningId)) {
+        throw Object.assign(new Error('RETRY_STATE_CHANGED'), { code: 'RETRY_STATE_CHANGED' });
+      }
+      const targets = this.db.prepare("SELECT id FROM relation_windows WHERE listening_id=? AND state IN ('failed','partial')").all(listeningId);
+      if (!targets.length) return this.graphMetadata(listeningId);
+      const epoch = listening.relation_epoch + 1;
+      if (round?.state === 'active') this.db.prepare("UPDATE relation_rounds SET state='complete',finished_at=COALESCE(finished_at,?),wait_reason=NULL,next_ready_at=NULL WHERE id=?").run(now, round.id);
+      this.db.prepare('UPDATE listenings SET relation_enabled=1,relation_epoch=?,relation_waiting_key=0 WHERE id=?').run(epoch, listeningId);
+      this.db.prepare('INSERT INTO relation_rounds(id,listening_id,epoch,started_at) VALUES(?,?,?,?)').run(randomUUID(), listeningId, epoch, now);
+      for (const target of targets) this.db.prepare("UPDATE relation_windows SET revision=revision+1,state='dirty',dirty_at=?,ready_at=0,last_error=NULL,min_result_epoch=? WHERE id=?")
+        .run(now, epoch, target.id);
       return this.graphMetadata(listeningId);
     });
   },
@@ -417,10 +446,16 @@ export const relationMethods = {
         stopReason: round.stop_reason || (round.state === 'complete' && actionable ? 'INPUT_CHANGED' : null) };
     }
     const relations = this.db.prepare("SELECT COUNT(DISTINCT r.id) AS n FROM relations r JOIN relation_assertions a ON a.relation_id=r.id WHERE r.listening_id=? AND a.status IN ('active','needs_review')").get(listeningId).n;
+    result.diagnostics = this.relationDiagnostics(listeningId);
+    result.retryableWindows = (counts.failed || 0) + (counts.partial || 0);
+    result.canRetryProblems = result.retryableWindows > 0 && actionable === 0;
     result.state = !result.enabled ? 'not_generated' : round?.state === 'cancelled' ? 'cancelled' :
       round?.state === 'paused' || (round?.state === 'complete' && actionable) ? 'paused' :
       l.relation_waiting_key && (result.pendingJobs || result.runningJobs) ? 'waiting_key' : result.runningJobs ? 'running' : result.pendingJobs ? 'queued' : result.failedJobs ? 'failed' : result.partialJobs ? 'partial' : result.waitingNodes ? 'waiting_nodes' : relations ? 'complete' : 'empty';
     return result;
+  },
+  relationDiagnostics(listeningId) {
+    return readRelationDiagnostics(this.db, listeningId);
   },
   graphMetadata(listeningId) {
     const l = this.db.prepare('SELECT graph_revision,relation_enabled FROM listenings WHERE id=?').get(listeningId);
@@ -491,8 +526,8 @@ export const relationMethods = {
         }
         // Reuse identical input only if checked after the latest source change.
         // Historical stale supports alone must not cause endless paid rechecks.
-        const previous = this.db.prepare("SELECT state FROM relation_jobs WHERE window_id=? AND input_fingerprint=? AND window_revision>=? AND state IN ('complete','partial') ORDER BY created_at DESC LIMIT 1")
-          .get(window.id, input.input_fingerprint, window.source_change_revision);
+        const previous = this.db.prepare("SELECT state FROM relation_jobs WHERE window_id=? AND input_fingerprint=? AND window_revision>=? AND epoch>=? AND state IN ('complete','partial') ORDER BY created_at DESC LIMIT 1")
+          .get(window.id, input.input_fingerprint, window.source_change_revision, window.min_result_epoch);
         if (previous) { this.db.prepare('UPDATE relation_windows SET state=?,last_fingerprint=?,ready_at=0 WHERE id=?').run(previous.state, input.input_fingerprint, window.id); continue; }
         const readyAt = window.dirty_at + Math.max(0, Math.min(30000, quietMs));
         if (now < readyAt) {
@@ -559,7 +594,7 @@ export const relationMethods = {
       return publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
     });
   },
-  commitRelationJob(jobId, { relations = [], rejected = [], usage = null, now = Date.now() } = {}) {
+  commitRelationJob(jobId, { relations = [], rejected = [], returnedCount, usage = null, now = Date.now() } = {}) {
     return this.tx(() => {
       const job = publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
       if (!job) return { stale: true, changed: false, missing: true };
@@ -575,12 +610,12 @@ export const relationMethods = {
         return { stale: true, changed: false, graphRevision: this.graphMetadata(job.listening_id)?.graphRevision };
       }
       if (!Array.isArray(relations) || relations.length > RELATION_LIMITS.relations || !Array.isArray(rejected)) throw new Error('RELATION_RESULT_LIMIT');
-      const rejects = rejected.slice(0, 64).map(r => ({ code: String(r.code || r.reason || 'REJECTED').slice(0, 160), ...(Number.isInteger(r.index) ? { index: r.index } : {}) }));
-      let changed = false, accepted = 0;
+      const rejects = rejected.slice(0, 64).map(r => ({ code: safeRelationReason(r.code || r.reason), ...(Number.isInteger(r.index) ? { index: r.index } : {}) }));
+      let changed = false, accepted = 0, insertedRelations = 0;
       const time = stamp();
       for (const [index, raw] of relations.entries()) {
         let entry;
-        try { entry = validateEntry(this, job, raw); } catch (error) { rejects.push({ index, code: error.message }); continue; }
+        try { entry = validateEntry(this, job, raw); } catch (error) { rejects.push({ index, code: safeRelationReason(error.message) }); continue; }
         const relationId = `rel_${stableHash([job.listening_id, entry.subject_item_id, entry.object_item_id, entry.predicate])}`;
         const inserted = this.db.prepare('INSERT OR IGNORE INTO relations(id,listening_id,subject_item_id,object_item_id,predicate,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
           .run(relationId, job.listening_id, entry.subject_item_id, entry.object_item_id, entry.predicate, time, time).changes;
@@ -611,12 +646,17 @@ export const relationMethods = {
           this.db.prepare('INSERT INTO relation_revisions VALUES(?,?,?,?,?,?,?,?)').run(randomUUID(), relationId, assertionId, assertionInserted ? 'assertion_added' : 'support_added', null, assertionId, jobId, time);
           changed = true;
         }
-        accepted++;
+        accepted++; insertedRelations += Number(inserted);
       }
       if (changed) this.db.prepare('UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=?').run(job.listening_id);
       const state = rejects.length || job.input.coverage_limited ? 'partial' : 'complete';
       this.recordRelationUsage(jobId, { usage, outcome: state });
-      this.db.prepare('UPDATE relation_jobs SET state=?,rejected_json=?,usage_json=?,window_revision=?,last_error=NULL,updated_at=? WHERE id=?').run(state, JSON.stringify(rejects.slice(0, 96)), sanitizedUsage ? JSON.stringify(sanitizedUsage) : null, window.revision, time, jobId);
+      const countedReturned = relations.length + rejected.length;
+      if (returnedCount != null && returnedCount !== countedReturned) throw new Error('RELATION_RESULT_COUNT_MISMATCH');
+      this.db.prepare(`UPDATE relation_jobs SET state=?,rejected_json=?,usage_json=?,window_revision=?,last_error=NULL,updated_at=?,
+        returned_count=?,validator_accepted_count=?,accepted_count=?,inserted_relation_count=?,deduplicated_count=? WHERE id=?`)
+        .run(state, JSON.stringify(rejects.slice(0, 96)), sanitizedUsage ? JSON.stringify(sanitizedUsage) : null, window.revision, time,
+          countedReturned, relations.length, accepted, insertedRelations, accepted - insertedRelations, jobId);
       this.db.prepare('UPDATE relation_windows SET state=?,last_fingerprint=?,last_error=NULL,ready_at=0 WHERE id=?').run(state, job.input_fingerprint, window.id);
       finishIdleRun(this, job.listening_id, now);
       return { stale: false, changed, accepted, rejected: rejects, state, graphRevision: this.graphMetadata(job.listening_id).graphRevision };

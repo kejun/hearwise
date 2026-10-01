@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { KNOWLEDGE_MODEL } from './knowledge.mjs';
+import { KNOWLEDGE_MODEL, LABEL_TYPES } from './knowledge.mjs';
 
 export const RELATION_CONTRACT_VERSION = 'relations-v1';
 export const RELATION_MODEL = KNOWLEDGE_MODEL;
@@ -22,7 +22,7 @@ const ROLES = new Set(['relation', 'subject_reference', 'object_reference']);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const invalid = code => { throw Object.assign(new Error(code), { code: 'RELATION_INVALID_RESPONSE', reason: code }); };
 const textField = (value, max, nullable = false) => {
-  if (nullable && value === null) return null;
+  if (nullable && value == null) return null;
   if (typeof value !== 'string' || !value.trim() || value.length > max) invalid('FIELD_INVALID');
   return value.trim();
 };
@@ -38,10 +38,11 @@ export function canonicalizeRelation(subject, object, predicate) {
 // whitespace, case or Unicode normalization may manufacture an evidence quote.
 export function exactRelationQuote(text, quote, start, end) {
   if (typeof text !== 'string' || typeof quote !== 'string' || !quote.trim() || quote.length > 2000) return null;
-  if (start !== undefined || end !== undefined) {
-    return Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length &&
-      text.slice(start, end) === quote ? { start, end, quote } : null;
-  }
+  if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length &&
+    text.slice(start, end) === quote) return { start, end, quote };
+  // Model-produced character counts (including null offsets and code-point
+  // offsets) are not evidence. Repair only an already-exact, unique substring;
+  // never normalize the quote or choose between repeated occurrences.
   const index = text.indexOf(quote);
   if (index < 0 || text.indexOf(quote, index + 1) !== -1) return null;
   return { start: index, end: index + quote.length, quote };
@@ -60,6 +61,9 @@ function candidateNames(candidate) {
   return [...new Set([candidate?.canonical_name, ...(candidate?.aliases || [])].filter(name => typeof name === 'string' && name.trim()))];
 }
 function hasName(text, candidate) { return candidateNames(candidate).some(name => text.includes(name)); }
+function candidateType(candidate) {
+  return Object.hasOwn(LABEL_TYPES, candidate.display_label) && LABEL_TYPES[candidate.display_label] === candidate.type ? candidate.display_label : candidate.type;
+}
 function namePosition(text, candidate) {
   return candidateNames(candidate).map(name => text.indexOf(name)).filter(n => n >= 0).sort((a, b) => a - b)[0];
 }
@@ -71,11 +75,11 @@ const VERBS = Object.freeze({
   leads: /\b(?:leads?|led|heads?|headed)\b|领导|带领|执掌/iu,
   member_of: /\bmember(?:s)?\s+of\b|成员|隶属/iu,
   developed: /\b(?:develop(?:ed|s|ing)?|invent(?:ed|s|ing)?)\b|开发|研发|发明/iu,
-  released: /\b(?:releas(?:e|ed|es|ing)|launch(?:ed|es|ing)?)\b|推出|发布|发行/iu,
+  released: /\b(?:releas(?:e|ed|es|ing)|launch(?:ed|es|ing)?|introduc(?:e|ed|es|ing))\b|推出|发布|发行|上线/iu,
   authored: /\b(?:wrote|written|writes?|author(?:ed|s|ing)?)\b|撰写|写了|写作|创作|著有/iu,
-  uses: /\b(?:uses?|used|using)\b|使用|采用|运用/iu,
+  uses: /\b(?:uses?|used|using|utili[sz](?:e|ed|es|ing))\b|使用|采用|运用/iu,
   based_on: /\bbased\s+(?:on|upon)\b|基于|依据|以.+?为基础/iu,
-  part_of: /\bpart\s+of\b|组成部分|部分属于|的一部分/iu,
+  part_of: /\b(?:part|component)\s+of\b|组成部分|部分属于|的一部分/iu,
   partners_with: /\b(?:partner(?:s|ed|ing|ship)?|collaborat(?:e|ed|es|ing|ion))\b|合作|携手/iu,
   compared_with: /\bcompar(?:e|ed|es|ing|ison)\b|比较|对比/iu,
   participated_in: /\bparticipat(?:e|ed|es|ing|ion)\b|参加|参与/iu,
@@ -93,14 +97,122 @@ const CORRECTION = /\b(?:correction|correct(?:ing|ion)?|retract(?:ed)?|misspoke|
 export const isExplicitRelationCorrection = text => typeof text === 'string' && CORRECTION.test(text);
 const CO_OCCURRENCE = /\b(?:mentioned|discuss(?:ed|ing)?|talk(?:ed|ing)?\s+about|heard\s+of)\b|提到|提及|谈(?:到|论|一谈)|讨论/iu;
 
+// ASR segments can contain several independent sentences. A modifier on a
+// different fact must not veto this one, but a model may not remove a modifier
+// by quoting only its embedded affirmative clause. Scope from the authoritative
+// source, not the quote alone. Only strong boundaries are used: uncertain comma
+// conjunctions remain together. Quoted/parenthesized speech stays with its frame.
+function sourceClauses(text) {
+  const spans = [], stack = [];
+  const pairs = new Map([['“', '”'], ['‘', '’'], ['「', '」'], ['『', '』'], ['(', ')'], ['（', '）'], ['[', ']'], ['【', '】']]);
+  let start = 0, inherited = '', blockFrame = '';
+  const frameFor = value => {
+    const qualified = text => [NEGATIVE, PLANNED, UNCERTAIN, ATTRIBUTED, CONDITIONAL, HISTORICAL].some(re => re.test(text));
+    const hasPredicate = text => Object.values(VERBS).some(re => re.test(text));
+    let prefix = '', at = 0;
+    for (const match of value.matchAll(/[,，:：]/gu)) {
+      const part = value.slice(at, match.index + 1);
+      if (!qualified(part) || hasPredicate(part)) break;
+      prefix += part; at = match.index + 1;
+    }
+    // An isolated reporting/conditional frame may be punctuated as its own ASR
+    // sentence. Do not treat that punctuation as permission to drop the frame.
+    return prefix || (qualified(value) && !hasPredicate(value) ? value : '');
+  };
+  const finish = (end, semicolon = false) => {
+    const value = text.slice(start, end);
+    if (/\n\s*\n/u.test(value)) blockFrame = '';
+    const frame = frameFor(value);
+    spans.push({ start, end, text: value, prefix: inherited || blockFrame });
+    if (frame && (/[:：]/u.test(frame) || frame === value)) blockFrame = frame;
+    const firstPredicate = Math.min(...Object.values(VERBS).map(re => value.match(re)?.index ?? Infinity));
+    const reporting = value.match(ATTRIBUTED)?.index ?? Infinity;
+    const conditionalFrame = /^\s*(?:if\b|unless\b|provided\s+that\b|assuming\b|如果|若|假如|只要|除非)/iu.test(value);
+    const denialFrame = /^\s*(?:(?:it|this|that)\s+(?:is|was)\s+not\s+(?:true|correct|the\s+case)\b|并非事实|并不属实|并不是说)/iu.test(value);
+    const openFrame = conditionalFrame || denialFrame || reporting < firstPredicate;
+    // A sentence consisting only of an "according to ..." / "if ..."
+    // fragment can itself contain a relative-clause predicate. It is still a
+    // frame for what follows, not an independent assertion whose period makes
+    // its qualifications disappear. Keep ambiguous ASR fragments conservative.
+    if ((conditionalFrame || /^\s*(?:according\s+to\b|据)/iu.test(value)) && !/[,，:：]|\bthen\b|那么|则/iu.test(value)) blockFrame = value;
+    // Missing commas are common in ASR. An initial "if ..." / "X said ..."
+    // can govern both sides of a semicolon even when its first clause contains
+    // another predicate. Keep that frame conservatively; do not assume a new
+    // independent fact merely from the semicolon.
+    inherited = semicolon ? inherited || frame || (openFrame ? value : '') : '';
+    start = end;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') { if (stack.at(-1) === ch) stack.pop(); else stack.push(ch); }
+    else if (ch === "'") {
+      const before = text[i - 1] || '', after = text.slice(i + 1).trimStart()[0] || '';
+      // Contractions and possessives are not quotation boundaries. Ambiguous
+      // word-adjacent closing quotes keep the enclosing frame conservatively;
+      // that may lower recall but cannot expose quoted speech as narrator fact.
+      if (stack.at(-1) === ch) {
+        if (!/[\p{L}\p{N}]/u.test(before) || !/[\p{L}\p{N}]/u.test(after)) stack.pop();
+      } else if (!/[\p{L}\p{N}]/u.test(before)) stack.push(ch);
+    }
+    else if (ch === '’' && stack.at(-1) === ch) {
+      const before = text[i - 1] || '', after = text.slice(i + 1).trimStart()[0] || '';
+      if (!/[\p{L}\p{N}]/u.test(before) || !/[\p{L}\p{N}]/u.test(after)) stack.pop();
+    }
+    else if (pairs.has(ch)) stack.push(pairs.get(ch));
+    else if (stack.at(-1) === ch) stack.pop();
+    if (stack.length) continue;
+    const quoteEnd = /[”’」』"'）)\]】]/u.test(ch) && /[.!?。！？][”’」』"'）)\]】]*$/u.test(text.slice(start, i).trimEnd());
+    if (!quoteEnd && !/[.!?。！？;；]/u.test(ch)) continue;
+    if (ch === '.') {
+      if (/[\p{L}\p{N}]/u.test(text[i + 1] || '')) continue;
+      const word = text.slice(start, i).match(/([A-Za-z]+)$/u)?.[1] || '';
+      if (/^(?:mr|mrs|ms|dr|prof|sr|jr|st|inc|ltd|vs|etc|e|g)$/iu.test(word)) continue;
+    }
+    finish(i + 1, ch === ';' || ch === '；');
+  }
+  if (start < text.length) finish(text.length);
+  // A trailing frame can qualify the preceding fact too: "A launched B;
+  // according to C" or "A launched B. That is not true." Never drop it merely
+  // because the model selected a shorter quote. Do not attach an independent
+  // fact with its own predicate, or hop across another sentence to find one.
+  const trailingFrame = /^\s*(?:according\s+to\b|if\b|unless\b|provided\s+that\b|assuming\b|said\b|says\b|claimed\b|claims\b|in\s+(?:19|20)\d{2}\b|that\b|this\b|it\b|not\b|never\b|据|如果|若|除非|这|此|并非|尚未|并未|没有)/iu;
+  for (let i = 1; i < spans.length; i++) {
+    const span = spans[i], previous = spans[i - 1];
+    if (!/\n\s*\n/u.test(span.text) && trailingFrame.test(span.text) && frameFor(span.text) === span.text &&
+      Object.values(VERBS).some(re => re.test(previous.text))) previous.suffix = span.text;
+  }
+  return spans;
+}
+
+function scopedRelationSources(item, supports, segments, subject, object) {
+  const trigger = VERBS[item.predicate], scopes = [];
+  for (const support of supports.filter(s => s.role === 'relation')) {
+    const segment = segments.get(support.segment_id);
+    for (const span of sourceClauses(segment.text)) {
+      const start = Math.max(span.start, support.start), end = Math.min(span.end, support.end);
+      if (end <= start) continue;
+      const evidence = segment.text.slice(start, end);
+      if (!trigger.test(evidence)) continue;
+      // Do not borrow a predicate from a different sentence in a broad quote.
+      // Cross-sentence endpoints still require the validated explicit anchors.
+      if (![[subject, 'subject_reference'], [object, 'object_reference']].every(([candidate, role]) =>
+        hasName(span.text, candidate) || supports.some(s => s.role === role))) continue;
+      scopes.push({ text: `${span.prefix}${span.text}${span.suffix || ''}`, evidence });
+    }
+  }
+  return scopes;
+}
+
 function semanticGuard(item, supports, segments, subject, object) {
   let needsReview = item.status === 'needs_review';
   const relationSupports = supports.filter(s => s.role === 'relation');
   const related = relationSupports.map(s => segments.get(s.segment_id));
-  const texts = [...new Set(related.map(s => s.text))];
   const evidenceText = relationSupports.map(s => s.quote).join('\n');
-  const source = texts.join('\n');
+  const fullSource = [...new Set(related.map(s => s.text))].join('\n');
   const trigger = VERBS[item.predicate];
+  const scopes = scopedRelationSources(item, supports, segments, subject, object);
+  const texts = [...new Set(scopes.map(s => s.text))];
+  const source = texts.join('\n') || fullSource;
   if (!trigger.test(evidenceText)) {
     if (CO_OCCURRENCE.test(source) || Object.entries(VERBS).some(([p, re]) => p !== item.predicate && re.test(evidenceText))) {
       invalid('SEMANTIC_PREDICATE_UNSUPPORTED');
@@ -110,9 +222,17 @@ function semanticGuard(item, supports, segments, subject, object) {
     // The guard cannot establish the semantics of an unfamiliar language or
     // phrasing. The model's verdict must not silently become a confident edge.
     needsReview = true;
-  }
-  for (const sourceText of texts) {
+  } else if (!scopes.length) invalid('SEMANTIC_PREDICATE_UNSUPPORTED');
+  for (const { text: sourceText, evidence } of scopes) {
     if (!trigger.test(sourceText)) continue;
+    if (item.predicate === 'released' && /\bintroduc(?:e|ed|es|ing)\b/iu.test(evidence)) {
+      // "Introduced" can mean an introduction, not a release. A formal product
+      // or work endpoint helps disambiguate but cannot establish a confident
+      // release. Introducing a person or introducing something to someone is
+      // unsupported; familiar release verbs in another clause do not rescue it.
+      if (!['product', 'work'].includes(candidateType(object)) || /\bintroduc(?:e|ed|es|ing)\b[^.!?;。！？；]*\bto\b/iu.test(sourceText)) invalid('SEMANTIC_PREDICATE_UNSUPPORTED');
+      needsReview = true;
+    }
     if (NEGATIVE.test(sourceText) && item.polarity !== 'negative') invalid('SEMANTIC_NEGATION_DROPPED');
     if (!NEGATIVE.test(sourceText) && item.polarity === 'negative') invalid('SEMANTIC_NEGATION_UNSUPPORTED');
     if (PLANNED.test(sourceText) && item.modality !== 'planned') invalid('SEMANTIC_PLAN_DROPPED');
@@ -124,7 +244,7 @@ function semanticGuard(item, supports, segments, subject, object) {
     const si = namePosition(sourceText, subject), oi = namePosition(sourceText, object), verb = sourceText.match(trigger);
     if (!RELATION_PREDICATES[item.predicate].symmetric && si !== undefined && oi !== undefined && verb) {
       const index = verb.index;
-      const passive = /\b(?:was|were|is|been|being)\s+(?:\w+\s+){0,2}(?:founded|established|developed|invented|released|launched|written|authored|used|acquired|bought)\s+by\b/iu.test(sourceText) || /由|被/u.test(sourceText);
+      const passive = /\b(?:was|were|is|been|being)\s+(?:\w+\s+){0,2}(?:founded|established|developed|invented|released|launched|introduced|written|authored|used|utilized|utilised|acquired|bought)\s+by\b/iu.test(sourceText) || /由|被/u.test(sourceText);
       // Restrict ordering checks to simple clauses containing exactly one
       // predicate. Complex or nested speech is review-only, not 'proved'.
       const triggers = Object.values(VERBS).filter(re => re.test(sourceText)).length;
@@ -135,7 +255,7 @@ function semanticGuard(item, supports, segments, subject, object) {
         else if (/由|被/u.test(sourceText) && oi < si && si < index) { /* Chinese passive. */ }
         else if (si < index && index < oi) invalid('SEMANTIC_DIRECTION_REVERSED');
         else needsReview = true;
-      } else if (oi < index && index < si && !['member_of', 'part_of'].includes(item.predicate)) invalid('SEMANTIC_DIRECTION_REVERSED');
+      } else if (oi < index && index < si && (!['member_of', 'part_of'].includes(item.predicate) || /\bcomponent\s+of\b/iu.test(sourceText))) invalid('SEMANTIC_DIRECTION_REVERSED');
     }
   }
   for (const field of ['conditions', 'time_scope', 'attribution']) {
@@ -253,7 +373,8 @@ export function buildRelationInput(input) {
     focus_segments: input.focus_segments.map(mapSegment), context_segments: (input.context_segments || []).map(mapSegment),
     candidates: candidates.map(c => ({ id: c.id, listening_id: c.listening_id || input.listening_id,
       canonical_name: textField(c.canonical_name, 120), aliases: (c.aliases || []).filter(a => typeof a === 'string' && a.length <= 120).slice(0, 12),
-      certainty: c.certainty || 'clear' })),
+      certainty: c.certainty || 'clear', ...(['person', 'organization', 'product', 'work', 'method', 'event', 'place', 'term', 'other'].includes(c.type) ? { type: c.type } : {}),
+      ...(Object.hasOwn(LABEL_TYPES, c.display_label) && LABEL_TYPES[c.display_label] === c.type ? { display_label: c.display_label } : {}) })),
     existing_assertions: (input.existing_assertions || []).slice(0, 48).map(a => ({ id: a.id,
       subject_item_id: a.subject_item_id, object_item_id: a.object_item_id, predicate: a.predicate,
       statement: typeof a.statement === 'string' ? a.statement.slice(0, 500) : '', polarity: a.polarity,
@@ -277,7 +398,8 @@ export function buildRelationRequest(input) {
   const wire = {
     focus_segments: bounded.focus_segments.map(segment), context_segments: bounded.context_segments.map(segment),
     candidates: bounded.candidates.map(c => ({ id: nodes.get(c.id), canonical_name: c.canonical_name,
-      ...(c.aliases.length ? { aliases: c.aliases } : {}), certainty: c.certainty })),
+      ...(c.aliases.length ? { aliases: c.aliases } : {}), certainty: c.certainty, ...(c.type ? { type: c.type } : {}),
+      ...(c.display_label ? { display_label: c.display_label } : {}) })),
     existing_assertions: bounded.existing_assertions.map(a => ({ ...a, id: assertions.get(a.id),
       subject_item_id: nodes.get(a.subject_item_id), object_item_id: nodes.get(a.object_item_id) }))
   };

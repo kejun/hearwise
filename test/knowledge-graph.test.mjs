@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readKnowledgeView, saveKnowledgeView, filterGraph, stableGraphLayout, relationLabel, assertionQualifiers,
-  createGraphSnapshotLoader, graphStatusText, graphWorkActive, graphProgressText, graphUsageText, graphCostText, acceptGraphProcessing } from '../public/knowledge-graph.js';
+  createGraphSnapshotLoader, graphStatusText, graphWorkActive, graphProgressText, graphUsageText, graphCostText, graphDiagnosticsText, acceptGraphProcessing } from '../public/knowledge-graph.js';
 
 const nodes = [
   { id: 'a', canonical_name: 'Acme', display_label: 'organization', short_description: 'A studio', aliases: ['艾克米'] },
@@ -59,7 +59,10 @@ test('edge and detail labels do not flatten negative, planned, uncertain, tempor
 test('status distinguishes opt-in, missing key, zero results, failure and partial completion', () => {
   assert.match(graphStatusText({ enabled: false, pendingJobs: 3 }), /尚未生成/);
   assert.match(graphStatusText({ state: 'waiting_key', pendingJobs: 2 }), /需.*API Key/);
-  assert.match(graphStatusText({ state: 'empty' }), /暂无有明确依据/);
+  assert.match(graphStatusText({ state: 'empty' }), /数量未记录或尚未取得/);
+  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 0, unknownJobs: 0, resultJobs: 1 } }), /模型未返回关系候选/);
+  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 0, unknownJobs: 0, resultJobs: 0 } }), /尚无已记录的窗口结果/);
+  assert.match(graphStatusText({ state: 'empty', diagnostics: { returnedCount: 3, acceptedCount: 0, rejectedCount: 3, unknownJobs: 0 } }), /候选未通过校验/);
   assert.match(graphStatusText({ partialJobs: 1 }), /部分完成/);
   assert.match(graphStatusText({ failedJobs: 1 }), /失败/);
 });
@@ -129,7 +132,7 @@ test('round progress separates current round from historical usage and freezes t
 test('cost copy promises full-history work with per-window safety and no fabricated token quota', () => {
   assert.match(graphCostText({ limits: { maxWindowRequests: 3, requestTimeoutMs: 30000, maxConcurrent: 2 } }), /不设整轮 token、请求数或处理时长上限.*窗口最多尝试 3 次.*最长 30 秒.*2 个并行/);
   assert.doesNotMatch(graphCostText({ limits: { maxRequests: 12, maxEstimatedTokens: 120000 }, round: { deadlineAt: 120000, startedAt: 0 } }), /12 次|120,000|保守估算|达到上限|下一轮/);
-  assert.match(graphCostText(), /全部尚未完成或已变化.*失败后可手动重试.*部分完成会保留已有结果.*取消后已发出的请求仍可能计费/);
+  assert.match(graphCostText(), /全部尚未完成或已变化.*失败和部分完成可选择重试.*保留已有结果与成功窗口.*取消后已发出的请求仍可能计费/);
   assert.match(graphUsageText(), /暂不可用.*不代表免费/);
   assert.match(graphUsageText({ requests: 7, measuredRequests: 4, totalTokens: 9200, inputTokens: 8000, outputTokens: 1200 }), /过去 1 小时.*7 次.*9,200 tokens.*3 次请求用量未知.*仍可能产生费用/);
   assert.match(graphUsageText({ requests: 2, measuredRequests: 0, totalTokens: 0 }), /2 次请求用量未知/);
@@ -222,6 +225,8 @@ function graphDom() {
     setAttribute() {} removeAttribute() {} remove() {} focus() {}
     addEventListener(type, fn) { this.handlers[type] = fn; }
     get options() { return this.children; }
+    get firstChild() { return this.children[0]; }
+    get lastChild() { return this.children.at(-1); }
     click() { this.handlers.click?.({ currentTarget: this }); }
   }
   const doc = { elements: [], createElement(tag) { const element = new Element(this, tag); this.elements.push(element); return element; },
@@ -273,4 +278,149 @@ test('lost DELETE response reconciles saved cancellation and clears active polli
   assert.equal(deletes, 1); assert.match(dom.element('graph-status').textContent, /已取消/);
   assert.equal(dom.element('graph-generate').disabled, false); assert.equal(dom.element('graph-cancel').hidden, true);
   const finalGets = gets; t.mock.timers.tick(30000); await flush(); assert.equal(gets, finalGets);
+});
+
+
+test('diagnostics distinguish returned, rejected, deduplicated, visible and legacy-unknown counts', () => {
+  const d = { scope: 'latest_result_per_window', resultJobs: 3, measuredJobs: 3, unknownJobs: 0,
+    returnedCount: 9, validatorAcceptedCount: 7, acceptedCount: 6, rejectedCount: 3, insertedRelationCount: 4,
+    deduplicatedCount: 2, storedRelationCount: 5, visibleRelationCount: 4, coverageLimitedWindows: 1,
+    rejectionReasons: [{ code: 'CROSS_SENTENCE_REFERENCE_REQUIRED', count: 2, label: '缺少跨句指代依据' }],
+    failureReasons: [{ code: 'RELATION_OUTPUT_LIMIT', count: 1, label: '模型输出被截断' }] };
+  const text = graphDiagnosticsText({ state: 'partial', diagnostics: d }).join('\n');
+  assert.match(text, /当前可见 4 条.*已保存 5 条/);
+  assert.match(text, /不是本轮累计.*模型返回 9 项.*通过校验 7 项.*最终接收 6 项.*拒绝 3 项/);
+  assert.match(text, /写入新关系 4 条.*复用已有关系 2 项/);
+  assert.match(text, /拒绝原因.*缺少跨句指代依据.*CROSS_SENTENCE_REFERENCE_REQUIRED/);
+  assert.match(text, /请求失败原因.*模型输出被截断/);
+  const legacy = graphDiagnosticsText({ state: 'empty', diagnostics: { ...d, measuredJobs: 0, unknownJobs: 3,
+    returnedCount: null, validatorAcceptedCount: null, acceptedCount: null, insertedRelationCount: null, deduplicatedCount: null } }).join('\n');
+  assert.match(legacy, /模型返回 未知 项/); assert.doesNotMatch(legacy, /模型返回 0 项/);
+  assert.match(legacy, /未知不等于 0/);
+});
+
+test('terminal detail fetches authoritative nonzero edges once and fences an older zero-edge GET', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { createKnowledgeGraph } = await import('../public/knowledge-graph.js');
+  const dom = graphDom(), reads = [];
+  const running = { state: 'running', enabled: true, round: { id: 'run', epoch: 1, startedAt: Date.now() } };
+  const complete = { ...running, state: 'complete', round: { ...running.round, finishedAt: Date.now() } };
+  t.mock.method(globalThis, 'fetch', (_url, options = {}) => {
+    assert.equal(options.method, undefined, 'terminal reconciliation must never call the model');
+    return new Promise(resolve => reads.push({ signal: options.signal, resolve: data => resolve({ ok: true, json: async () => data }) }));
+  });
+  const graph = createKnowledgeGraph({ ...dom, getKey: () => '', onRequireKey() {}, loadSegment: async () => ({}), locateSegment() {} });
+  t.after(() => graph.destroy()); graph.select('a'); t.mock.timers.tick(0);
+  reads[0].resolve(snapshot('a', 1, { status: running, nodes })); await flush();
+  void graph.refresh(); assert.equal(reads.length, 2);
+  graph.setProcessing(complete); assert.equal(reads.length, 3); assert.equal(reads[1].signal.aborted, true);
+  assert.match(dom.element('graph-status').textContent, /读取最新图谱/);
+  assert.doesNotMatch(dom.element('graph-count').textContent, /0 条关系/);
+  graph.setProcessing(complete); assert.equal(reads.length, 3, 'repeated detail terminal events coalesce');
+  reads[1].resolve(snapshot('a', 999, { status: running, nodes })); await flush();
+  assert.match(dom.element('graph-status').textContent, /读取最新图谱/);
+  reads[2].resolve(snapshot('a', 2, { status: complete, nodes, relations: [relation] })); await flush();
+  assert.match(dom.element('graph-count').textContent, /1 条关系/);
+  assert.equal(dom.element('graph-status').textContent, '关系整理完成');
+  graph.setProcessing(complete); t.mock.timers.tick(5000); await flush(); assert.equal(reads.length, 3);
+});
+
+test('selective failed/partial retry needs confirmation, carries displayed epoch, and is single-flight', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { createKnowledgeGraph } = await import('../public/knowledge-graph.js');
+  const dom = graphDom(), posts = [];
+  let state = { state: 'partial', enabled: true, partialJobs: 1, canRetryProblems: true, retryableWindows: 1, round: { id: 'run', epoch: 4 } };
+  let release;
+  t.mock.method(globalThis, 'fetch', async (_url, options = {}) => {
+    if (options.method === 'POST') {
+      posts.push(JSON.parse(options.body));
+      await new Promise(resolve => { release = resolve; });
+      state = { state: 'running', enabled: true, canRetryProblems: false, round: { id: 'next', epoch: 5 } };
+    }
+    return { ok: true, json: async () => snapshot('a', 2, { status: structuredClone(state) }) };
+  });
+  const graph = createKnowledgeGraph({ ...dom, getKey: () => 'fixture-only', onRequireKey() {}, loadSegment: async () => ({}), locateSegment() {} });
+  t.after(() => graph.destroy()); graph.select('a'); t.mock.timers.tick(0); await flush();
+  assert.equal(dom.element('graph-generate').hidden, true);
+  dom.element('graph-retry').click(); assert.match(dom.element('graph-retry-warning').textContent, /成功窗口.*保留.*额外模型费用/);
+  assert.equal(posts.length, 0); dom.element('graph-retry-dismiss').click(); assert.equal(posts.length, 0);
+  dom.element('graph-retry').click(); dom.element('graph-retry-confirm').click(); dom.element('graph-retry-confirm').click(); await flush();
+  assert.deepEqual(posts, [{ key: 'fixture-only', retry: 'failed_partial', expectedEpoch: 4 }]);
+  release(); await flush(); assert.equal(dom.element('graph-retry').hidden, true);
+  assert.equal(dom.element('graph-retry-panel').hidden, true);
+});
+
+test('retry confirmation cannot follow navigation or a changed epoch', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { createKnowledgeGraph } = await import('../public/knowledge-graph.js');
+  const dom = graphDom(); let posts = 0;
+  const partial = epoch => ({ state: 'partial', enabled: true, canRetryProblems: true, retryableWindows: 1, round: { id: `r${epoch}`, epoch } });
+  t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+    if (options.method === 'POST') posts++;
+    return { ok: true, json: async () => snapshot(url.includes('/b/') ? 'b' : 'a', 10, { status: partial(2) }) };
+  });
+  const graph = createKnowledgeGraph({ ...dom, getKey: () => 'fixture-only', onRequireKey() {}, loadSegment: async () => ({}), locateSegment() {} });
+  t.after(() => graph.destroy()); graph.select('a'); t.mock.timers.tick(0); await flush();
+  dom.element('graph-retry').click(); graph.select('b'); dom.element('graph-retry-confirm').click(); t.mock.timers.tick(0); await flush();
+  assert.equal(posts, 0); assert.equal(dom.element('graph-retry-panel').hidden, true);
+  dom.element('graph-retry').click(); graph.setProcessing(partial(3)); dom.element('graph-retry-confirm').click(); await flush();
+  assert.equal(posts, 0); assert.equal(dom.element('graph-retry-panel').hidden, true);
+});
+
+test('terminal graph read failure retries while preserving honest unsynchronized state', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { createKnowledgeGraph } = await import('../public/knowledge-graph.js');
+  const dom = graphDom(); let calls = 0;
+  const running = { state: 'running', enabled: true, round: { id: 'r1', epoch: 1 } };
+  const complete = { ...running, state: 'complete' };
+  t.mock.method(globalThis, 'fetch', async (_url, options = {}) => {
+    assert.equal(options.method, undefined); calls++;
+    if (calls === 2) throw Error('offline');
+    return { ok: true, json: async () => snapshot('a', calls, { status: calls === 1 ? running : complete, nodes, relations: calls === 1 ? [] : [relation] }) };
+  });
+  const graph = createKnowledgeGraph({ ...dom, getKey: () => '', onRequireKey() {}, loadSegment: async () => ({}), locateSegment() {} });
+  t.after(() => graph.destroy()); graph.select('a'); t.mock.timers.tick(0); await flush();
+  graph.setProcessing(complete); await flush();
+  assert.match(dom.element('graph-status').textContent, /最终图谱尚未同步/);
+  assert.doesNotMatch(dom.element('graph-count').textContent, /0 条关系/);
+  assert.equal(dom.element('graph-generate').disabled, true);
+  t.mock.timers.tick(4000); await flush();
+  assert.equal(calls, 3); assert.match(dom.element('graph-count').textContent, /1 条关系/);
+});
+
+test('selective retry 409 preserves the failure notice, refreshes epoch and never auto-resubmits', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { createKnowledgeGraph } = await import('../public/knowledge-graph.js');
+  const dom = graphDom(); let posts = 0, epoch = 1;
+  const partial = () => ({ state: 'partial', enabled: true, canRetryProblems: true, retryableWindows: 1, round: { id: `r${epoch}`, epoch } });
+  t.mock.method(globalThis, 'fetch', async (_url, options = {}) => {
+    if (options.method === 'POST') {
+      posts++; assert.equal(JSON.parse(options.body).expectedEpoch, 1); epoch = 2;
+      return { ok: false, status: 409, json: async () => ({ code: 'RETRY_STATE_CHANGED', error: '整理状态已改变，请刷新后再重试' }) };
+    }
+    return { ok: true, json: async () => snapshot('a', epoch, { status: partial() }) };
+  });
+  const graph = createKnowledgeGraph({ ...dom, getKey: () => 'fixture-only', onRequireKey() {}, loadSegment: async () => ({}), locateSegment() {} });
+  t.after(() => graph.destroy()); graph.select('a'); t.mock.timers.tick(0); await flush();
+  dom.element('graph-retry').click(); dom.element('graph-retry-confirm').click(); await flush();
+  assert.match(dom.element('graph-action-notice').textContent, /整理状态已改变/);
+  assert.equal(dom.element('graph-retry').disabled, false); assert.equal(dom.element('graph-retry-panel').hidden, true);
+  t.mock.timers.tick(30000); await flush(); assert.equal(posts, 1);
+});
+
+
+test('all-failed diagnostics retain failure reasons, unknown row counts and existing graph counts', () => {
+  const text = graphDiagnosticsText({ state: 'failed', diagnostics: {
+    scope: 'latest_result_per_window', resultJobs: 0, measuredJobs: 0, unknownJobs: 1,
+    returnedCount: null, validatorAcceptedCount: null, acceptedCount: null, rejectedCount: 0,
+    insertedRelationCount: null, deduplicatedCount: null, storedRelationCount: 2, visibleRelationCount: 1,
+    coverageLimitedWindows: 0, rejectionReasons: [],
+    failureReasons: [{ code: 'RELATION_OUTPUT_LIMIT', count: 1, label: '模型输出被截断' }]
+  } }).join('\n');
+  assert.match(text, /当前可见 1 条.*已保存 2 条/);
+  assert.match(text, /模型返回 未知 项/);
+  assert.match(text, /尚无已完成或部分完成的窗口结果/);
+  assert.match(text, /1 个窗口的数量未记录或尚未取得/);
+  assert.match(text, /请求失败原因.*模型输出被截断.*RELATION_OUTPUT_LIMIT/);
+  assert.doesNotMatch(text, /模型返回 0 项/);
 });

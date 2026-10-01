@@ -45,7 +45,7 @@ test('v4 升级为 v8：历史记录默认空备注，转写与知识任务保�
   const previous = snapshotContent(h.store, run.listeningId);
   h.store.db.exec('ALTER TABLE listenings DROP COLUMN notes; PRAGMA user_version = 4;');
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 9);
   const column = h.store.db.prepare("SELECT * FROM pragma_table_info('listenings') WHERE name='notes'").get();
   assert.equal(column.type, 'TEXT');
   assert.equal(column.notnull, 1);
