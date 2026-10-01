@@ -33,11 +33,11 @@ export function processingView(detail) {
     else if (knowledgePending > retrying) labels.push('知识整理中');
     if (retrying) labels.push('知识稍后自动重试');
   }
-  if (r.state === 'paused') labels.push('关系本轮已停止，可在图谱中继续');
-  else if (r.state === 'cancelled') labels.push('关系本轮已取消，已有关系保留');
+  if (r.state === 'paused') labels.push('历史关系任务已暂停，可在图谱中继续');
+  else if (r.state === 'cancelled') labels.push('关系整理已取消，已有关系保留');
   else if (r.enabled !== false && r.state !== 'not_generated') {
-    if (r.failedJobs || r.state === 'failed') labels.push('关系整理失败，可在图谱中继续');
-    if (r.partialJobs || r.state === 'partial') labels.push('关系部分完成');
+    if (r.failedJobs || r.state === 'failed') labels.push('关系整理失败，可在图谱中手动重试');
+    if (r.partialJobs || r.state === 'partial') labels.push('关系部分完成，已有结果保留');
     if (r.state === 'waiting_key' || relationPending && !detail.processingAvailable) labels.push('关系待继续整理（需 API Key）');
     else if (relationPending && r.waitReason === 'foreground') labels.push('关系等待前台任务');
     else if (relationPending && r.waitReason === 'provider_cooldown') labels.push('关系等待服务商限流冷却');

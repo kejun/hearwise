@@ -4,16 +4,16 @@ import { raceRelationAbort } from './relations.mjs';
 export const RELATION_QUEUE_DEFAULTS = Object.freeze({ quietMs: 6000, minStartIntervalMs: 2000, busyPollMs: 1000, maxConcurrent: 2 });
 
 // Independent, bounded-concurrency, round-robin low-priority admission.
-// SQLite owns the bounded round, coalescing and restart recovery. Foreground
-// work retains priority, but waiting for it consumes the same wall-clock budget.
+// SQLite owns durable per-window attempts, coalescing and restart recovery.
+// Foreground work retains priority without expiring the remaining history.
 export function createRelationScheduler({ store, listeningIds = () => store.relationListeningIds(), keyFor,
   foregroundBusy = () => false, execute, provider, onChange = () => {}, onIdle = () => {}, onError = () => {},
   now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = timer => clearTimeout(timer), ...options }) {
   const config = { ...RELATION_QUEUE_DEFAULTS, ...options };
   config.maxConcurrent = Number.isInteger(config.maxConcurrent) ? Math.max(1, Math.min(2, config.maxConcurrent)) : RELATION_QUEUE_DEFAULTS.maxConcurrent;
   const forced = new Set(), waitingKeys = new Map(), waitingReasons = new Map(), blockedKeys = new Set(), cooldowns = new Map();
-  const running = new Map();
-  let closed = false, pumping = false, wakeTimer = null, deadlineTimer = null, lastServed = null, lastStarted = -Infinity;
+  const running = new Map(), failedUpdates = new Map();
+  let closed = false, pumping = false, wakeTimer = null, lastServed = null, lastStarted = -Infinity;
   const notify = (callback, ...args) => { try { callback(...args); } catch (error) { try { onError(error); } catch {} } };
   const activeFor = id => [...running.values()].filter(entry => entry.job.listening_id === id && !entry.controller.signal.aborted);
   function abortListening(id, reason) {
@@ -38,29 +38,12 @@ export function createRelationScheduler({ store, listeningIds = () => store.rela
     store.setRelationWaitReason?.(id, reason, readyAt);
     notify(onChange, id);
   }
-  function expireAndArm(ids) {
-    clearTimer(deadlineTimer); deadlineTimer = null;
-    let next = Infinity;
+  function abortStopped(ids) {
     for (const id of ids) {
       const status = store.relationProcessing?.(id);
-      const round = status?.round;
-      const deadlineAt = round?.deadlineAt ?? status?.deadlineAt;
-      if (['paused', 'cancelled'].includes(status?.state) || (round?.state && round.state !== 'active')) {
-        abortListening(id, new DOMException('Relation round stopped', 'AbortError'));
-        continue;
+      if (['paused', 'cancelled'].includes(status?.state) || (status?.round?.state && status.round.state !== 'active')) {
+        abortListening(id, new DOMException('Relation work stopped', 'AbortError'));
       }
-      if (!Number.isFinite(deadlineAt)) continue;
-      if (deadlineAt <= now()) {
-        if (store.expireRelationRound?.(id, { now: now() })) {
-          forced.delete(id); waitingKeys.delete(id); waitingReasons.delete(id);
-          abortListening(id, new DOMException('Relation round expired', 'TimeoutError'));
-          notify(onChange, id, { refreshDetail: true }); notify(onIdle, id);
-        }
-      } else if (store.relationHasWork(id) || activeFor(id).length) next = Math.min(next, deadlineAt);
-    }
-    if (Number.isFinite(next)) {
-      deadlineTimer = setTimer(() => { deadlineTimer = null; pump(); }, Math.max(1, next - now()));
-      deadlineTimer?.unref?.();
     }
   }
   async function perform(job, key, controller) {
@@ -76,29 +59,45 @@ export function createRelationScheduler({ store, listeningIds = () => store.rela
       }
       if (result?.kind === 'continue' && result.readyAt) wakeAt(result.readyAt);
     } catch (error) {
-      if (!controller.signal.aborted && store.hasListening(job.listening_id)) {
-        // Unexpected errors may have followed a durable reservation. Read the
-        // latest job rather than resetting the request count in memory.
-        const fresh = store.getRelationJob?.(job.id);
-        const delay = relationRetryDelay(error, fresh?.window_request_count || fresh?.request_count || job.window_request_count || job.request_count || 1);
-        store.failRelationJob(job.id, { code: 'RELATION_EXECUTION_FAILED',
-          retryAt: delay == null ? null : now() + delay, terminal: delay == null });
+      if (!controller.signal.aborted) {
+        // A storage failure must not escape this detached task or cause a paid
+        // request to be replayed. Retain the finalization until SQLite unlocks.
+        let patch = { code: 'RELATION_STORAGE_FAILED', terminal: true };
+        try {
+          if (store.hasListening(job.listening_id)) {
+            const fresh = store.getRelationJob?.(job.id);
+            const delay = relationRetryDelay(error, fresh?.window_request_count || fresh?.request_count || job.window_request_count || job.request_count || 1);
+            patch = { code: 'RELATION_EXECUTION_FAILED', retryAt: delay == null ? null : now() + delay, terminal: delay == null };
+            store.failRelationJob(job.id, patch);
+          }
+        } catch (storageError) {
+          failedUpdates.set(job.id, { listeningId: job.listening_id, patch });
+          notify(onError, storageError);
+        }
         notify(onError, error);
       }
     } finally {
       if (running.get(job.id)?.controller === controller) running.delete(job.id);
       if (!closed) {
-        if (store.hasListening(job.listening_id)) notify(onChange, job.listening_id, { refreshDetail: true });
+        try {
+          if (store.hasListening(job.listening_id)) notify(onChange, job.listening_id, { refreshDetail: true });
+        } catch (error) { notify(onError, error); }
         pump(); notify(onIdle, job.listening_id);
       }
     }
   }
+
   function pump() {
     if (closed || pumping) return;
     pumping = true;
     try {
+      for (const [jobId, entry] of failedUpdates) {
+        if (store.hasListening(entry.listeningId)) store.failRelationJob(jobId, entry.patch);
+        failedUpdates.delete(jobId);
+        notify(onChange, entry.listeningId, { refreshDetail: true });
+      }
       const ids = [...new Set([...listeningIds(), ...(store.relationListeningIds?.() || [])])].filter(id => store.hasListening(id));
-      expireAndArm(ids);
+      abortStopped(ids);
       if (running.size >= config.maxConcurrent) return;
       clearTimer(wakeTimer); wakeTimer = null;
       const liveKeys = new Set(ids.map(keyFor).filter(Boolean));
@@ -152,10 +151,23 @@ export function createRelationScheduler({ store, listeningIds = () => store.rela
           const controller = new AbortController();
           running.set(job.id, { job, key, controller }); lastServed = id; lastStarted = now();
           notify(onChange, id);
-          void perform(job, key, controller); admitted = true; break;
+          void perform(job, key, controller).catch(error => {
+            // Last-resort containment for the detached task. Preserve a terminal
+            // write for retry instead of leaving a persisted running job orphaned.
+            if (running.get(job.id)?.controller === controller) running.delete(job.id);
+            if (!closed) {
+              failedUpdates.set(job.id, { listeningId: job.listening_id, patch: { code: 'RELATION_STORAGE_FAILED', terminal: true } });
+              notify(onError, error); wakeAt(now() + config.busyPollMs);
+            }
+          }); admitted = true; break;
         }
       } while (!closed && admitted && running.size < config.maxConcurrent);
       if (running.size < config.maxConcurrent && Number.isFinite(nextWake)) wakeAt(nextWake);
+    } catch (error) {
+      // A transient SQLite lock must not escape timer/microtask callbacks and
+      // take down the server. Retry admission; durable attempts are never reset.
+      notify(onError, error);
+      wakeAt(now() + config.busyPollMs);
     } finally { pumping = false; }
   }
   function cancel(id) {
@@ -173,8 +185,8 @@ export function createRelationScheduler({ store, listeningIds = () => store.rela
     hasWork: id => Boolean(activeFor(id).length || store.relationHasWork(id)),
     cancel,
     remove: cancel,
-    close() { closed = true; clearTimer(wakeTimer); clearTimer(deadlineTimer);
+    close() { closed = true; clearTimer(wakeTimer);
       for (const entry of running.values()) entry.controller.abort();
-      forced.clear(); waitingKeys.clear(); waitingReasons.clear(); blockedKeys.clear(); cooldowns.clear(); }
+      forced.clear(); waitingKeys.clear(); waitingReasons.clear(); blockedKeys.clear(); cooldowns.clear(); failedUpdates.clear(); }
   };
 }

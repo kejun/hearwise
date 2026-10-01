@@ -91,36 +91,58 @@ export function stableGraphLayout(nodes, relations, previous = new Map()) {
 }
 
 // One request at a time, monotonic revisions, and a generation for A→B→A switches.
+// Poll active work even if a start response or the last invalidation event is lost.
 export function createGraphSnapshotLoader({ read, onSnapshot, onError = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
-  let id = null, generation = 0, revision = -1, wanted = -1, controller, timer, flight = false, queued = false;
+  let id = null, generation = 0, revision = -1, wanted = -1, controller, timer, timerKind;
+  let flight = false, queued = false, polling = false, failures = 0;
   function stop() {
-    generation++; controller?.abort(); clearTimer(timer); timer = null; flight = false; queued = false;
+    generation++; controller?.abort(); clearTimer(timer); timer = null; timerKind = null;
+    flight = queued = polling = false; failures = 0;
   }
-  function schedule(delay = 35) {
-    if (!id || timer != null) return;
+  function schedule(delay = 35, kind = 'refresh') {
+    if (!id) return;
+    if (timer != null) {
+      if (kind !== 'refresh' || timerKind === 'refresh') return;
+      clearTimer(timer);
+    }
     const gen = generation;
-    timer = setTimer(() => { timer = null; if (gen === generation) void refresh(); }, delay);
+    timerKind = kind;
+    timer = setTimer(() => { timer = null; timerKind = null; if (gen === generation) void refresh(); }, delay);
+  }
+  function setPolling(value) {
+    const wasPolling = polling; polling = Boolean(value);
+    if (!polling && (timerKind === 'poll' || wasPolling && timerKind === 'retry')) { clearTimer(timer); timer = null; timerKind = null; }
+    if (polling && !flight) schedule(2000, 'poll');
   }
   async function refresh() {
     if (!id) return;
     if (flight) { queued = true; return; }
-    clearTimer(timer); timer = null; flight = true; queued = false;
+    clearTimer(timer); timer = null; timerKind = null; flight = true; queued = false;
     const selected = id, gen = generation;
     const abort = new AbortController(); controller = abort;
-    let stale = false;
+    let stale = false, failed = false;
     try {
       const snapshot = await read(selected, abort.signal);
       if (gen !== generation || selected !== id || abort.signal.aborted || snapshot.listeningId !== selected) return;
       const next = Number(snapshot.graphRevision) || 0;
       if (next < revision || next < wanted) { stale = true; return; }
-      revision = next;
+      revision = next; failures = 0;
+      setPolling(graphWorkActive(snapshot.status) && snapshot.status?.state !== 'waiting_key' && snapshot.status?.waitReason !== 'waiting_key' && snapshot.status?.keyAvailable !== false);
       onSnapshot(snapshot);
     } catch (error) {
-      if (gen === generation && !abort.signal.aborted) onError(error);
+      if (gen === generation && !abort.signal.aborted) {
+        failures++; failed = error.status !== 404;
+        if (!failed) { polling = false; queued = false; }
+        onError(error);
+      }
     } finally {
       if (gen === generation) {
         flight = false;
         if (queued || stale) schedule(stale ? 1000 : 35);
+        // Inactive reads get three recovery attempts. Active work keeps checking
+        // with capped backoff until an authoritative terminal snapshot arrives.
+        else if (failed && (polling || failures <= 3)) schedule(Math.min(15000, 2000 * 2 ** Math.min(failures, 3)), 'retry');
+        else if (polling) schedule(2000, 'poll');
       }
     }
   }
@@ -128,6 +150,7 @@ export function createGraphSnapshotLoader({ read, onSnapshot, onError = () => {}
     select(next) { if (id === next) return; stop(); id = next; revision = wanted = -1; if (id) schedule(0); },
     invalidate(selected, next) { if (selected !== id) return; const value = Number(next) || 0; if (value <= revision && value <= wanted) return; wanted = Math.max(wanted, value); if (flight) queued = true; else schedule(); },
     refresh,
+    setPolling,
     stop() { stop(); id = null; revision = wanted = -1; }
   };
 }
@@ -154,11 +177,8 @@ export function acceptGraphProcessing(current = {}, incoming = {}) {
 export function graphStatusText(status = {}, hasRelations = false) {
   if (typeof status === 'string') status = { state: status };
   const state = status.state || status.status;
-  if (state === 'cancelled') return '本轮已取消，已保存的关系仍可查看；继续需手动开启下一轮';
-  if (state === 'paused') {
-    const reason = { ROUND_DEADLINE: '达到本轮时间上限', ROUND_REQUEST_LIMIT: '达到本轮请求上限', ROUND_TOKEN_LIMIT: '达到本轮 token 额度' }[status.round?.stopReason] || '本轮已停止';
-    return `${reason}，已保存的关系仍可查看；剩余内容需手动继续`;
-  }
+  if (state === 'cancelled') return '关系整理已取消，已保存的关系仍可查看；剩余内容需手动继续';
+  if (state === 'paused') return '历史关系任务已暂停，已保存的关系仍可查看；点击继续处理剩余内容';
   if (state === 'not_generated' || status.enabled === false) return '尚未生成关系，知识条目可先独立查看';
   if (state === 'waiting_key' || status.waitReason === 'waiting_key' || status.keyAvailable === false && graphWorkActive(status)) return '关系待继续整理：需连接设置中的 API Key';
   if (graphWorkActive(status)) {
@@ -168,11 +188,11 @@ export function graphStatusText(status = {}, hasRelations = false) {
     if (status.waitReason === 'quiet_period') return '等待原文与知识条目稳定后再整理，暂未发起新请求';
     if (status.waitReason === 'admission_interval') return '等待请求间隔，暂未发起新请求';
     if (status.waitReason === 'translations') return '等待相关译文完成后再整理关系';
-    if (status.waitReason === 'queued' || !status.runningJobs && ['pending', 'queued'].includes(state)) return '关系已排队，等待可用处理额度';
+    if (status.waitReason === 'queued' || !status.runningJobs && ['pending', 'queued'].includes(state)) return '关系已排队，等待可用处理位置';
     return '正在整理关系…字幕与条目可继续使用';
   }
-  if (status.failedJobs || ['failed', 'invalid'].includes(state)) return '关系整理失败，已有条目与关系仍可查看';
-  if (status.partialJobs || state === 'partial') return '关系部分完成，仍有未能确认的内容';
+  if (status.failedJobs || ['failed', 'invalid'].includes(state)) return '关系整理失败，已有条目与关系仍可查看；可手动重试未完成内容';
+  if (status.partialJobs || state === 'partial') return '关系部分完成，仍有未能确认的内容；已有结果保留，内容变化后可继续检查';
   if (status.waitingNodes || status.waitingNodesJobs || state === 'waiting_nodes') return '等待更多已确认知识条目';
   if (['complete', 'empty', 'ok'].includes(state) || status.completedJobs || status.completeJobs) return hasRelations ? '关系整理完成' : '整理完成，暂无有明确依据的关系';
   if (hasRelations) return '已保存的对话关系';
@@ -186,15 +206,15 @@ function durationText(ms) {
 }
 export function graphProgressText(status = {}, now = Date.now()) {
   const progress = status.progress, round = status.round;
-  const progressText = progress ? `已完成 ${numberText(progress.completedWindows)} / ${numberText(progress.totalWindows)} 个文本窗口 · 剩余 ${numberText(progress.remainingWindows)} 个` : '';
+  const progressText = progress ? `已处理 ${numberText(progress.completedWindows)} / ${numberText(progress.totalWindows)} 个文本窗口${progress.partialWindows ? `（其中 ${numberText(progress.partialWindows)} 个部分完成）` : ''} · 剩余 ${numberText(progress.remainingWindows)} 个` : '';
   if (!round) return { progress: progressText, round: '' };
   const started = timestamp(round.startedAt), finished = timestamp(round.finishedAt);
-  const elapsed = Number.isFinite(started) && (graphWorkActive(status) || Number.isFinite(finished))
-    ? ` · ${Number.isFinite(finished) ? '本轮用时' : '本轮已等待/处理'} ${durationText((Number.isFinite(finished) ? finished : now) - started)}` : '';
-  const limit = Number.isFinite(timestamp(round.deadlineAt)) && Number.isFinite(started)
-    ? `（最多 ${durationText(timestamp(round.deadlineAt) - started)}）` : '';
+  const working = graphWorkActive(status);
+  const elapsed = Number.isFinite(started) && (working || Number.isFinite(finished))
+    ? ` · ${working ? '本轮已等待/处理' : '本轮用时'} ${durationText((working ? now : finished) - started)}` : '';
   const tokens = ` · 已返回用量 ${numberText(round.totalTokens)} tokens（${numberText(round.measuredRequests)} 次请求）`;
-  return { progress: progressText, round: `本轮请求 ${numberText(round.requestCount)} / ${numberText(round.maxRequests)} 次${elapsed}${limit}${tokens}` };
+  const unknown = Math.max(0, (Number(round.requestCount) || 0) - (Number(round.measuredRequests) || 0));
+  return { progress: progressText, round: `本轮请求 ${numberText(round.requestCount)} 次${elapsed}${tokens}${unknown ? ` · ${numberText(unknown)} 次用量尚未知，仍可能计费` : ''}` };
 }
 export function graphUsageText(hour) {
   if (!hour) return '过去 1 小时用量暂不可用；未记录或未返回用量不代表免费。费用以服务商账单为准。';
@@ -202,14 +222,8 @@ export function graphUsageText(hour) {
   return `本次收听过去 1 小时：${numberText(hour.requests)} 次关系请求；${numberText(hour.measuredRequests)} 次返回用量，共 ${numberText(hour.totalTokens)} tokens（输入 ${numberText(hour.inputTokens)} / 输出 ${numberText(hour.outputTokens)}）。${unknown ? `${numberText(unknown)} 次请求用量未知，未计入 token 合计，仍可能产生费用。` : ''}费用以服务商账单为准。`;
 }
 export function graphCostText(status = {}) {
-  const limits = status.limits || {}, round = status.round || {};
-  const maxRequests = limits.maxRequests ?? round.maxRequests;
-  const maxDuration = limits.maxDurationMs ?? (timestamp(round.deadlineAt) - timestamp(round.startedAt));
-  const maxTokens = limits.maxEstimatedTokens ?? round.maxEstimatedTokens ?? round.tokenLimit;
-  const bounds = [maxRequests != null && `最多 ${numberText(maxRequests)} 次请求`,
-    Number.isFinite(maxDuration) && `最长 ${durationText(maxDuration)}`,
-    maxTokens != null && `保守估算 token 额度 ${numberText(maxTokens)}`].filter(Boolean).join('、');
-  return `每次点击只开启一轮${bounds ? `（${bounds}）` : '有调用、时间和 token 上限的处理'}，到达上限即停止，下一轮需再次点击。仅处理本次收听尚未完成或已变化的文本窗口，保留已有关系。会使用连接设置中的千问 API Key 发送相关最终原文、已完成译文和已有知识条目，产生额外模型费用；估算额度不是精确账单。取消后已发出的请求仍可能计费。`;
+  const limits = status.limits || {};
+  return `点击后持续处理本次收听全部尚未完成或已变化的文本窗口，保留已有关系，不设整轮 token、请求数或处理时长上限。每个窗口最多尝试 ${numberText(limits.maxWindowRequests ?? 3)} 次，单次请求最长 ${durationText(limits.requestTimeoutMs ?? 30000)}，最多 ${numberText(limits.maxConcurrent ?? 2)} 个并行请求；失败后可手动重试；部分完成会保留已有结果，内容变化后可继续检查。会使用连接设置中的千问 API Key 发送相关最终原文、已完成译文和已有知识条目，产生额外模型费用。可随时取消；取消后已发出的请求仍可能计费。`;
 }
 
 export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, runNumber = () => '?' }) {
@@ -225,7 +239,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   }
   let listeningId = null, nodes = [], relations = [], positions = new Map(), snapshotStatus = {}, selected = null;
   let scale = 1, width = 800, height = 420, active = false, generation = 0, detailGeneration = 0, trigger = null;
-  let generated = false, generating = false, cancelling = false, progressTimer = null, localId = null, panelFingerprint = '', updates = 0;
+  let generated = false, generating = false, cancelling = false, recovering = false, progressTimer = null, localId = null, panelFingerprint = '', updates = 0;
   const nodeElements = new Map(), edgeElements = new Map(), resultElements = new Map(), evidenceControllers = new Set();
   const toolbar = element('div', 'graph-toolbar');
   const searchLabel = element('label', 'graph-search-label', '搜索知识');
@@ -258,7 +272,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const status = element('p', 'graph-status'); status.id = 'graph-status'; status.setAttribute('role', 'status');
   const notice = element('p', 'graph-notice'); notice.id = 'graph-updates'; notice.setAttribute('role', 'status');
   const generate = button('生成本次收听的关系', 'graph-generate', () => { void startGeneration(); });
-  const cancel = button('取消本轮', 'graph-cancel', () => { void cancelGeneration(); });
+  const cancel = button('取消关系整理', 'graph-cancel', () => { void cancelGeneration(); });
   const costs = element('p', 'graph-cost'); costs.id = 'graph-cost'; generate.setAttribute('aria-describedby', 'graph-cost'); cancel.setAttribute('aria-describedby', 'graph-cost');
   const progress = element('p', 'graph-progress'); progress.id = 'graph-progress'; progress.setAttribute('role', 'status');
   const progressBar = element('progress', 'graph-progress-bar'); progressBar.setAttribute('aria-label', '关系文本窗口完成进度');
@@ -282,12 +296,13 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       const timeout = setTimeout(abort, 10000);
       try {
         const response = await fetch(`/api/listenings/${encodeURIComponent(id)}/graph`, { signal: controller.signal });
-        const data = await response.json(); if (!response.ok) throw new Error(data.error || '关系读取失败，请重试'); return data;
+        const data = await response.json(); if (!response.ok) throw Object.assign(new Error(data.error || '关系读取失败，请重试'), { status: response.status }); return data;
       } catch (error) { if (controller.signal.aborted && !signal.aborted) throw new Error('关系读取超时'); throw error; }
       finally { clearTimeout(timeout); signal.removeEventListener('abort', abort); }
     },
     onSnapshot(data) {
       if (data.listeningId !== listeningId) return;
+      recovering = false;
       const previousNodes = JSON.stringify(nodes);
       mergeNodes(data.nodes || []); relations = data.relations || [];
       if (acceptGraphProcessing(snapshotStatus, data.status || {})) snapshotStatus = data.status || {};
@@ -296,7 +311,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       render();
       if (JSON.stringify(nodes) !== previousNodes) onNodes([...nodes]);
     },
-    onError(error) { status.textContent = `${error.message || '关系暂时无法读取'}；知识条目仍可查看`; }
+    onError(error) { status.textContent = `${error.message || '关系暂时无法读取'}；知识条目仍可查看${recovering ? '。服务器操作状态尚未确认，请刷新关系后再继续' : ''}`; }
   });
   function mergeNodes(incoming) {
     const all = new Map(nodes.map(n => [n.id, n]));
@@ -461,13 +476,14 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       entry.button.title = relationLabel(relation); entry.button.setAttribute('aria-label', `查看关系依据：${nodes.find(n => n.id === relation.subject_item_id)?.canonical_name}，${relationLabel(relation)}，${nodes.find(n => n.id === relation.object_item_id)?.canonical_name}`);
       entry.button.classList.toggle('graph-adjacent', selected?.kind === 'node' && [relation.subject_item_id, relation.object_item_id].includes(selected.id));
     }
-    generate.disabled = generating || cancelling || !listeningId || snapshotStatus.state !== 'waiting_key' && graphWorkActive(snapshotStatus);
+    generate.disabled = generating || cancelling || recovering || !listeningId || snapshotStatus.state !== 'waiting_key' && graphWorkActive(snapshotStatus);
     cancel.hidden = !graphWorkActive(snapshotStatus) && !cancelling;
-    cancel.disabled = generating || cancelling;
-    cancel.textContent = cancelling ? '正在取消…' : '取消本轮';
+    cancel.disabled = generating || cancelling || recovering;
+    cancel.textContent = cancelling ? '正在取消…' : '取消关系整理';
     usage.textContent = graphUsageText(snapshotStatus.usageLastHour);
     costs.textContent = graphCostText(snapshotStatus);
-    generate.textContent = generating ? '正在启动…' : generated ? '继续下一轮关系整理' : '生成本次收听的关系';
+    generate.textContent = generating ? '正在启动…' : recovering ? '正在确认服务器状态…' : ['failed', 'invalid'].includes(snapshotStatus.state) ? '重试未完成的关系' : snapshotStatus.state === 'partial' ? '检查新增或变化的内容' : generated ? '继续关系整理' : '生成本次收听的关系';
+    loader.setPolling(!generating && !cancelling && graphWorkActive(snapshotStatus) && snapshotStatus.state !== 'waiting_key' && snapshotStatus.waitReason !== 'waiting_key' && snapshotStatus.keyAvailable !== false);
     renderProgress();
     syncScale(); renderDetails();
   }
@@ -483,7 +499,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     if (active && graphWorkActive(snapshotStatus) && snapshotStatus.round) progressTimer = setTimeout(renderProgress, 1000);
   }
   async function changeGeneration(method) {
-    if (!listeningId || generating || cancelling) return;
+    if (!listeningId || generating || cancelling || recovering) return;
     const starting = method === 'POST';
     if (starting && snapshotStatus.state !== 'waiting_key' && graphWorkActive(snapshotStatus)) return;
     if (!starting && !graphWorkActive(snapshotStatus)) return;
@@ -491,7 +507,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     if (starting && !key) { status.textContent = '请先在连接设置填写 API Key，再点击生成关系'; onRequireKey(); return; }
     const id = listeningId, gen = generation;
     // An older GET must not replace the result of a start/cancel action.
-    loader.stop(); generating = starting; cancelling = !starting; render();
+    loader.stop(); recovering = false; generating = starting; cancelling = !starting; render();
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
     try {
       const response = await fetch(`/api/listenings/${encodeURIComponent(id)}/graph`, { method, signal: controller.signal,
@@ -505,9 +521,18 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     } catch (error) {
       if (gen === generation) status.textContent = controller.signal.aborted
         ? '操作响应超时，正在重新读取服务器状态；已发出的请求仍可能执行'
-        : error.message || (starting ? '启动关系整理失败' : '取消失败，请重试');
+        : `${error.message || (starting ? '启动关系整理失败' : '取消失败，请重试')}；正在重新读取服务器状态`;
     }
-    finally { clearTimeout(timeout); if (gen === generation) { generating = cancelling = false; loader.select(id); render(); } }
+    finally {
+      clearTimeout(timeout);
+      if (gen === generation) {
+        generating = cancelling = false; recovering = true;
+        loader.select(id); render();
+        // select(sameId) is deliberately a no-op; explicitly reconcile every
+        // action outcome, including a lost response, without repeating POST/DELETE.
+        void loader.refresh();
+      }
+    }
   }
   function startGeneration() { return changeGeneration('POST'); }
   function cancelGeneration() { return changeGeneration('DELETE'); }
@@ -517,11 +542,14 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     if (event.key === 'Escape' && !panel.hidden) { event.preventDefault(); event.stopPropagation(); closeDetails(); }
     if (event.target === viewport && ['+', '-', '0'].includes(event.key)) { event.preventDefault(); if (event.key === '0') fitView(); else zoom(event.key === '+' ? scale * 1.2 : scale / 1.2); }
   });
+  const reconcile = () => { if (doc.visibilityState !== 'hidden') void loader.refresh(); };
+  doc.defaultView?.addEventListener('online', reconcile);
+  doc.addEventListener?.('visibilitychange', reconcile);
   render();
   return {
     select(id) {
       if (id === listeningId) return;
-      generation++; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = false;
+      generation++; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = recovering = false;
       for (const b of nodeElements.values()) b.remove(); nodeElements.clear();
       for (const e of resultElements.values()) e.remove(); resultElements.clear();
       search.value = ''; type.value = ''; localId = null; scale = 1; updates = 0; notice.textContent = ''; status.textContent = graphStatusText();
@@ -544,6 +572,6 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       updates++; notice.textContent = `已收到 ${updates} 次知识更新，当前视图位置保持不变`;
       if (follow) { const node = nodeElements.get(id); node?.classList.remove('graph-node-updated'); if (node) { void node.offsetWidth; node.classList.add('graph-node-updated'); } }
     },
-    destroy() { generation++; clearTimeout(progressTimer); abortEvidence(); loader.stop(); root.replaceChildren(); }
+    destroy() { generation++; doc.defaultView?.removeEventListener('online', reconcile); doc.removeEventListener?.('visibilitychange', reconcile); clearTimeout(progressTimer); abortEvidence(); loader.stop(); root.replaceChildren(); }
   };
 }

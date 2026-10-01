@@ -307,10 +307,6 @@ export function buildRelationRequest(input) {
   } };
 }
 
-// UTF-8 bytes upper-bound prompt tokens conservatively; include the unchanged
-// output ceiling and framing margin. Never refund unknown/billable responses.
-export const estimateRelationRequestTokens = input => Buffer.byteLength(JSON.stringify(buildRelationRequest(input).body)) + RELATION_MAX_OUTPUT_TOKENS + 1024;
-
 // Reject promptly even when an injected transport ignores AbortSignal. The
 // original operation still has rejection handlers and may report billable usage.
 export function raceRelationAbort(operation, signal) {

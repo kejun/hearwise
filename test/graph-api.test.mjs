@@ -110,27 +110,26 @@ test('graph DELETE cancels an in-flight request, preserves nodes and allows expl
   assert.equal(resumed.status, 202);
   const next = await resumed.json();
   assert.notEqual(next.status.round.id, stop.status.round.id);
-  assert.equal(next.status.round.maxRequests, 12);
-  assert.equal(next.status.round.deadlineAt - next.status.round.startedAt, 120000);
+  assert.equal(next.status.round.maxRequests, undefined);
+  assert.equal(next.status.round.deadlineAt, undefined);
+  assert.equal(next.status.limits.maxWindowRequests, 3);
   const finished = await until(read, graph => graph.relations.length === 1);
   assert.equal(finished.relations.length, 1);
   assert.equal((await fetch(`${fixture.base}/api/listenings/00000000-0000-0000-0000-000000000000/graph`, { method: 'DELETE' })).status, 404);
 });
 
-test('server startup expires recovered keyless rounds without any manual resume', { timeout: 12000 }, async t => {
+test('server startup keeps recovered runs waiting for a key without paid requests', { timeout: 12000 }, async t => {
   const { speechFixture } = await import('../test-support/speech-fixture.mjs');
   const { seedGraphListening } = await import('../test-support/graph-fixture.mjs');
   const fixture = await speechFixture({ seed: store => {
     const seeded = seedGraphListening(store, { extraNodes: 0 });
-    store.enableRelations(seeded.listeningId, { limits: { maxDurationMs: 2000 } });
+    store.enableRelations(seeded.listeningId, { now: Date.now() - 180000 });
     return { ...seeded, round: store.relationProcessing(seeded.listeningId).round };
   } });
   t.after(() => fixture.close());
   const url = `${fixture.base}/api/listenings/${fixture.seeded.listeningId}/graph`;
-  const graph = await until(async () => (await fetch(url)).json(), value => value.status.state === 'paused', 7000);
+  const graph = await until(async () => (await fetch(url)).json(), value => value.status.state === 'waiting_key', 7000);
   assert.equal(graph.status.round.id, fixture.seeded.round.id);
-  assert.equal(graph.status.round.deadlineAt, fixture.seeded.round.deadlineAt);
-  assert.equal(graph.status.round.stopReason, 'ROUND_DEADLINE');
-  assert.equal(graph.status.round.requestCount, 0);
-  assert.equal(fixture.stats.providerRequests.length, 0);
+  assert.equal(graph.status.round.deadlineAt, undefined); assert.equal(graph.status.round.stopReason, null);
+  assert.equal(graph.status.round.requestCount, 0); assert.equal(fixture.stats.providerRequests.length, 0);
 });

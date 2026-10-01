@@ -95,15 +95,16 @@ test('refresh while in flight coalesces without overlap; failed reads preserve p
   loader.stop(); timers.tick(); assert.equal(requests.length, 2);
 });
 
-test('terminal relation states override leftover queue counts and identify budget reasons', () => {
+test('terminal relation states override leftover queue counts; legacy pauses stay resumable', () => {
   for (const state of ['paused', 'cancelled', 'complete', 'empty', 'partial', 'failed', 'waiting_nodes']) {
     assert.equal(graphWorkActive({ state, pendingJobs: 3, runningJobs: 1 }), false, state);
   }
   assert.equal(graphWorkActive({ state: 'queued' }), true);
   assert.equal(graphWorkActive({ state: 'waiting_key' }), true);
   assert.match(graphStatusText({ state: 'cancelled', pendingJobs: 1 }), /已取消.*手动/);
-  for (const [stopReason, label] of [['ROUND_DEADLINE', '时间上限'], ['ROUND_REQUEST_LIMIT', '请求上限'], ['ROUND_TOKEN_LIMIT', 'token 额度']]) {
-    assert.match(graphStatusText({ state: 'paused', pendingJobs: 2, round: { stopReason } }), new RegExp(label));
+  for (const stopReason of ['ROUND_DEADLINE', 'ROUND_REQUEST_LIMIT', 'ROUND_TOKEN_LIMIT']) {
+    assert.match(graphStatusText({ state: 'paused', pendingJobs: 2, round: { stopReason } }), /历史关系任务已暂停.*继续/);
+    assert.doesNotMatch(graphStatusText({ state: 'paused', round: { stopReason } }), /额度|上限/);
   }
   for (const [waitReason, label] of [['foreground', '前台任务'], ['provider_cooldown', '限流冷却'], ['retrying', '等待重试'], ['network_retry', '等待重试'], ['quiet_period', '等待原文与知识条目稳定'], ['admission_interval', '等待请求间隔'], ['translations', '等待相关译文'], ['queued', '已排队'], ['waiting_key', 'API Key']]) {
     assert.match(graphStatusText({ state: 'running', runningJobs: 1, waitReason }), new RegExp(label));
@@ -112,19 +113,23 @@ test('terminal relation states override leftover queue counts and identify budge
 
 test('round progress separates current round from historical usage and freezes terminal duration', () => {
   const startedAt = Date.UTC(2026, 9, 1), state = { state: 'running', progress: { totalWindows: 10, completedWindows: 3, remainingWindows: 7 },
-    round: { id: 'round-1', startedAt, deadlineAt: startedAt + 120000, requestCount: 4, maxRequests: 12, totalTokens: 2300, measuredRequests: 3 } };
+    round: { id: 'round-1', startedAt, requestCount: 14, totalTokens: 2300, measuredRequests: 3 } };
   const current = graphProgressText(state, startedAt + 75000);
   assert.match(current.progress, /3 \/ 10.*剩余 7/);
-  assert.match(current.round, /本轮请求 4 \/ 12.*1 分 15 秒.*最多 2 分 0 秒.*2,300 tokens/);
-  assert.doesNotMatch(current.round, /过去 1 小时/);
+  assert.match(current.round, /本轮请求 14 次.*1 分 15 秒.*2,300 tokens.*11 次用量尚未知/);
+  assert.doesNotMatch(current.round, /过去 1 小时|最多|请求 \d+ \/|额度/);
+  assert.match(graphProgressText(state, startedAt + 185000).round, /3 分 5 秒/);
+  assert.match(graphProgressText({ ...state, round: { ...state.round, finishedAt: startedAt + 30000 } }, startedAt + 185000).round, /已等待\/处理 3 分 5 秒/);
+  assert.match(graphProgressText({ progress: { totalWindows: 10, completedWindows: 8, partialWindows: 2, remainingWindows: 2 } }).progress, /已处理 8 \/ 10.*其中 2 个部分完成.*剩余 2/);
   assert.match(graphProgressText({ ...state, state: 'cancelled', round: { ...state.round, finishedAt: startedAt + 83000 } }, startedAt + 400000).round, /本轮用时 1 分 23 秒/);
   assert.doesNotMatch(graphProgressText({ ...state, state: 'paused' }, startedAt + 400000).round, /本轮已等待/);
   assert.match(graphProgressText({ state: 'running', round: { ...state.round, startedAt: new Date(startedAt).toISOString(), deadlineAt: new Date(startedAt + 120000).toISOString() } }, startedAt + 9000).round, /9 秒/);
 });
 
-test('cost copy uses configured caps and never equates unmeasured tokens with free requests', () => {
-  assert.match(graphCostText({ limits: { maxRequests: 5, maxDurationMs: 75000, maxEstimatedTokens: 40000 } }), /最多 5 次请求.*最长 1 分 15 秒.*40,000/);
-  assert.match(graphCostText(), /下一轮需再次点击.*未完成或已变化.*取消后已发出的请求仍可能计费/);
+test('cost copy promises full-history work with per-window safety and no fabricated token quota', () => {
+  assert.match(graphCostText({ limits: { maxWindowRequests: 3, requestTimeoutMs: 30000, maxConcurrent: 2 } }), /不设整轮 token、请求数或处理时长上限.*窗口最多尝试 3 次.*最长 30 秒.*2 个并行/);
+  assert.doesNotMatch(graphCostText({ limits: { maxRequests: 12, maxEstimatedTokens: 120000 }, round: { deadlineAt: 120000, startedAt: 0 } }), /12 次|120,000|保守估算|达到上限|下一轮/);
+  assert.match(graphCostText(), /全部尚未完成或已变化.*失败后可手动重试.*部分完成会保留已有结果.*取消后已发出的请求仍可能计费/);
   assert.match(graphUsageText(), /暂不可用.*不代表免费/);
   assert.match(graphUsageText({ requests: 7, measuredRequests: 4, totalTokens: 9200, inputTokens: 8000, outputTokens: 1200 }), /过去 1 小时.*7 次.*9,200 tokens.*3 次请求用量未知.*仍可能产生费用/);
   assert.match(graphUsageText({ requests: 2, measuredRequests: 0, totalTokens: 0 }), /2 次请求用量未知/);
@@ -145,4 +150,127 @@ test('processing updates allow new same-round work but fence cancelled and older
   assert.equal(acceptGraphProcessing({ state: 'running', round: second }, { state: 'paused', round: first }), false);
   assert.equal(acceptGraphProcessing({ state: 'running', round: second }, { state: 'running', round: { ...first, startedAt: 3000 } }), false, 'epoch wins even when clocks differ');
   assert.equal(acceptGraphProcessing({ state: 'running', round: { id: 'second', startedAt: 2000 } }, { state: 'cancelled', round: { id: 'first', startedAt: 1000 } }), false);
+});
+
+
+test('active snapshots poll until terminal without SSE, overlap or additional generation requests', async () => {
+  const timers = clock(), requests = [], received = [];
+  const loader = createGraphSnapshotLoader({ ...timers, read: id => new Promise(resolve => requests.push({ id, resolve })), onSnapshot: s => received.push(s) });
+  loader.select('a'); timers.tick();
+  requests[0].resolve(snapshot('a', 1, { status: { state: 'running' } })); await flush();
+  assert.equal(timers.size, 1);
+  timers.tick(); timers.tick(); assert.equal(requests.length, 2, 'slow read cannot overlap another poll');
+  requests[1].resolve(snapshot('a', 2, { status: { state: 'running' } })); await flush();
+  timers.tick(); requests[2].resolve(snapshot('a', 3, { status: { state: 'complete', pendingJobs: 9 } })); await flush();
+  assert.equal(timers.size, 0); assert.equal(received.length, 3);
+  loader.stop();
+});
+
+test('a final invalidation GET failure retries without another event and backoff is bounded', async () => {
+  const timers = clock(), delays = [], received = [];
+  let calls = 0;
+  const loader = createGraphSnapshotLoader({ ...timers, setTimer: (fn, ms) => { delays.push(ms); return timers.setTimer(fn); },
+    read: async id => { calls++; if (calls > 1 && calls < 4) throw Error('offline'); return snapshot(id, calls === 1 ? 1 : 2); },
+    onSnapshot: s => received.push(s) });
+  loader.select('a'); timers.tick(); await flush();
+  loader.invalidate('a', 2); timers.tick(); await flush();
+  assert.equal(timers.size, 1); timers.tick(); await flush(); timers.tick(); await flush();
+  assert.deepEqual(received.map(s => s.graphRevision), [1, 2]);
+  assert.equal(timers.size, 0); assert.deepEqual(delays, [0, 35, 4000, 8000]);
+  loader.stop();
+});
+
+test('inactive failures have finite retries; active reads recover after longer outages', async () => {
+  for (const active of [false, true]) {
+    const timers = clock(), delays = [];
+    let calls = 0;
+    const loader = createGraphSnapshotLoader({ ...timers, setTimer: (fn, ms) => { delays.push(ms); return timers.setTimer(fn); },
+      read: async id => { calls++; if (active && calls === 1) return snapshot(id, 1, { status: { state: 'running' } }); if (calls < 7) throw Error('offline'); return snapshot(id, 2, { status: { state: 'cancelled' } }); }, onSnapshot: () => {} });
+    loader.select('a');
+    for (let i = 0; i < 10; i++) { timers.tick(); await flush(); }
+    assert.equal(calls, active ? 7 : 4);
+    assert.equal(timers.size, 0); assert.ok(delays.every(ms => ms <= 15000));
+    loader.stop();
+  }
+});
+
+test('404, waiting-key and cancellation stop automatic reads; active detail state can restart polling', async () => {
+  for (const state of ['waiting_key', 'cancelled', 'partial', 'failed']) {
+    const timers = clock(); let calls = 0;
+    const loader = createGraphSnapshotLoader({ ...timers, read: async id => { calls++; return snapshot(id, calls, { status: { state, pendingJobs: 9 } }); }, onSnapshot: () => {} });
+    loader.select('a'); timers.tick(); await flush(); assert.equal(timers.size, 0);
+    loader.setPolling(true); assert.equal(timers.size, 1);
+    loader.setPolling(false); assert.equal(timers.size, 0);
+    loader.stop();
+  }
+  const timers = clock(); let calls = 0;
+  const loader = createGraphSnapshotLoader({ ...timers, read: async () => { calls++; throw Object.assign(Error('gone'), { status: 404 }); }, onSnapshot: () => {} });
+  loader.select('a'); loader.setPolling(true); timers.tick(); await flush();
+  assert.equal(calls, 1); assert.equal(timers.size, 0); loader.stop();
+});
+
+// Tiny DOM fixture exercises actual createKnowledgeGraph action wiring without
+// browser/model dependencies. Layout/accessibility stay in the browser suite.
+function graphDom() {
+  class Element {
+    constructor(doc, tag) {
+      this.ownerDocument = doc; this.tag = tag; this.children = []; this.handlers = {}; this.style = {}; this.dataset = {};
+      this.value = ''; this.textContent = ''; this.hidden = false; this.classList = { add() {}, toggle() {}, remove() {} };
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = nodes; }
+    setAttribute() {} removeAttribute() {} remove() {} focus() {}
+    addEventListener(type, fn) { this.handlers[type] = fn; }
+    get options() { return this.children; }
+    click() { this.handlers.click?.({ currentTarget: this }); }
+  }
+  const doc = { elements: [], createElement(tag) { const element = new Element(this, tag); this.elements.push(element); return element; },
+    createElementNS(_, tag) { return this.createElement(tag); } };
+  return { root: doc.createElement('root'), element: id => doc.elements.find(e => e.id === id) };
+}
+
+test('lost POST response and failed recovery GET reach terminal UI without another POST', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { createKnowledgeGraph } = await import('../public/knowledge-graph.js');
+  const dom = graphDom();
+  let state = { state: 'paused', enabled: true, round: { id: 'old', epoch: 1 } }, gets = 0, posts = 0, failNextGet = false;
+  t.mock.method(globalThis, 'fetch', async (_url, { method = 'GET' } = {}) => {
+    if (method === 'POST') {
+      posts++; state = { state: 'running', enabled: true, round: { id: 'new', epoch: 2, startedAt: Date.now() } };
+      failNextGet = true; throw TypeError('Failed to fetch');
+    }
+    gets++;
+    if (failNextGet) { failNextGet = false; throw TypeError('offline'); }
+    return { ok: true, json: async () => snapshot('a', gets, { status: structuredClone(state) }) };
+  });
+  const graph = createKnowledgeGraph({ ...dom, getKey: () => 'fixture-only', onRequireKey() {}, loadSegment: async () => ({}), locateSegment() {} });
+  t.after(() => graph.destroy()); graph.select('a'); graph.setActive(true); t.mock.timers.tick(0); await flush();
+  dom.element('graph-generate').click(); await flush();
+  assert.equal(posts, 1); assert.equal(dom.element('graph-generate').disabled, true);
+  assert.match(dom.element('graph-status').textContent, /状态尚未确认/);
+  dom.element('graph-generate').click(); await flush(); assert.equal(posts, 1);
+  t.mock.timers.tick(4000); await flush(); assert.match(dom.element('graph-status').textContent, /正在整理关系/);
+  state = { ...state, state: 'partial', pendingJobs: 7, round: { ...state.round, finishedAt: Date.now() } };
+  t.mock.timers.tick(2000); await flush();
+  assert.match(dom.element('graph-status').textContent, /部分完成.*已有结果保留/);
+  assert.equal(dom.element('graph-generate').textContent, '检查新增或变化的内容');
+  assert.equal(dom.element('graph-generate').disabled, false);
+  const finalGets = gets; t.mock.timers.tick(30000); await flush(); assert.equal(gets, finalGets); assert.equal(posts, 1);
+});
+
+test('lost DELETE response reconciles saved cancellation and clears active polling', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { createKnowledgeGraph } = await import('../public/knowledge-graph.js');
+  const dom = graphDom();
+  let state = { state: 'running', enabled: true, round: { id: 'run', epoch: 1, startedAt: Date.now() } }, gets = 0, deletes = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, { method = 'GET' } = {}) => {
+    if (method === 'DELETE') { deletes++; state = { ...state, state: 'cancelled', round: { ...state.round, finishedAt: Date.now() } }; throw TypeError('Failed to fetch'); }
+    assert.equal(method, 'GET'); gets++; return { ok: true, json: async () => snapshot('a', gets, { status: structuredClone(state) }) };
+  });
+  const graph = createKnowledgeGraph({ ...dom, getKey: () => '', onRequireKey() {}, loadSegment: async () => ({}), locateSegment() {} });
+  t.after(() => graph.destroy()); graph.select('a'); graph.setActive(true); t.mock.timers.tick(0); await flush();
+  dom.element('graph-cancel').click(); dom.element('graph-cancel').click(); await flush();
+  assert.equal(deletes, 1); assert.match(dom.element('graph-status').textContent, /已取消/);
+  assert.equal(dom.element('graph-generate').disabled, false); assert.equal(dom.element('graph-cancel').hidden, true);
+  const finalGets = gets; t.mock.timers.tick(30000); await flush(); assert.equal(gets, finalGets);
 });

@@ -53,7 +53,7 @@ async function syntheticRun(t, maxConcurrent) {
   assert.equal(graph.status.round.requestCount, 4); assert.equal(graph.status.round.measuredRequests, 4);
   assert.equal(graph.relations.length, 1); assert.equal(graph.supports.length, 4);
   assert.equal(calls, 4); assert.equal(peak, maxConcurrent);
-  assert.ok(graph.status.round.reservedTokens <= graph.status.round.maxEstimatedTokens);
+  assert.equal(graph.status.round.totalTokens, 400);
   return elapsed;
 }
 
@@ -83,17 +83,17 @@ test('default two-slot scheduler staggers requests and cancellation fences both 
   assert.equal(h.store.relationProcessing(h.id).usageLastHour.totalTokens, 16);
 });
 
-test('two-slot deadline aborts both hung requests and forbids later admission', async t => {
-  const h = seed(t, 18, { maxDurationMs: 6000 }), signals = [];
+test('two-slot hung transports exhaust finite per-window retries and finish without a whole-run timeout', async t => {
+  const h = seed(t, 18), signals = [];
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() + 1000 });
   const workflow = createRelationWorkflow({ store: h.store, extract: (_key, _input, _endpoint, { signal }) => { signals.push(signal); return new Promise(() => {}); } });
   const queue = createRelationScheduler({ store: h.store, keyFor: () => 'key', execute: workflow.execute });
   t.after(() => queue.close()); queue.schedule(h.id, true); await settle();
-  t.mock.timers.tick(2000); await settle(); assert.equal(signals.length, 2);
-  t.mock.timers.tick(6000); await settle();
-  assert.ok(signals.every(s => s.aborted)); assert.equal(queue.hasWork(h.id), false);
-  assert.equal(h.store.relationProcessing(h.id).round.stopReason, 'ROUND_DEADLINE');
-  queue.pump(); assert.equal(signals.length, 2);
+  for (let i = 0; i < 400 && queue.hasWork(h.id); i++) { t.mock.timers.tick(1000); await settle(); }
+  assert.equal(signals.length, 9); assert.ok(signals.every(s => s.aborted)); assert.equal(queue.hasWork(h.id), false);
+  const status = h.store.relationProcessing(h.id);
+  assert.equal(status.state, 'failed'); assert.equal(status.failedJobs, 3); assert.equal(status.round.stopReason, null);
+  queue.pump(); t.mock.timers.tick(600000); await settle(); assert.equal(signals.length, 9);
 });
 
 test('compact representative wire payload removes bookkeeping without shortening source or translations', () => {
