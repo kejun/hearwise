@@ -1,3 +1,4 @@
+import { createKnowledgeEditor } from './knowledge-editor.js';
 import { initTranscriptVisibility } from './transcript-visibility.js';
 import { createCaptionFrontier } from './caption-frontier.js';
 import { INTERIM_TRANSLATION_MAX_LENGTH, validateInterimTranslation } from './translation-params.js';
@@ -133,10 +134,23 @@ els.knowledgeTrack.addEventListener('click', event => {
 });
 syncKnowledgeTrack();
 let knowledgeView = readKnowledgeView(localStorage);
+const knowledgeEditor = createKnowledgeEditor({ getId: () => listeningId, getKey: () => saved.key,
+  onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
+  onSaved: refreshEditedKnowledge
+});
+async function refreshEditedKnowledge(id) {
+  if (id !== listeningId) return;
+  listeningGeneration++;
+  liveKnowledge.clear(); liveSegments.clear();
+  detail = null; detailPage = 1;
+  knowledgeGraph.select(null); knowledgeGraph.select(id);
+  try { await fetchDetail(); startPolling(); } catch (error) { showError('修改已保存，但刷新失败，请重新打开这条收听'); }
+}
 const knowledgeGraph = createKnowledgeGraph({
   root: $('knowledge-graph'), getKey: () => saved.key,
   onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
   onStarted: id => { if (id === listeningId) { fetchDetail().catch(() => {}); startPolling(); } },
+  onEdit: item => knowledgeEditor.open(item),
   loadSegment: loadKnowledgeEvidence,
   locateSegment: locateKnowledgeEvidence,
   onNodes: items => { if (detail?.listening.id === listeningId) { detail.knowledge = items; renderKnowledge(); } },
@@ -868,7 +882,10 @@ function renderKnowledge() {
       });
       evidence.append(link);
     }
-    card.append(evidence); els.knowledgeList.append(card);
+    const edit = el('button', 'knowledge-edit-button', '修改 / 删除'); edit.type = 'button';
+    edit.setAttribute('aria-label', `修改或删除 ${item.canonical_name}`);
+    edit.addEventListener('click', () => { void knowledgeEditor.open(item); });
+    card.append(evidence, edit); els.knowledgeList.append(card);
   }
   syncKnowledgeToggleAll();
 }
@@ -1050,6 +1067,7 @@ function showListening() {
   updatePinnedCaption();
 }
 async function showHistory() {
+  knowledgeEditor.close();
   closeRecordEditor();
   if (phase !== 'idle') return;
   if (openingHistory) resetListening();
@@ -1151,6 +1169,7 @@ els.recordLoadingBack.addEventListener('click', () => {
   showHistory().catch(error => { els.historyError.textContent = error.message; els.historyError.hidden = false; });
 });
 function resetListening() {
+  knowledgeEditor.close();
   openingHistory?.controller.abort();
   openingHistory = null;
   renderHistoryOpening();
@@ -1350,6 +1369,7 @@ async function start(preselected) {
           renderTranscript(); renderProcessing();
         }
       }
+      if (message.type === 'knowledge-edited' && message.listeningId === listeningId) void refreshEditedKnowledge(listeningId);
       if (message.type === 'knowledge-upserted' && (!message.listeningId || message.listeningId === listeningId)) {
         liveKnowledge.set(message.item.id, message.item);
         if (detail) {

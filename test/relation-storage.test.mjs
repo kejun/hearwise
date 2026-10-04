@@ -46,7 +46,7 @@ test('schema 5→9 preserves legacy data; migrations and read-only snapshots nev
   for (const column of ['relation_enabled', 'relation_epoch', 'relation_waiting_key', 'graph_revision']) h.store.db.exec(`ALTER TABLE listenings DROP COLUMN ${column}`);
   h.store.db.exec('PRAGMA user_version=5');
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 9);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 10);
   assert.equal(h.store.graph(h.run.listeningId).nodes.length, 2);
   assert.equal(h.store.graph(h.run.listeningId).status.state, 'not_generated');
   assert.equal(h.store.db.prepare('SELECT COUNT(*) n FROM relation_windows').get().n, 0);
@@ -440,7 +440,7 @@ test('v7 token-paused migration preserves results and resumes remaining history 
     ALTER TABLE relation_requests ADD COLUMN estimated_tokens INTEGER NOT NULL DEFAULT 21000;
     UPDATE relation_rounds SET state='paused',stop_reason='ROUND_TOKEN_LIMIT'; PRAGMA user_version=7;`);
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 9);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 10);
   assert.equal(h.store.relationProcessing(h.run.listeningId).state, 'paused'); assert.equal(h.job(), null);
   assert.equal(h.store.graph(h.run.listeningId).relations.length, before.relations.length);
   assert.equal(h.store.relationProcessing(h.run.listeningId).usageLastHour.totalTokens, 20815);

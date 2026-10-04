@@ -285,3 +285,17 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .transcript-original,.transcript-translation{overflow-wrap:anywhere}
 .transcript-visibility input:focus-visible,.transcript-toolbar select:focus-visible{outline:3px solid #adbd4b;outline-offset:3px}
 @media(max-width:480px){.transcript-toolbar{align-items:stretch;gap:6px}.transcript-visibility{width:100%;justify-content:space-between;gap:8px}.transcript-toolbar .download-select{margin-left:auto}.transcript-speech{padding:12px}.transcript-speech-actions{gap:8px}.transcript-tool-label{flex-basis:100%}}
+
+/* Manual knowledge correction keeps the draft outside polling card renders. */
+.knowledge-editor { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; box-sizing: border-box; border: 1px solid #ddd; border-radius: 16px; padding: 24px; color: #222; background: #fff; }
+.knowledge-editor::backdrop { background: #0006; }
+.knowledge-editor h2 { margin: 0 0 12px; font-size: 20px; }
+.knowledge-editor label { display: block; margin: 16px 0 6px; font-weight: 600; }
+.knowledge-editor input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px; border: 1px solid #bbb; border-radius: 8px; font: inherit; }
+.knowledge-edit-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.knowledge-editor button, .knowledge-edit-button, .graph-edit-node { min-height: 44px; padding: 10px 14px; cursor: pointer; }
+.knowledge-editor button:disabled { opacity: .5; cursor: wait; }
+#knowledge-edit-status { min-height: 24px; overflow-wrap: anywhere; }
+#knowledge-delete-confirm { margin-top: 16px; border-top: 1px solid #ddd; }
+#knowledge-edit-delete, #knowledge-delete-submit { color: #a22; }
+.knowledge-edit-button { margin-top: 12px; }

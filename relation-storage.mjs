@@ -520,7 +520,7 @@ export const relationMethods = {
     const revisions = this.db.prepare('SELECT * FROM relation_revisions WHERE relation_id IN (SELECT id FROM relations WHERE listening_id=?) ORDER BY created_at,id').all(listeningId);
     for (const a of assertions) a.supports = supports.filter(p => p.assertion_id === a.id);
     for (const r of relations) r.assertions = assertions.filter(a => a.relation_id === r.id);
-    return { ...metadata, nodes: this.knowledge(listeningId), relations, assertions, supports, revisions };
+    return { ...metadata, deletedItemIds: this.db.prepare('SELECT DISTINCT item_id FROM knowledge_manual_items WHERE listening_id=? AND deleted=1').all(listeningId).map(row => row.item_id), nodes: this.knowledge(listeningId), relations, assertions, supports, revisions };
   },
   getRelationJob(jobId) {
     const job = publicJob(this.db.prepare('SELECT * FROM relation_jobs WHERE id=?').get(jobId));
