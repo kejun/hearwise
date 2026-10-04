@@ -180,6 +180,6 @@ test('HTTP delete releases knowledge concurrency and emitted spans identify the 
   assert.equal((await fetch(`${fixture.base}/api/listenings/${fixture.seeded[0].id}`)).status, 404);
   const traces = fixture.logs().split('\n').filter(line => line.startsWith('execution_trace ')).map(line => JSON.parse(line.slice(16)));
   assert.ok(traces.some(event => event.state === 'cancelled' && event.attributes.job_id === fixture.seeded[0].jobId));
-  assert.ok(traces.every(event => event.build.instrumentation_version === 2));
+  assert.ok(traces.every(event => event.build.instrumentation_version === 3));
   assert.doesNotMatch(fixture.logs(), /secret-observability-test-key/);
 });

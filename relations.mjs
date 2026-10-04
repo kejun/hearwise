@@ -204,6 +204,7 @@ export async function extractRelations(key, input, endpoint, { signal, fetchImpl
   const requestSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
   const execute = async child => {
     child?.event('provider_started');
+    child?.event('request_started');
     const response = await fetchImpl(endpoint, { method: 'POST', headers: {
       Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(request.body),

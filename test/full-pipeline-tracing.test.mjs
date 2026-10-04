@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createTaskRuntime, parseTraceInput, buildTraceReport } from '../dist/server/index.js';
+import { createTaskRuntime, parseTraceInput, buildTraceReport, buildBusinessOverview } from '../dist/server/index.js';
 import { fullTraceFixture, traceEvents } from '../test-support/full-trace-fixture.mjs';
 import { FishTts } from '../fish-tts.mjs';
 
@@ -28,6 +28,15 @@ test('default application tracing covers recognition, all text workflows, Qwen/F
   const relation = report.spans.find(s => s.step === 'relation.execute');
   assert.ok(relation.events.some(e => e.event === 'checkpoint_reserved'));
   assert.ok(relation.events.some(e => e.event === 'checkpoint_committed'));
+  const business = buildBusinessOverview(report, unit.listening);
+  assert.ok(business.domains.every(d => d.observed));
+  assert.equal(business.domains.find(d => d.key === 'translation').calls, 1);
+  assert.equal(business.domains.find(d => d.key === 'relation').calls, 1);
+  assert.equal(business.domains.find(d => d.key === 'speech').calls, 3);
+  assert.ok(business.tasks.find(t => t.domain === 'translation').sequence > 0);
+  assert.ok(business.tasks.some(t => t.domain === 'knowledge' && t.segments.includes(attrs.segment_id)));
+  assert.ok(business.domains.find(d => d.key === 'speech').generatedMs > 0);
+  assert.doesNotMatch(JSON.stringify(business), /TRACE_SECRET_KEY|PRIVATE_/);
 });
 
 test('default runtime traces, preserves external AbortError, and closes lifecycle scopes exactly once', async () => {

@@ -75,7 +75,8 @@ export class QwenTts {
         const request = async child => {
           if (this.ready && this.ws?.readyState === WebSocket.OPEN) child?.event('connection_reused');
           await (child ? child.step('speech.connect', () => this.connect()) : this.connect());
-          const stream = () => new Promise((resolve, reject) => {
+          const stream = streamContext => new Promise((resolve, reject) => {
+            streamContext?.event('request_started');
             const finish = (error, value) => {
               clearTimeout(timer); this.pending = null;
               error ? reject(error) : resolve(value);

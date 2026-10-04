@@ -309,6 +309,7 @@ export const KNOWLEDGE_MODEL = 'qwen3.8-flash';
 
 async function requestKnowledgeModel(key, messages, endpoint, timeoutMs, context = {}) {
   const request = async (current = context) => {
+    current.event?.('request_started');
     current.signal?.throwIfAborted();
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = current.signal ? AbortSignal.any([current.signal, timeout]) : timeout;

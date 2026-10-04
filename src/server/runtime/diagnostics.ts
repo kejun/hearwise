@@ -6,7 +6,7 @@ import { TRACE_STEPS, TRACE_EVENTS, TRACE_ERRORS } from "../../shared/diagnostic
 declare const __BUILD_META__: BuildMetadata;
 const allowed = new Set(["listening_id", "job_id", "attempt", "part_no", "request_count", "accepted_count",
   "rejected_count", "http_status", "phase", "outcome", "cancel_reason", "duration_ms", "run_id", "segment_id",
-  "consumer_id", "unit_id", "provider", "kind", "queue_ms", "samples", "consumed_samples", "retry_at", "evidence_source"]);
+  "consumer_id", "unit_id", "provider", "kind", "queue_ms", "samples", "consumed_samples", "retry_at", "evidence_source", "segment_sequence", "segment_count", "returned_count", "audio_ms"]);
 const safeWords = new Set(["extract", "repair", "headers", "body", "ok", "empty", "partial", "invalid",
   "continue", "terminal", "failed", "discarded", "listening_deleted", "application_shutdown", "superseded",
   "consumer_closed", "user_cancelled", "qwen", "fish", "preview", "realtime", "background", "phrase", "remainder",

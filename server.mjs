@@ -156,6 +156,7 @@ async function translate(key, text, target, timeout = 15000, signal, context) {
     child => translate(key, text, target, timeout, child.signal, child), signal);
   return context.step('translation.http', child => provider.run({ key, priority: 'translation', signal: child.signal }, async () => {
     child.event('provider_started');
+    child.event('request_started');
     const requestSignal = AbortSignal.any([child.signal, AbortSignal.timeout(timeout)]);
     const response = await fetch(mtEndpoint, { method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
@@ -290,7 +291,7 @@ function pumpTranslations() {
       return { outcome: failed ? 'failed' : updated || task.done ? 'ok' : 'discarded' };
     };
     const execution = task.traceContext ? operation(task.traceContext) : taskRuntime.run('translation.execute', {
-      listening_id: task.listeningId, job_id: task.segment.id, segment_id: task.segment.id,
+      listening_id: task.listeningId, job_id: task.segment.id, segment_id: task.segment.id, segment_sequence: task.segment.sequence_no,
       run_id: task.segment.run_id, kind: task.kind }, operation, task.signal);
     void execution.catch(() => {});
   }
@@ -315,7 +316,7 @@ async function executeKnowledge(job, key, context) {
 }
 function passthroughTranslation(segment, listeningId, kind) {
   const trace = taskRuntime.open('translation.execute', { listening_id: listeningId, job_id: segment.id,
-    segment_id: segment.id, run_id: segment.run_id, kind });
+    segment_id: segment.id, segment_sequence: segment.sequence_no, run_id: segment.run_id, kind });
   try {
     trace.context.event('passthrough');
     const updated = store.setTranslation(segment.id, segment.original_text, false);
@@ -623,7 +624,7 @@ wss.on('connection', client => {
               speech.correct(listeningId, run.runId);
             }
             if (inserted) {
-              recognitionTrace?.context.event('source_committed', { segment_id: segment.id });
+              recognitionTrace?.context.event('source_committed', { segment_id: segment.id, segment_sequence: segment.sequence_no });
               speech.final(listeningId, run.runId, segment);
               const passthrough = isSameLanguage(source, targetLang); // 同语言：原文直通写入为最终译文，不进翻译队列
               const finalSegment = passthrough ? passthroughTranslation(segment, listeningId, 'realtime') : segment;
