@@ -28,6 +28,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check:version
+      - run: npm run typecheck
       - run: npm test
 
   browser:
@@ -44,6 +45,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run build
       - name: Run browser fixture and capture screenshots
         shell: bash
         run: |

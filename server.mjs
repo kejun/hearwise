@@ -1,3 +1,4 @@
+import { createTaskRuntime } from './dist/server/index.js';
 import { validateInterimTranslation, TRANSLATION_TARGETS, RECOGNITION_SOURCES } from './public/translation-params.js';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -33,6 +34,12 @@ const isSameLanguage = (source, target) => sameLanguageTargets[source] === targe
 const audioSources = ['microphone', 'tab'];
 const captionModes = ['realtime', 'classic'];
 const asrSentenceSilenceMs = Math.min(6000, Math.max(200, Number(process.env.ASR_SENTENCE_SILENCE_MS || 2500)));
+const knowledgeRuntime = createTaskRuntime({ enabled: process.env.HEARWISE_TRACE === '1',
+  onEvent: event => {
+    // Optional local diagnostics; never build an unbounded stdout backlog.
+    if (process.stdout.writableLength > 65536) throw new Error('Trace output backpressure');
+    process.stdout.write(`execution_trace ${JSON.stringify(event)}\n`);
+  } });
 const keys = new Map();
 const listeners = new Map();
 const translations = createTranslationScheduler();
@@ -52,8 +59,8 @@ const configuredExtractionWait = Number(process.env.EXTRACTION_WAIT_MS ?? 1500);
 const extractionWaitMs = Number.isFinite(configuredExtractionWait) ? Math.min(15000, Math.max(0, configuredExtractionWait)) : 1500;
 const knowledgeWorkflow = createKnowledgeWorkflow({
   store, endpoint: mtEndpoint, onProgress: publishProcessing,
-  extract: (key, ...args) => provider.run({ key, priority: 'knowledge' }, () => extractKnowledge(key, ...args)),
-  repair: (key, ...args) => provider.run({ key, priority: 'knowledge' }, () => repairKnowledge(key, ...args)),
+  extract: (key, input, endpoint, context) => provider.run({ key, priority: 'knowledge', signal: context?.signal }, () => extractKnowledge(key, input, endpoint, context)),
+  repair: (key, input, endpoint, targets, context) => provider.run({ key, priority: 'knowledge', signal: context?.signal }, () => repairKnowledge(key, input, endpoint, targets, context)),
   onItems: (id, items) => {
     for (const item of items) broadcast(id, { type: 'knowledge-upserted', listeningId: id, item });
   },
@@ -67,7 +74,7 @@ const knowledgeWorkflow = createKnowledgeWorkflow({
   onError: error => logModelError('knowledge', error)
 });
 const knowledgeScheduler = createKnowledgeScheduler({
-  store, provider, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
+  store, provider, taskRuntime: knowledgeRuntime, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
   translationBusy: () => Boolean(translations.length || translating || interimTranslating),
   execute: executeKnowledge, onChange: publishProcessing, onIdle: maybeReleaseKey,
   onError: error => logModelError('knowledge', error),
@@ -263,15 +270,17 @@ function pumpTranslations() {
     })();
   }
 }
-async function executeKnowledge(job, key) {
-  if (job.prompt_version === 2) return knowledgeWorkflow.execute(job, key);
+async function executeKnowledge(job, key, context) {
+  context.signal.throwIfAborted();
+  if (job.prompt_version === 2) return knowledgeWorkflow.execute(job, key, context);
   const baseInput = store.jobInput(job);
   for (const input of splitFocusSegments(baseInput)) {
     if (!store.hasListening(job.listening_id)) break;
     const refreshed = store.jobInput(job, input.focus_segments);
     input.existing_candidates = refreshed.existing_candidates;
     if (job.prompt_version === 2) input.observed_candidates = refreshed.observed_candidates;
-    const parsed = await provider.run({ key, priority: 'knowledge' }, () => extractKnowledge(key, input, mtEndpoint));
+    const parsed = await context.step('knowledge.extract', child => provider.run({ key, priority: 'knowledge', signal: child.signal }, () => extractKnowledge(key, input, mtEndpoint, child)));
+    context.signal.throwIfAborted();
     if (!store.hasListening(job.listening_id)) break;
     if (parsed.rejected.length) console.info('knowledge_rejected', job.id, `${parsed.rejected.length}/${parsed.rejected.length + parsed.items.length}`,
       parsed.rejected.map(r => `${r.name}（${r.reason}）`).join('；').slice(0, 400));

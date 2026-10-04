@@ -1,4 +1,5 @@
 // 知识抽取的合批、会话串行、公平调度与重试。SQLite 是任务的持久化来源。
+import { createTaskRuntime, TaskCancelled } from './dist/server/index.js';
 export const KNOWLEDGE_DEFAULTS = Object.freeze({
   batchQuietMs: 1500, batchMaxWaitMs: 4000, batchChars: 1200,
   minStartIntervalMs: 2000, translationGraceMs: 1500, concurrency: 2
@@ -15,14 +16,18 @@ export function knowledgeRetryDelay(error, attempt) {
 }
 
 export function createKnowledgeScheduler({
-  store, listeningIds, keyFor, translationBusy, execute, provider,
+  store, listeningIds, keyFor, translationBusy, execute, provider, taskRuntime,
   onChange = () => {}, onError = () => {}, onIdle = () => {}, onLog = () => {},
   now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = timer => clearTimeout(timer),
   ...options
 }) {
   const config = { ...KNOWLEDGE_DEFAULTS, ...options };
+  const runtime = taskRuntime ?? createTaskRuntime();
   const buffers = new Map(), running = new Map(), lastStarted = new Map(), keyCooldowns = new Map();
   let wakeTimer, lastServed, closed = false;
+  const report = error => { try { onError(error); } catch { /* Observers cannot own task cleanup. */ } };
+  const notify = (callback, ...args) => { try { callback(...args); } catch (error) { report(error); } };
+  const log = (...args) => notify(logEntry, ...args);
 
   function cancelBuffer(id) {
     if (buffers.has(id)) clearTimer(buffers.get(id).timer);
@@ -35,7 +40,7 @@ export function createKnowledgeScheduler({
     for (let rows = store.extractionRange(id); rows.length; rows = store.extractionRange(id)) {
       store.createExtractionJob(id, rows);
     }
-    onChange(id);
+    notify(onChange, id);
     pump();
   }
   function schedule(id, force = false) {
@@ -51,12 +56,12 @@ export function createKnowledgeScheduler({
     }
     cancelBuffer(id);
     buffers.set(id, { firstAt, timer: setTimer(() => flush(id), due - time) });
-    onChange(id);
+    notify(onChange, id);
   }
-  function log(job, state, startedAt, extra = {}) {
+  function logEntry(job, state, startedAt, extra = {}) {
     const metrics = store.jobMetrics(job);
     const time = now();
-    onLog({ job_id: job.id, listening_id: job.listening_id, state, attempt: job.attempts,
+    notify(onLog, { job_id: job.id, listening_id: job.listening_id, state, attempt: job.attempts,
       segment_count: metrics.segment_count, queue_ms: startedAt - Date.parse(job.queued_at),
       job_age_ms: time - Date.parse(job.created_at),
       execution_ms: time - startedAt,
@@ -68,9 +73,10 @@ export function createKnowledgeScheduler({
     keyCooldowns.set(key, Math.max(keyCooldowns.get(key) || 0, now() + delay));
     provider?.coolDown(key, delay);
   }
-  async function perform(job, key, startedAt) {
+  async function perform(job, key, startedAt, entry) {
     try {
-      const result = await execute(job, key);
+      const result = await entry.handle.promise;
+      if (closed || entry.cancelled) return;
       if (result?.rateLimitMs) coolDown(key, result.rateLimitMs);
       if (store.hasListening(job.listening_id)) {
         if (result === undefined) {
@@ -88,6 +94,7 @@ export function createKnowledgeScheduler({
         }
       }
     } catch (error) {
+      if (closed || entry.cancelled || error instanceof TaskCancelled) return;
       // v2 已按实际 HTTP 调用持久化预算；意外系统错误不能触发旧的整批重放。
       const delay = job.prompt_version === 2 ? null : knowledgeRetryDelay(error, job.attempts);
       if (error.status === 429) {
@@ -100,13 +107,13 @@ export function createKnowledgeScheduler({
         log(job, delay == null ? saved?.state || 'failed' : 'retrying', startedAt,
           { retry_in_ms: delay, ...(job.prompt_version === 2 ? { outcome: saved?.outcome || 'invalid' } : {}) });
       }
-      onError(error);
+      report(error);
     } finally {
-      running.delete(job.listening_id);
+      if (running.get(job.listening_id) === entry) running.delete(job.listening_id);
       if (!closed) {
-        if (store.hasListening(job.listening_id)) onChange(job.listening_id, { refreshDetail: true });
+        if (store.hasListening(job.listening_id)) notify(onChange, job.listening_id, { refreshDetail: true });
         pump();
-        onIdle(job.listening_id);
+        notify(onIdle, job.listening_id);
       }
     }
   }
@@ -141,11 +148,19 @@ export function createKnowledgeScheduler({
       store.markJob(job.id, 'running');
       const started = { ...job, state: 'running', attempts: job.attempts + 1, retry_at: null,
         queued_at: job.attempts || job.retry_at ? job.updated_at : job.created_at };
-      running.set(id, started);
+      const entry = { job: started, handle: null, cancelled: false };
+      running.set(id, entry);
       lastStarted.set(id, time); lastServed = id;
-      onChange(id);
+      notify(onChange, id);
       log(started, 'running', time);
-      void perform(started, key, time).catch(onError);
+      try {
+        entry.handle = runtime.start(`knowledge:${started.id}`, {
+          listening_id: id, job_id: started.id, attempt: started.attempts
+        }, context => execute(started, key, context));
+      } catch (error) {
+        entry.handle = { promise: Promise.reject(error), cancel() {} };
+      }
+      void perform(started, key, time, entry).catch(report);
     }
     if (running.size < limit && Number.isFinite(nextWake)) {
       wakeTimer = setTimer(pump, Math.min(60000, Math.max(1, nextWake - now())));
@@ -154,7 +169,17 @@ export function createKnowledgeScheduler({
   return {
     schedule, pump,
     hasWork: id => buffers.has(id) || running.has(id) || Boolean(store.nextJob(id)),
-    remove(id) { cancelBuffer(id); lastStarted.delete(id); pump(); },
-    close() { closed = true; clearTimer(wakeTimer); for (const id of buffers.keys()) cancelBuffer(id); }
+    remove(id) {
+      cancelBuffer(id); lastStarted.delete(id);
+      const entry = running.get(id);
+      if (entry) { entry.cancelled = true; entry.handle?.cancel('listening_deleted'); }
+      pump();
+    },
+    close() {
+      closed = true; clearTimer(wakeTimer); for (const id of buffers.keys()) cancelBuffer(id);
+      const active = [...running.values()];
+      for (const entry of active) { entry.cancelled = true; entry.handle?.cancel('application_shutdown'); }
+      return Promise.allSettled(active.map(entry => entry.handle?.promise)).then(() => taskRuntime ? undefined : runtime.dispose());
+    }
   };
 }
