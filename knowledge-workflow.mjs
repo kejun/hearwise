@@ -150,7 +150,8 @@ export function createKnowledgeWorkflow({ store, endpoint, extract = extractKnow
     }
   }
 
-  async function execute(job, key) {
+  async function execute(job, key, context = {}) {
+    context.signal?.throwIfAborted();
     if (!store.hasListening(job.listening_id)) return { kind: 'terminal', outcome: 'invalid' };
     let checkpoint = store.knowledgeCheckpoint(job.id);
     if (!checkpoint?.parts.length) {
@@ -194,7 +195,10 @@ export function createKnowledgeWorkflow({ store, endpoint, extract = extractKnow
         initial_requests: part.initial_requests + 1, stats }, [], { state: 'running' });
       let requestFinished = false;
       try {
-        const parsed = await extract(key, input, endpoint);
+        context.event?.('checkpoint_reserved', { phase: 'extract', part_no: part.part_no, request_count: stats.request_count });
+        context.signal?.throwIfAborted();
+        const parsed = await (context.step ? context.step('knowledge.extract', child => extract(key, input, endpoint, child)) : extract(key, input, endpoint, context));
+        context.signal?.throwIfAborted();
         requestFinished = true;
         if (!store.hasListening(job.listening_id)) return { kind: 'terminal', outcome: 'invalid' };
         const rejected = buildRepairTargets(input, parsed.rejected, job.id, part.part_no);
@@ -209,10 +213,12 @@ export function createKnowledgeWorkflow({ store, endpoint, extract = extractKnow
           input_snapshot: { context_segments: input.context_segments,
             existing_candidates: input.existing_candidates, observed_candidates: input.observed_candidates || [] }
         }, parsed.accepted);
+        context.event?.('checkpoint_committed', { part_no: part.part_no, accepted_count: parsed.accepted.length, rejected_count: rejected.length });
         if (rejected.length) notify(onRejected, job, part.part_no, rejected, 'initial');
         if (parsed.evidenceWarnings?.length) notify(onDiagnostic, job, part.part_no, parsed.evidenceWarnings, 'initial');
         return settle(job);
       } catch (error) {
+        context.signal?.throwIfAborted();
         if (!store.hasListening(job.listening_id)) return { kind: 'terminal', outcome: 'invalid' };
         // Storage, diagnostics and event-delivery failures are not model retries.
         if (requestFinished) throw error;
@@ -245,7 +251,10 @@ export function createKnowledgeWorkflow({ store, endpoint, extract = extractKnow
       save(job, progress, { part_no: part.part_no, phase: 'repair_inflight', repair_reserved: 1, stats }, [], { state: 'running' });
       let requestFinished = false;
       try {
-        const parsed = await repair(key, input, endpoint, part.unresolved);
+        context.event?.('checkpoint_reserved', { phase: 'repair', part_no: part.part_no, request_count: stats.request_count });
+        context.signal?.throwIfAborted();
+        const parsed = await (context.step ? context.step('knowledge.repair', child => repair(key, input, endpoint, part.unresolved, child)) : repair(key, input, endpoint, part.unresolved, context));
+        context.signal?.throwIfAborted();
         requestFinished = true;
         if (!store.hasListening(job.listening_id)) return { kind: 'terminal', outcome: 'invalid' };
         stats.repaired_count = (stats.repaired_count || 0) + parsed.accepted.filter(entry => entry.item.action !== 'exclude').length;
@@ -256,11 +265,13 @@ export function createKnowledgeWorkflow({ store, endpoint, extract = extractKnow
         stats.repair_ms = (stats.repair_ms || 0) + now() - startedAt;
         stats.repair_error = null;
         save(job, progress, { part_no: part.part_no, phase: 'done', stats, unresolved: parsed.rejected }, parsed.accepted);
+        context.event?.('checkpoint_committed', { part_no: part.part_no, accepted_count: parsed.accepted.length, rejected_count: parsed.rejected.length });
         if (parsed.rejected.length) notify(onRejected, job, part.part_no, parsed.rejected, 'repair');
         const diagnostics = [...(parsed.evidenceWarnings || []), ...(parsed.protocolIssues || [])];
         if (diagnostics.length) notify(onDiagnostic, job, part.part_no, diagnostics, 'repair');
         return settle(job);
       } catch (error) {
+        context.signal?.throwIfAborted();
         if (!store.hasListening(job.listening_id)) return { kind: 'terminal', outcome: 'invalid' };
         if (requestFinished) throw error;
         const code = safeFailure(error);

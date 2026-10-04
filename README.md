@@ -31,6 +31,8 @@ npm start
 
 开发时可用 `npm run dev` 启动文件变更监听。打开 <http://127.0.0.1:3000>：
 
+项目保留 JavaScript ESM，新增的 Effect 后端模块使用 TypeScript。`npm start`、`npm test` 会先构建 `dist/server/index.js`；`npm run dev` 在构建成功后启动/重启服务。直接执行 `node server.mjs` 前需先运行 `npm run build`。生产环境若只安装运行依赖，应在构建阶段安装完整依赖并构建，再携带 `dist`、根目录模块、`public` 和提示词 `docs` 部署；`dist` 不是独立发行包。
+
 1. 在「设置 → 连接设置」填写 Key。「测试连接」分别检查识别、翻译和知识抽取，显示三项结果；测试不会保存尚未提交的 Key，可能产生少量模型费用。
 2. 在「语言设置」选择识别语言、译文语言和识别模式。默认英语 → 简体中文；识别可选自动、中、英、日、韩，译文可选中、英、日、韩。收听期间语言设置锁定。
 3. 选择声音来源，点击「开始聆听」。使用标签页时，在浏览器共享窗口中选择目标标签页，并勾选共享音频。
@@ -195,15 +197,22 @@ NODE_USE_ENV_PROXY=1 npm start
 
 ## 开发与文档
 
+Effect 首批改动覆盖知识任务的执行生命周期：删除记录会取消抽取/修复请求，晚到结果不能继续提交，原合批、公平调度和持久化预算保留。完整迁移尚未完成。
+
+设置 `HEARWISE_TRACE=1` 可在服务端输出以 `execution_trace` 开头的 JSON 诊断事件，当前仅覆盖知识执行、抽取/修复、HTTP 子步骤和检查点事件。事件包含关联 ID、状态、安全错误码和构建版本，不含 API Key、原文或模型正文。默认关闭；内存缓冲有容量上限，输出背压时允许丢弃诊断事件，序号缺口表示采集不完整。尚未提供诊断存储、下钻查看器或版本对比界面，不代表全任务链路已覆盖。
+
 ```bash
 npm test
+npm run typecheck
 npm run check:version
+npm run test:browser
 ```
 
 自动化覆盖数据库迁移、字幕与翻译、知识调度与纠正、语音协议、长文分段和播放控制。测试使用模拟模型服务；通过测试不代表真实模型的抽取质量、延迟或所有设备锁屏表现均已验证。浏览器回归脚本见 [scripts/verify-speech-browser.mjs](scripts/verify-speech-browser.mjs)，需要另外准备 Playwright 与 Chromium。
 
 | 文档 | 内容 |
 | --- | --- |
+| [Effect 迁移实施方案](docs/effect-migration-implementation-plan.md) | 分阶段引入 Effect、取消传播、可下钻执行追踪与版本比较；实施进度见文末 |
 | [收听历史实现](docs/listening-history-implementation.md) | 历史、片段、存储与恢复流程 |
 | [知识条目阶段 1](docs/knowledge-items-phase1-implementation.md) | 精选收录、身份约束、去重与增量证据 |
 | [知识及时更新](docs/knowledge-update-latency-implementation.md) | 合批、调度、公平性与延迟验证 |
