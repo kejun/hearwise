@@ -268,3 +268,20 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .graph-group-label{position:absolute;z-index:1;margin:0;color:#718375;font-size:11px;line-height:18px;font-weight:600;pointer-events:none;white-space:nowrap}
 .graph-fullscreen-dialog .graph-disclaimer{margin:5px 0;font-size:10px;line-height:1.5}
 @media(max-width:700px){.graph-fullscreen-dialog .graph-toolbar{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px 4px}.graph-fullscreen-dialog .graph-search-label{grid-column:1/5;min-width:0}.graph-fullscreen-dialog .graph-type-label{grid-column:5/7;width:auto;min-width:0}.graph-fullscreen-dialog .graph-button{min-width:0;padding:6px 3px;font-size:11px}.graph-fullscreen-dialog .graph-count{margin:8px 0}}
+
+/* Reading preferences apply to every page of the transcript without changing its data. */
+.transcript-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-top:18px;padding-bottom:16px;border-bottom:1px solid #edf0eb}
+.transcript-visibility{display:flex;align-items:center;flex-wrap:wrap;gap:8px 20px}
+.transcript-visibility label{display:flex;align-items:center;gap:8px;min-height:44px;cursor:pointer;font-size:13px;color:#334139}
+.transcript-visibility input{width:17px;height:17px;margin:0;accent-color:#315f4d}
+.transcript-toolbar .download-select{min-height:44px;max-width:100%}
+.transcript-tool-label{font-size:12px;color:#69776d;margin-right:4px}
+.transcript-speech .switch-button,.transcript-speech .speech-link{min-height:44px}
+.transcript-hidden-note{padding:24px 12px;text-align:center;color:#69776d;font-size:14px}
+.transcript-hidden-note p{margin:0 0 10px}
+.transcript-panel.hide-original .transcript-original,.transcript-panel.hide-translation .transcript-translation,
+.transcript-panel.hide-original.hide-translation #transcript-list,.transcript-panel.hide-original.hide-translation #load-more{display:none}
+.transcript-panel.hide-original .transcript-translation{font-size:16px;line-height:1.7}
+.transcript-original,.transcript-translation{overflow-wrap:anywhere}
+.transcript-visibility input:focus-visible,.transcript-toolbar select:focus-visible{outline:3px solid #adbd4b;outline-offset:3px}
+@media(max-width:480px){.transcript-toolbar{align-items:stretch;gap:6px}.transcript-visibility{width:100%;justify-content:space-between;gap:8px}.transcript-toolbar .download-select{margin-left:auto}.transcript-speech{padding:12px}.transcript-speech-actions{gap:8px}.transcript-tool-label{flex-basis:100%}}

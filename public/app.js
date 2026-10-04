@@ -1,3 +1,4 @@
+import { initTranscriptVisibility } from './transcript-visibility.js';
 import { createCaptionFrontier } from './caption-frontier.js';
 import { INTERIM_TRANSLATION_MAX_LENGTH, validateInterimTranslation } from './translation-params.js';
 import { processingView, createProcessingPoller } from './processing-state.js';
@@ -33,6 +34,8 @@ const els = {
   knowledgeToggleAll: $('knowledge-toggle-all'), knowledgeTrack: $('knowledge-track'), backToTop: $('back-to-top'),
   sizeSlider: $('translation-size'), captionMode: $('caption-mode')
 };
+
+initTranscriptVisibility(document);
 
 const saved = {
   key: localStorage.getItem('tongsheng:qianwen-key') || ''
@@ -1182,8 +1185,6 @@ els.historyListening.addEventListener('click', () => showHistory().catch(error =
 els.back.addEventListener('click', () => { showListening(); startPolling(); });
 els.historyMore.addEventListener('click', () => loadHistory().catch(error => showError(error.message)));
 els.loadMore.addEventListener('click', () => fetchDetail(detailPage + 1, true).catch(error => showError(error.message)));
-// transcript 面板 details 化后下载下拉位于 summary 内：阻止冒泡，点击下拉不触发面板折叠
-els.downloadSelect.addEventListener('click', event => event.stopPropagation());
 els.downloadSelect.addEventListener('change', () => {
   const kind = els.downloadSelect.value;
   els.downloadSelect.value = '';

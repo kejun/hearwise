@@ -123,6 +123,8 @@ try {
     const list = await (await fetch('/api/listenings')).json();
     return (await fetch(`/api/listenings/${list.items[0].id}`)).json();
   });
+  await page.locator('#hide-transcript-original').check();
+  await page.locator('#hide-transcript-translation').check();
   const originalStart = fixture.stats.commits.length;
   await page.getByRole('button', { name: '播报全部原文', exact: true }).click();
   await page.locator('#transcript-speech-status').filter({ hasText: '原文全文播报完成' }).waitFor();
@@ -135,6 +137,7 @@ try {
   await page.getByRole('button', { name: '播报全部原文', exact: true }).click();
   await page.getByRole('button', { name: '停止全文播报', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '停止全文播报', exact: true }).isHidden(), true);
+  await page.locator('#show-transcript-all').click();
   await page.getByRole('button', { name: '继续收听', exact: true }).click();
   await page.getByRole('button', { name: '停止聆听', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '开启译文播报', exact: true }).getAttribute('aria-pressed'), 'false');
