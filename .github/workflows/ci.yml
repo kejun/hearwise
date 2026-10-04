@@ -53,8 +53,10 @@ jobs:
           node scripts/verify-speech-browser.mjs | tee browser-evidence/result.json
           node scripts/verify-graph-browser.mjs | tee browser-evidence/graph-result.json
           node scripts/verify-relation-progress-browser.mjs | tee browser-evidence/relation-progress-result.json
+          node scripts/verify-trace-browser.mjs | tee browser-evidence/trace-result.json
         env:
           GRAPH_EVIDENCE_DIR: browser-evidence
+          TRACE_EVIDENCE_DIR: browser-evidence
           SPEECH_SCREENSHOT: browser-evidence/speech.png
           PINNED_SCREENSHOT: browser-evidence/pinned-caption.png
           SPEECH_TRANSCRIPT_SCREENSHOT: browser-evidence/transcript.png
