@@ -1,3 +1,4 @@
+import { initTranscriptVisibility } from '../public/transcript-visibility.js';
 import { createCaptionFrontier } from '../public/caption-frontier.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -46,7 +47,7 @@ function app(t, preferences = []) {
   const context = vm.createContext({
     // Graph DOM interaction has a dedicated browser suite; keep these MT lifecycle tests isolated.
     readKnowledgeView, saveKnowledgeView, createKnowledgeGraph: () => ({ select() {}, setNodes() {}, setActive() {}, setProcessing() {}, invalidate() {}, highlight() {}, refresh() {} }),
-    ...translationParams, createCaptionFrontier, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
+    initTranscriptVisibility, ...translationParams, createCaptionFrontier, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },
     document: { createElement: () => element(Symbol()), getElementById: element, querySelector: element, documentElement: element('root'), addEventListener() {} },
     window: { addEventListener() {}, scrollTo() {}, scrollY: 0, innerHeight: 800 }, MutationObserver: class { observe() {} },
@@ -54,6 +55,7 @@ function app(t, preferences = []) {
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     fetch(url, options) { return new Promise((resolve, reject) => requests.push({ url, options, body: options?.body ? JSON.parse(options.body) : null, resolve, reject })); }
   });
+  context.document.defaultView = { localStorage: context.localStorage };
   const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   vm.runInContext(source.replace(/^import[^\n]+\n/gm, ''), context);
   const run = (code, value) => { context.testValue = value; return vm.runInContext(code, context); };

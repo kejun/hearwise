@@ -8,7 +8,7 @@
     "start": "node server.mjs",
     "test": "node --test",
     "check:version": "node scripts/check-version.mjs",
-    "test:browser": "node scripts/verify-speech-browser.mjs && node scripts/verify-graph-browser.mjs && node scripts/verify-relation-progress-browser.mjs && node scripts/verify-trace-browser.mjs",
+    "test:browser": "node scripts/verify-speech-browser.mjs && node scripts/verify-graph-browser.mjs && node scripts/verify-relation-progress-browser.mjs && node scripts/verify-trace-browser.mjs && node scripts/verify-transcript-browser.mjs",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "pretest": "npm run build",

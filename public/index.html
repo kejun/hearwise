@@ -95,9 +95,18 @@
           <div id="knowledge-graph" class="knowledge-graph" hidden></div>
         </details>
         <details class="runs-panel" id="runs-panel" open><summary><h3>收听片段</h3></summary><div id="runs-list"></div></details>
-        <details class="transcript-panel" open><summary class="transcript-head"><h3>原文与译文</h3><select class="download-select" id="download-select" aria-label="下载原文或译文"><option value="" selected>下载…</option><option value="original">下载原文</option><option value="translation">下载译文</option></select></summary>
+        <details class="transcript-panel" id="transcript-panel" open>
+          <summary class="transcript-head"><h3>原文与译文</h3></summary>
+          <div class="transcript-toolbar" aria-label="阅读工具">
+            <div class="transcript-visibility" role="group" aria-label="内容显示">
+              <label><input id="hide-transcript-original" type="checkbox" />隐藏原文</label>
+              <label><input id="hide-transcript-translation" type="checkbox" />隐藏译文</label>
+            </div>
+            <select class="download-select" id="download-select" aria-label="下载原文或译文"><option value="" selected>下载全文…</option><option value="original">下载原文</option><option value="translation">下载译文</option></select>
+          </div>
           <div class="transcript-speech" id="transcript-speech-controls" aria-label="全文语音播报" hidden>
             <div class="transcript-speech-actions">
+              <span class="transcript-tool-label">全文播报</span>
               <button class="switch-button" id="transcript-speech-original" type="button" aria-pressed="false">播报全部原文</button>
               <button class="switch-button" id="transcript-speech-translation" type="button" aria-pressed="false">播报全部译文</button>
               <button class="speech-link" id="transcript-speech-pause" type="button" hidden>暂停播报</button>
@@ -105,6 +114,10 @@
             </div>
             <p id="transcript-speech-status" role="status" aria-live="polite">从第一句开始，按顺序播报本条记录的全部内容，包含尚未加载的句子。</p>
             <p class="speech-reading" id="transcript-speech-reading" hidden></p>
+          </div>
+          <div class="transcript-hidden-note" id="transcript-hidden-note" hidden>
+            <p role="status">原文和译文均已隐藏，收听内容仍然保留。</p>
+            <button class="speech-link" id="show-transcript-all" type="button">显示全部内容</button>
           </div>
           <div id="transcript-list"></div><button class="switch-button load-more" id="load-more" type="button" hidden>加载更多句子</button></details>
       </section>
