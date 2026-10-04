@@ -29,6 +29,11 @@ try {
   page.on('request', request => { if (/^https?:/.test(request.url())) requests.push(request.url()); });
   await page.goto(pathToFileURL(output).href);
   await page.getByText('当前进程缓冲完整', { exact: false }).waitFor();
+  assert.equal(await page.locator('#domains .domain-card').count(), 5);
+  assert.match(await page.locator('#domains [data-domain="speech"]').textContent(), /未观测到/);
+  await page.locator('#insights [data-rule="recovered"]').getByRole('button', { name: '查看证据' }).first().click();
+  assert.match(await page.locator('#evidence').textContent(), /异常子步骤/);
+  await page.locator('#call-tree > summary').click();
   const job = page.locator('#tree .job').first();
   await job.locator(':scope > summary').click();
   const root = job.locator('.span-node').first();
@@ -77,6 +82,28 @@ try {
   await createTraceReport(fullInput, fullOutput);
   await page.setViewportSize({ width: 1440, height: 1050 });
   await page.goto(pathToFileURL(fullOutput).href);
+  assert.equal(await page.locator('#domains .domain-card').count(), 5);
+  await page.locator('#domains [data-domain="translation"]').click();
+  assert.match(await page.locator('#work-title').textContent(), /翻译/);
+  assert.equal(await page.locator('#work-items .business-task').count(), 1);
+  const businessTask = page.locator('#work-items .business-task').first();
+  assert.match(await businessTask.locator(':scope > summary').textContent(), /第 \d+ 句/);
+  await businessTask.locator(':scope > summary').click();
+  const businessRoot = businessTask.locator('.span-node').first();
+  await businessRoot.locator(':scope > summary').click();
+  await businessRoot.locator('.span-node').first().locator(':scope > summary .inspect').click();
+  assert.equal(await page.locator('#evidence h2').textContent(), 'translation.http');
+  await page.locator('#metric').selectOption('duration');
+  assert.match(await page.locator('#domains [data-domain="translation"] .domain-number').textContent(), /秒|ms/);
+  const sentenceValue = await page.locator('#sentence option').nth(1).getAttribute('value');
+  await page.locator('#sentence').selectOption(sentenceValue);
+  assert.ok(await page.locator('#work-items .business-task').count() >= 2);
+  await page.locator('#all-domains').click();
+  if (evidence) {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: path.join(directory, 'business-overview.png'), fullPage: false });
+  }
+  await page.locator('#call-tree > summary').click();
   for (const family of ['知识整理', '翻译', '关系提取', '播报', '语音识别']) {
     await page.locator('#tree').getByText(`${family} · 已埋点流程`, { exact: true }).waitFor();
   }
@@ -90,6 +117,11 @@ try {
   await page.locator('#tree .search-result').first().click();
   assert.equal(await page.locator('#evidence h2').textContent(), 'translation.preview');
   checks.push('default application logs expose all workflows, playback evidence and same-segment links; preview is not given a fabricated owner');
+  checks.push('five stable domains, evidence-backed recovery, business drilldown, metric switching and cross-domain sentence filtering');
+  await page.locator('#all-domains').click();
+  await page.getByRole('textbox', { name: '筛选' }).fill('');
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   if (evidence) await page.screenshot({ path: path.join(directory, 'trace-full-pipeline.png'), fullPage: false });
   assert.deepEqual(errors, []); assert.deepEqual(requests, []);
   checks.push('mobile layout fits viewport; no browser errors or network requests');

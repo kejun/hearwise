@@ -48,6 +48,7 @@ export class FishTts {
         const timer = setTimeout(() => timeout('generation'), this.timeoutMs);
         try {
           const request = async child => {
+            child?.event('request_started');
             const c = this.config;
             const response = await this.fetch(this.endpoint, {
               method: 'POST', redirect: 'error', signal: abort.signal,

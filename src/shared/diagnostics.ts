@@ -9,7 +9,7 @@ export const TRACE_EVENTS = ["checkpoint_reserved", "checkpoint_committed", "res
   "cancel_requested", "validation_completed", "continuation", "slot_released", "admitted", "provider_started",
   "translation_committed", "notification_sent", "passthrough", "discarded", "retry_scheduled",
   "first_pcm", "pcm_sent", "browser_consumed", "playback_completed", "paused", "resumed", "draining",
-  "waiting_translation", "connection_reused", "request_started", "source_committed"] as const;
+  "waiting_translation", "connection_reused", "request_started", "source_committed", "source_linked"] as const;
 export const TRACE_ERRORS = ["KNOWLEDGE_INVALID_RESPONSE", "RELATION_INVALID_RESPONSE", "RELATION_OUTPUT_LIMIT",
   "TRANSLATION_EMPTY", "TRANSLATION_BUSY", "REQUEST_TIMEOUT", "UNCLASSIFIED_FAILURE", "ASR_FAILED", "SPEECH_FAILED",
   "FISH_HTTP_ERROR", "FISH_AUDIO_FORMAT", "FISH_AUDIO_INCOMPLETE", "FISH_RESPONSE_TIMEOUT", "FISH_GENERATION_TIMEOUT", "FISH_NETWORK_ERROR"] as const;
@@ -20,6 +20,7 @@ export interface TaskMetadata {
   attempt?: number;
   run_id?: string;
   segment_id?: string;
+  segment_sequence?: number;
   consumer_id?: string;
   unit_id?: number;
   provider?: string;

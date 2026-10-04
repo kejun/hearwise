@@ -179,7 +179,7 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
           const requestedAt = now();
           let frame = 0, samples = 0;
           const unitTrace = taskRuntime?.open('speech.unit', { listening_id: consumer?.listeningId, run_id: consumer?.runId,
-            job_id: `${owner}:${index}`, consumer_id: owner, segment_id: segment.id || undefined, unit_id: index, provider,
+            job_id: `${owner}:${index}`, consumer_id: owner, segment_id: segment.id || undefined, segment_sequence: segment.sequence_no, unit_id: index, provider,
             kind: preview ? 'preview' : replay ? 'replay' : transcript?.kind || 'live' });
           if (unitTrace) unitTraces.set(index, { trace: unitTrace, startSamples: sentSamples, consumed: false });
           send({ type: 'speech.unit', unit: index, segmentId: segment.id, sequence: segment.sequence_no, text,
@@ -209,7 +209,7 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
           if (closed) return;
           send({ type: 'speech.unit-end', unit: index, samples });
           completedSamples.set(index, sentSamples);
-          unitTrace?.context.event('pcm_sent', { samples });
+          unitTrace?.context.event('pcm_sent', { samples, audio_ms: samples / TTS_SAMPLE_RATE * 1000 });
           metric('unit_generated', { segment: segment.id, unit: index, elapsedMs: now() - requestedAt, samples });
           if (response) metric('response', { unit: index, response: response.id, status: response.status, attempts: response.attempts,
             inputTokens: response.usage?.input_tokens, outputTokens: response.usage?.output_tokens });

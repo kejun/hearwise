@@ -203,6 +203,8 @@ Effect 首批改动覆盖知识任务的执行生命周期：删除记录会取�
 
 可用 `npm run trace:report -- input.log --output report.html` 生成本地离线报告，按收听、流程、任务、调用、事件逐层下钻，并在同一句子的翻译与播报证据间跳转。增加 `--baseline before.log` 可对比已观测的步骤次数和状态。使用 `npm run trace:demo` 可以生成知识异常示例及多流程示例；示例运行真实业务代码，模型端点由本地 fixture 替代，并非生产日志。完整说明见[执行追踪报告](docs/execution-trace-report.md)。当前尚未提供自动诊断存储、实时查询服务和严格的同输入回归判定。
 
+报告首页提供五个业务域的工作量、状态分布和最近活动，支持按调用尝试或累计调用耗时比较，并按用途、句子下钻。规则洞察帮助找到失败、恢复、慢调用、尚未归因的耗时及结果拒绝，无需调用模型。业务结果与采集缺口分别展示；离线报告不冒充实时监控。旧追踪日志可重新生成新版界面，缺失字段不会补造。实现与统计口径见[业务报告实施方案](docs/business-trace-report-implementation-plan.md)。
+
 ```bash
 npm test
 npm run typecheck

@@ -57,6 +57,7 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
     store.setRelationWaitReason?.(id, null);
     notify(onChange, id);
     const input = reserved.input || job.input;
+    for (const segment of input.focus_segments || []) context?.event('source_linked', { segment_id: segment.id, segment_sequence: segment.sequence_no });
     const attempt = reserved.request_count ?? (job.request_count || 0) + 1;
     const requestCount = reserved.window_request_count ?? attempt;
     const timeout = new AbortController();
@@ -99,7 +100,7 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
           rejected: parsed.rejected || [], returnedCount: parsed.returnedCount, coverageLimited: parsed.coverageLimited === true, usage: parsed.usage || null });
       });
       if (result?.stale) return { kind: 'discarded', reason: 'stale' };
-      context?.event('checkpoint_committed', { accepted_count: result?.accepted || 0, rejected_count: parsed.rejected?.length || 0 });
+      context?.event('checkpoint_committed', { accepted_count: result?.accepted || 0, rejected_count: parsed.rejected?.length || 0, returned_count: parsed.returnedCount });
       notify(onChange, id, result);
       context?.event('notification_sent');
       return { kind: 'terminal', outcome: result?.state === 'partial' ? 'partial' :

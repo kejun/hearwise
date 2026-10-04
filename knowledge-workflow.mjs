@@ -174,6 +174,7 @@ export function createKnowledgeWorkflow({ store, endpoint, extract = extractKnow
     }
     const focus = focusFor(part, store.jobInput(job));
     let input = store.jobInput(job, focus);
+    for (const segment of focus) context.event?.('source_linked', { segment_id: segment.id });
     const progress = { ...checkpoint.progress };
     const stats = { ...part.stats };
 
@@ -213,7 +214,7 @@ export function createKnowledgeWorkflow({ store, endpoint, extract = extractKnow
           input_snapshot: { context_segments: input.context_segments,
             existing_candidates: input.existing_candidates, observed_candidates: input.observed_candidates || [] }
         }, parsed.accepted);
-        context.event?.('checkpoint_committed', { part_no: part.part_no, accepted_count: parsed.accepted.length, rejected_count: rejected.length });
+        context.event?.('checkpoint_committed', { part_no: part.part_no, accepted_count: parsed.accepted.length, rejected_count: rejected.length, returned_count: parsed.returnedCount });
         if (rejected.length) notify(onRejected, job, part.part_no, rejected, 'initial');
         if (parsed.evidenceWarnings?.length) notify(onDiagnostic, job, part.part_no, parsed.evidenceWarnings, 'initial');
         return settle(job);
