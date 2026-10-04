@@ -215,7 +215,7 @@ export function graphCostText() {
   return '将相关原文、译文和条目发送给千问，产生模型费用。可随时取消，已发出的请求仍可能计费。';
 }
 
-export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, runNumber = () => '?' }) {
+export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, onEdit, runNumber = () => '?' }) {
   const doc = root.ownerDocument;
   function element(tag, className = '', text) {
     const node = doc.createElement(tag); node.className = className;
@@ -347,6 +347,8 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       recovering = terminalSyncing = false;
       lastTerminalSignature = terminalSignature(data.status || {});
       const previousNodes = JSON.stringify(nodes);
+      for (const id of data.deletedItemIds || []) deletedNodes.add(id);
+      nodes = nodes.filter(node => !deletedNodes.has(node.id));
       mergeNodes(data.nodes || []); relations = data.relations || [];
       if (acceptGraphProcessing(snapshotStatus, data.status || {})) snapshotStatus = data.status || {};
       generated = generated || Boolean(relations.length || snapshotStatus.state && snapshotStatus.state !== 'not_generated');
@@ -356,9 +358,11 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     },
     onError(error) { status.textContent = `${error.message || '关系暂时无法读取'}；知识条目仍可查看${recovering ? '。服务器操作状态尚未确认，请刷新关系后再继续' : terminalSyncing ? '。最终图谱尚未同步，请刷新关系；当前连线数量不是最终结果' : ''}`; }
   });
+  const deletedNodes = new Set();
   function mergeNodes(incoming) {
     const all = new Map(nodes.map(n => [n.id, n]));
     for (const node of incoming) {
+      if (deletedNodes.has(node.id)) continue;
       const old = all.get(node.id);
       if (!old || (node.content_version || 0) > (old.content_version || 0) ||
         (node.content_version || 0) === (old.content_version || 0) && (node.updated_at || '') >= (old.updated_at || '')) all.set(node.id, node);
@@ -474,6 +478,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       if (item.aliases?.length) panelBody.append(element('p', 'knowledge-aliases', `别名：${item.aliases.join('、')}`));
       for (const fact of item.facts || []) panelBody.append(element('p', 'knowledge-dialogue', `本次提到：${fact.content}`));
       if (item.background_note) panelBody.append(element('p', 'knowledge-background', `背景补充（模型生成，不作为关系依据）：${item.background_note}`));
+      if (onEdit) panelBody.append(button('修改 / 删除', 'graph-edit-node', () => onEdit(item)));
       panelBody.append(element('h4', '', '相关知识'));
       if (!related.length) panelBody.append(element('p', '', '暂未发现有明确依据的关系；该知识仍作为独立节点保留。'));
       for (const relation of related) appendRelation(relation, panelBody);
@@ -662,6 +667,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   return {
     select(id) {
       if (id === listeningId) return;
+      deletedNodes.clear();
       setFullscreen(false, false); generation++; actionNotice.textContent = ''; terminalSyncing = false; lastTerminalSignature = null; retryIntent = null; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = recovering = false;
       for (const b of nodeElements.values()) b.remove(); nodeElements.clear();
       for (const e of resultElements.values()) e.remove(); resultElements.clear();

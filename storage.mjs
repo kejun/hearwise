@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { migrateRelations, relationMethods } from './relation-storage.mjs';
+import { migrateKnowledgeEdits, knowledgeEditMethods } from './knowledge-edit.mjs';
 
 const now = () => new Date().toISOString();
 const normalized = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
@@ -26,7 +27,7 @@ export class ListeningStore {
   }
   migrate() {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 9) throw new Error(`不支持的数据库版本：${version}`);
+    if (version > 10) throw new Error(`不支持的数据库版本：${version}`);
     if (version === 0) this.tx(() => {
       this.db.exec(`
         CREATE TABLE listenings (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -113,6 +114,7 @@ export class ListeningStore {
         PRAGMA user_version = 5;`);
     });
     if (version < 9) this.tx(() => migrateRelations(this));
+    if (version < 10) this.tx(() => migrateKnowledgeEdits(this));
   }
   createRun(listeningId, settings, title) {
     return this.tx(() => {
@@ -145,7 +147,7 @@ export class ListeningStore {
       if (existing) return { segment: existing, inserted: false };
       const id = randomUUID(), time = now();
       const sequence = this.db.prepare('SELECT COALESCE(MAX(sequence_no),0)+1 AS no FROM segments WHERE listening_id=?').get(listeningId).no;
-      this.db.prepare('INSERT INTO segments VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id, listeningId, runId, sequence, String(sentence.id), sentence.text,
+      this.db.prepare('INSERT INTO segments VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id, listeningId, runId, sequence, String(sentence.id), this.correctKnowledgeText(listeningId, sentence.text),
         null, 'pending', sentence.beginMs ?? null, sentence.endMs ?? null, time);
       this.db.prepare('UPDATE listenings SET updated_at=? WHERE id=?').run(time, listeningId);
       return { segment: this.db.prepare('SELECT * FROM segments WHERE id=?').get(id), inserted: true };
@@ -568,6 +570,7 @@ export class ListeningStore {
     return this.tx(() => {
       const changed = new Set(), time = now();
       for (let item of items) {
+        if (this.manualKnowledgeDecision(listeningId, item)) continue;
         const norm = normalized(item.canonical_name);
         const existing = this.knowledge(listeningId);
         let match = existing.find(k => k.id === item.existing_item_id && k.type === item.type);
@@ -639,6 +642,8 @@ export class ListeningStore {
       }
     };
     for (const item of items) {
+      const manual = this.manualKnowledgeDecision(listeningId, item);
+      if (manual) { results.push({ status: manual.deleted ? 'excluded' : 'repeated', itemId: manual.deleted ? undefined : manual.item_id, visibleChange: false }); continue; }
       if (item.action === 'observe' || item.action === 'exclude') {
         saveCandidate(item, item.action);
         results.push({ status: item.action === 'observe' ? 'observed' : 'excluded', visibleChange: false });
@@ -756,4 +761,4 @@ export class ListeningStore {
   }
 }
 
-Object.assign(ListeningStore.prototype, relationMethods);
+Object.assign(ListeningStore.prototype, relationMethods, knowledgeEditMethods);

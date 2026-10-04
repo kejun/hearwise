@@ -45,7 +45,8 @@ function app(t, preferences = []) {
     close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
   }
   const context = vm.createContext({
-    // Graph DOM interaction has a dedicated browser suite; keep these MT lifecycle tests isolated.
+    // Graph/editor DOM interaction has dedicated browser suites; keep these MT lifecycle tests isolated.
+    createKnowledgeEditor: () => ({ open() {}, close() {} }),
     readKnowledgeView, saveKnowledgeView, createKnowledgeGraph: () => ({ select() {}, setNodes() {}, setActive() {}, setProcessing() {}, invalidate() {}, highlight() {}, refresh() {} }),
     initTranscriptVisibility, ...translationParams, createCaptionFrontier, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },

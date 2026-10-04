@@ -7,7 +7,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from './storage.mjs';
-import { extractKnowledge, repairKnowledge, splitFocusSegments } from './knowledge.mjs';
+import { extractKnowledge, repairKnowledge, splitFocusSegments, regenerateKnowledge } from './knowledge.mjs';
 import { createTranslationScheduler } from './translation-queue.mjs';
 import { createKnowledgeScheduler } from './knowledge-queue.mjs';
 import { createKnowledgeWorkflow } from './knowledge-workflow.mjs';
@@ -48,7 +48,7 @@ const graphRevisions = new Map();
 let relationScheduler;
 const speech = createSpeechService({ store, taskRuntime, incrementalClauses: process.env.HEARWISE_INCREMENTAL_BOUNDARY !== 'sentence', translatePhrase: translateSpeechPhrase, onDispose: id => maybeReleaseKey(id), setHead: (owner, id) => translations.setSpeechHead(owner, id),
   onMetric: event => console.info('speech_event', JSON.stringify(event)) });
-for (const file of ['transcript-visibility.js', 'caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js', 'knowledge-graph.js', 'knowledge-graph-layout.js']) {
+for (const file of ['knowledge-editor.js', 'transcript-visibility.js', 'caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js', 'knowledge-graph.js', 'knowledge-graph-layout.js']) {
   types[`/${file}`] = 'text/javascript; charset=utf-8';
 }
 let translating = 0;
@@ -342,6 +342,7 @@ function resumeProcessing(id, key) {
   maybeReleaseKey(id);
 }
 
+const knowledgeEdits = new Set();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   if (['POST', 'PATCH', 'DELETE'].includes(req.method) && !sameOrigin(req)) return sendJson(res, 403, { error: '仅允许同源请求' });
@@ -394,6 +395,43 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/listenings') {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     return sendJson(res, 200, store.list(page));
+  }
+  const knowledgeMatch = /^\/api\/listenings\/([0-9a-f-]{36})\/knowledge\/([0-9a-f-]{36})$/.exec(url.pathname);
+  if (knowledgeMatch && ['GET', 'PATCH', 'DELETE'].includes(req.method)) {
+    const [, id, itemId] = knowledgeMatch;
+    let locked = false;
+    try {
+      if (req.method === 'GET') return sendJson(res, 200, store.knowledgeEditSnapshot(id, itemId));
+      if (knowledgeEdits.has(id)) return sendJson(res, 409, { error: '正在保存知识修改，请稍后再试' });
+      const input = await readJson(req);
+      // Body reads yield: recheck after parsing before owning the per-record lock.
+      if (knowledgeEdits.has(id)) return sendJson(res, 409, { error: '正在保存知识修改，请稍后再试' });
+      knowledgeEdits.add(id); locked = true;
+      let result;
+      if (req.method === 'DELETE') {
+        if (!input || typeof input.revision !== 'string' || Object.keys(input).some(key => key !== 'revision'))
+          return sendJson(res, 400, { error: '删除请求格式无效' });
+        result = store.deleteKnowledgeItem(id, itemId, input.revision);
+      } else {
+        const prepared = store.prepareKnowledgeEdit(id, itemId, input);
+        const key = typeof input.key === 'string' && input.key.trim() ? input.key.trim() : keys.get(id);
+        if (!key) return sendJson(res, 400, { error: '请先在连接设置填写 API Key' });
+        const card = await taskRuntime.run('knowledge.execute', { listening_id: id, job_id: randomUUID(), kind: 'manual' }, context =>
+          provider.run({ key, priority: 'knowledge', signal: context.signal }, () => regenerateKnowledge(key, prepared, mtEndpoint, context)));
+        result = { item: store.saveKnowledgeEdit(id, itemId, prepared, card) };
+        keys.set(id, key);
+      }
+      try {
+        broadcast(id, { type: 'knowledge-edited', listeningId: id });
+        relationScheduler.schedule(id);
+        publishProcessing(id);
+        maybeReleaseKey(id);
+      } catch (error) { logModelError('knowledge-edit-notify', error); }
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, error.knowledgeEdit ? error.status : error instanceof SyntaxError ? 400 : 502,
+        { error: error.knowledgeEdit ? error.message : '知识修改失败，原内容未更改，请稍后重试' });
+    } finally { if (locked) knowledgeEdits.delete(id); }
   }
   const match = /^\/api\/listenings\/([0-9a-f-]{36})(?:\/(retry|export|segments|graph))?$/.exec(url.pathname);
   if (match && req.method === 'GET' && !match[2]) {
@@ -608,17 +646,18 @@ wss.on('connection', client => {
         if (kind === 'result-generated' && started) {
           const sentence = event.payload?.output?.sentence;
           if (!sentence || sentence.heartbeat || typeof sentence.text !== 'string' || !sentence.text.trim()) return;
+          const correctedText = store.correctKnowledgeText(listeningId, sentence.text);
           console.info('asr_stage', JSON.stringify({ runId: run.runId, final: Boolean(sentence.sentence_end), receivedAudioMs: receivedSamples / 16, connectionElapsedMs: performance.now() - receivedAt, sourceBeginMs: sentence.begin_time, sourceEndMs: sentence.end_time }));
           if (!sentence.sentence_end) {
-            send({ type: 'sentence', runId: run.runId, id: sentence.sentence_id, text: sentence.text, final: false });
-            speech.observe(listeningId, run.runId, sentence.sentence_id, sentence.text); return;
+            send({ type: 'sentence', runId: run.runId, id: sentence.sentence_id, text: correctedText, final: false });
+            speech.observe(listeningId, run.runId, sentence.sentence_id, correctedText); return;
           }
           if (sentence.sentence_id == null) return;
           try {
             const { segment, inserted } = store.addSegment(listeningId, run.runId, {
               id: sentence.sentence_id, text: sentence.text, beginMs: sentence.begin_time, endMs: sentence.end_time
             });
-            if (!inserted && segment.original_text !== sentence.text) {
+            if (!inserted && segment.original_text !== correctedText) {
               console.warn('asr_final_conflict', JSON.stringify({ runId: run.runId, sentenceId: sentence.sentence_id }));
               send({ type: 'caption-correction', runId: run.runId, message: '识别服务返回冲突定稿，已停止播报；文字记录保留首次定稿，请核对原文' });
               speech.correct(listeningId, run.runId);
