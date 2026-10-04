@@ -101,7 +101,7 @@ test('diagnostic buffer is bounded, marks missing history, and cannot fail busin
 });
 
 test('disabled tracing retains no events and active capture is not reported as complete', async () => {
-  const off = createTaskRuntime();
+  const off = createTaskRuntime({ enabled: false });
   await off.start('a', meta, async () => 1).promise;
   assert.equal(off.diagnostics().events.length, 0);
   assert.equal(off.diagnostics().enabled, false);

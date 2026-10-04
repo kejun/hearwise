@@ -3,6 +3,8 @@ export function mountTraceReport(data) {
   const labels = { succeeded: '成功', failed: '失败', cancelled: '已取消', partial: '部分成功', waiting: '等待后续执行', recovered: '成功 · 存在异常子步骤', unknown: '未知 / 未结束', running: '开始', event: '事件' };
   const issueLabels = { event_limit: '超过事件上限', invalid_event: '存在无效事件', buffer_truncated: '缓冲区已截断', capture_disabled: '采集未启用', unfinished_spans: '仍有未结束步骤', malformed_trace_line: '日志行截断或损坏', no_events: '未找到追踪事件', conflicting_duplicate: '重复事件内容冲突', conflicting_sequence: '事件序号冲突', sequence_gap: '事件序号缺失', mixed_builds: '包含多个构建版本', conflicting_span: '步骤归属冲突', span_boundary_missing_or_invalid: '步骤起止记录缺失或异常', event_after_span_end: '步骤结束后仍有事件', missing_parent: '父步骤缺失', invalid_parent_chain: '父子关系循环或过深', parent_owner_mismatch: '父子业务归属冲突' };
   const $ = selector => document.querySelector(selector);
+  labels.discarded = '已丢弃 / 不再适用';
+  const workflows = { knowledge: '知识整理', translation: '翻译', relation: '关系提取', speech: '播报', recognition: '语音识别' };
   issueLabels.source_incomplete = '源报告已标记不完整';
   issueLabels.snapshot_process_mismatch = '快照的进程归属不一致';
   const node = (tag, text, className) => {
@@ -22,7 +24,7 @@ export function mountTraceReport(data) {
   const aggregate = spans => {
     const priority = ['failed', 'waiting', 'unknown', 'partial'].find(state => spans.some(s => s.state === state));
     if (priority) return priority;
-    if (spans.some(s => s.state === 'cancelled')) return spans.every(s => s.state === 'cancelled') ? 'cancelled' : 'partial';
+    if (spans.some(s => ['cancelled', 'discarded'].includes(s.state))) return spans.every(s => s.state === spans[0].state) ? spans[0].state : 'partial';
     return spans.some(s => s.state === 'recovered') ? 'recovered' : 'succeeded';
   };
   const describe = (side, span) => {
@@ -37,9 +39,21 @@ export function mountTraceReport(data) {
     const fields = { '执行版本': side === 'current' ? '本次' : '基准', '业务记录': span.listening, '任务': span.job,
       '尝试': span.attempt ?? '未记录', '进程': span.process, 'Trace': span.trace, 'Span': span.events[0]?.span_id ?? '未知',
       '逻辑路径': span.path };
+    const attributes = span.events[0]?.attributes || {};
+    for (const [key, label] of Object.entries({ run_id: '收听片段', segment_id: '句子', consumer_id: '播放会话', unit_id: '语音单元', provider: '服务商', kind: '用途' })) {
+      if (attributes[key] !== undefined) fields[label] = attributes[key];
+    }
     const dl = node('dl');
     for (const [key, value] of Object.entries(fields)) dl.append(node('dt', key), node('dd', String(value)));
     $('#evidence').append(dl);
+    if (attributes.segment_id) {
+      const related = reports[side].spans.filter(s => !s.parent && s.listening === span.listening &&
+        s.step.split('.')[0] !== span.step.split('.')[0] && s.events[0]?.attributes.segment_id === attributes.segment_id);
+      if (related.length) $('#evidence').append(node('h3', '同一句子的其他流程（业务关联）'));
+      for (const item of related.slice(0, 50)) {
+        const button = node('button', item.step, 'search-result'); button.onclick = () => describe(side, item); $('#evidence').append(button);
+      }
+    }
     if (span.issues.length) $('#evidence').append(node('p', span.issues.map(i => issueLabels[i] ?? i).join('；'), 'warning'));
     $('#evidence').append(node('h3', `事件证据 · ${span.events.length}`));
     const events = node('div'); let shown = 0;
@@ -89,17 +103,24 @@ export function mountTraceReport(data) {
     const container = node('section', undefined, 'task-tree');
     const task = node('details', undefined, 'group'); task.open = true;
     const taskSummary = node('summary'); taskSummary.append(node('span', `收听 · ${listening}`), badge(aggregate(roots))); task.append(taskSummary);
-    const workflow = node('details', undefined, 'group'); workflow.open = true;
-    const workflowSummary = node('summary'); workflowSummary.append(node('span', '知识整理 · 已埋点流程'), badge(aggregate(roots))); workflow.append(workflowSummary);
-    const jobs = node('div', undefined, 'branch');
-    pageItems(jobs, roots, root => {
+    for (const family of [...new Set(roots.map(root => root.step.split('.')[0]))]) {
+      const members = roots.filter(root => root.step.split('.')[0] === family);
+      const workflow = node('details', undefined, 'group'); workflow.open = true;
+      const workflowSummary = node('summary'); workflowSummary.append(node('span', `${workflows[family] || family} · 已埋点流程`), badge(aggregate(members))); workflow.append(workflowSummary);
+      const jobs = node('div', undefined, 'branch');
+      pageItems(jobs, members, root => {
       const job = node('details', undefined, 'job'); job.dataset.job = root.job;
-      const summary = node('summary'); summary.append(node('span', `批次 ${root.job} · 尝试 ${root.attempt ?? '?'}`), badge(root.state)); job.append(summary);
+      const attrs = root.events[0]?.attributes || {};
+      const title = root.step === 'speech.unit' ? `语音单元 ${attrs.unit_id} · ${attrs.provider} · ${root.job}`
+        : `${root.step === 'speech.session' ? '播放会话' : '任务'} ${root.job}${root.attempt ? ` · 尝试 ${root.attempt}` : ''}`;
+      const summary = node('summary'); summary.append(node('span', title), badge(root.state)); job.append(summary);
       let loaded = false;
       job.addEventListener('toggle', () => { if (job.open && !loaded) { loaded = true; job.append(spanElement(side, root)); } });
       return job;
-    });
-    workflow.append(jobs); task.append(workflow); container.append(task); treeCache.set(key, container); return container;
+      });
+      workflow.append(jobs); task.append(workflow);
+    }
+    container.append(task); treeCache.set(key, container); return container;
   };
   const show = () => {
     const side = activeSide, report = reports[side];
@@ -108,12 +129,12 @@ export function mountTraceReport(data) {
     if (!tasks.includes(selectedTask)) selectedTask = tasks[0] ?? '';
     $('#tasks').replaceChildren();
     for (const listening of tasks) {
-      const button = node('button', listening, listening === selectedTask ? 'selected' : '');
+      const button = node('button', listening === 'unknown' ? '未关联业务记录' : listening, listening === selectedTask ? 'selected' : '');
       button.onclick = () => { selectedTask = listening; show(); }; $('#tasks').append(button);
     }
     $('#integrity').textContent = `${completeness(report)} · ${report.eventCount} 条事件 · ${report.spans.length} 个步骤`;
     $('#integrity').className = report.completeness === 'complete' ? 'integrity' : 'integrity warning';
-    $('#issues').textContent = report.issues.map(i => issueLabels[i] ?? i).join('；') || (report.completeness === 'unknown' ? '文本日志没有结束清单，无法确认尾部是否丢失。' : '仅代表已启用的知识流程采集范围。');
+    $('#issues').textContent = report.issues.map(i => issueLabels[i] ?? i).join('；') || (report.completeness === 'unknown' ? '文本日志没有结束清单，无法确认尾部是否丢失。' : '仅代表当前快照中的已埋点流程；未出现的分支不能推断为未执行。');
     $('#versions').textContent = report.builds.map(b => `${b.git_sha.slice(0, 12)}${b.build_dirty ? ' · 含未提交修改' : ''} · 埋点 v${b.instrumentation_version}`).join(' / ') || '版本未知';
     $('#tree').replaceChildren();
     if (!filter) {

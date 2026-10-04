@@ -199,9 +199,9 @@ NODE_USE_ENV_PROXY=1 npm start
 
 Effect 首批改动覆盖知识任务的执行生命周期：删除记录会取消抽取/修复请求，晚到结果不能继续提交，原合批、公平调度和持久化预算保留。完整迁移尚未完成。
 
-设置 `HEARWISE_TRACE=1` 可在服务端输出以 `execution_trace` 开头的 JSON 诊断事件，当前仅覆盖知识执行、抽取/修复、HTTP 子步骤和检查点事件。事件包含关联 ID、状态、安全错误码和构建版本，不含 API Key、原文或模型正文。默认关闭；内存缓冲有容量上限，输出背压时允许丢弃诊断事件，序号缺口表示采集不完整，不代表全任务链路已覆盖。
+服务启动后默认输出以 `execution_trace` 开头的 JSON 诊断事件，无需设置 `HEARWISE_TRACE`。覆盖翻译（定稿、预览、提前播报短句和恢复处理）、知识整理、关系提取，以及千问/Fish 的播报合成和浏览器消费反馈。事件包含关联 ID、状态、安全错误码和构建版本，不含 API Key、原文或模型正文。内存缓冲有容量上限，输出背压时允许丢弃诊断事件；默认采集不等于自动保存日志文件，需要持久保留时将服务输出重定向到文件。
 
-可用 `npm run trace:report -- input.log --output report.html` 生成本地离线报告，按收听、流程、批次、调用、事件逐层下钻。增加 `--baseline before.log` 可对比已观测的步骤次数和状态。使用 `npm run trace:demo` 可以在不调用付费模型的情况下体验成功、恢复和取消场景。完整说明见[执行追踪报告](docs/execution-trace-report.md)。当前尚未提供自动诊断存储、实时查询服务和严格的同输入回归判定。
+可用 `npm run trace:report -- input.log --output report.html` 生成本地离线报告，按收听、流程、任务、调用、事件逐层下钻，并在同一句子的翻译与播报证据间跳转。增加 `--baseline before.log` 可对比已观测的步骤次数和状态。使用 `npm run trace:demo` 可以生成知识异常示例及多流程示例；示例运行真实业务代码，模型端点由本地 fixture 替代，并非生产日志。完整说明见[执行追踪报告](docs/execution-trace-report.md)。当前尚未提供自动诊断存储、实时查询服务和严格的同输入回归判定。
 
 ```bash
 npm test

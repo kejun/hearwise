@@ -1,11 +1,12 @@
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Tracer } from "effect";
 import { TaskCancelled, type CancelReason, type StepKey, type TaskMetadata, type TraceEvent } from "../../shared/diagnostics.js";
 import { createDiagnostics } from "./diagnostics.js";
+import { randomUUID } from "node:crypto";
 
 export interface ExecutionContext {
   readonly signal: AbortSignal;
   event(name: string, attributes?: Record<string, unknown>): void;
-  step<A>(name: StepKey, operation: (context: ExecutionContext) => PromiseLike<A>): Promise<A>;
+  step<A>(name: StepKey, operation: (context: ExecutionContext) => PromiseLike<A>, attributes?: Partial<TaskMetadata>): Promise<A>;
 }
 export interface TaskHandle<A> {
   readonly promise: Promise<A>;
@@ -17,6 +18,7 @@ export function createTaskRuntime(options: { enabled?: boolean; capacity?: numbe
   // Build the resource-free layer synchronously so the legacy scheduler retains immediate admission.
   runtime.runSync(Effect.void);
   const tasks = new Map<string, TaskHandle<unknown>>();
+  const owners = new Map<string, TaskMetadata>();
   let closed = false, disposing: Promise<void> | undefined;
 
   function execute<A>(name: StepKey, metadata: TaskMetadata, operation: (context: ExecutionContext) => PromiseLike<A>,
@@ -39,9 +41,9 @@ export function createTaskRuntime(options: { enabled?: boolean; capacity?: numbe
       const context: ExecutionContext = {
         signal: scopedSignal,
         event: (event, attributes) => { if (!scopedSignal.aborted) diagnostics.event(span, event, attributes); },
-        step: (childName, child) => {
+        step: (childName, child, attributes) => {
           scopedSignal.throwIfAborted();
-          return runtime.runPromiseExit(execute(childName, metadata, child, scopedSignal, span), { signal: scopedSignal })
+          return runtime.runPromiseExit(execute(childName, { ...metadata, ...attributes }, child, scopedSignal, span), { signal: scopedSignal })
             .then(exit => {
               if (Exit.isSuccess(exit)) return exit.value;
               if (scopedSignal.aborted) throw scopedSignal.reason;
@@ -54,17 +56,20 @@ export function createTaskRuntime(options: { enabled?: boolean; capacity?: numbe
         return Promise.resolve(operation(context));
       }, catch: (error: unknown) => error });
       if (value && typeof value === "object") {
-        if ("outcome" in value) span.attribute("outcome", value.outcome);
+        if ("outcome" in value && value.outcome !== undefined) span.attribute("outcome", value.outcome);
         else if ("kind" in value) span.attribute("outcome", value.kind);
       }
       return value;
     }).pipe(Effect.scoped, Effect.withSpan(name, { attributes: { ...metadata } }));
     return parent ? effect.pipe(Effect.provideService(Tracer.ParentSpan, parent)) : effect;
   }
-  function start<A>(identity: string, metadata: TaskMetadata, operation: (context: ExecutionContext) => PromiseLike<A>): TaskHandle<A> {
+  function startNamed<A>(name: StepKey, identity: string, metadata: TaskMetadata, operation: (context: ExecutionContext) => PromiseLike<A>, signal?: AbortSignal): TaskHandle<A> {
     if (closed) throw new Error("Task runtime is closed");
     if (tasks.has(identity)) throw new Error("Task identity already running");
     const controller = new AbortController();
+    // Preserve the caller's cancellation identity (legacy phrase logic tests AbortError).
+    const aborted = () => controller.abort(signal?.reason ?? new TaskCancelled("superseded"));
+    if (signal?.aborted) aborted(); else signal?.addEventListener("abort", aborted, { once: true });
     let resolve!: (result: A) => void, reject!: (error: unknown) => void;
     const promise = new Promise<A>((yes, no) => { resolve = yes; reject = no; });
     // A caller may cancel synchronously before attaching its await/catch.
@@ -74,10 +79,12 @@ export function createTaskRuntime(options: { enabled?: boolean; capacity?: numbe
       cancel(reason) { if (!controller.signal.aborted) controller.abort(new TaskCancelled(reason)); }
     };
     tasks.set(identity, handle);
-    runtime.runCallback(execute("knowledge.execute", metadata, operation, controller.signal), {
+    owners.set(identity, metadata);
+    runtime.runCallback(execute(name, metadata, operation, controller.signal), {
       signal: controller.signal,
       onExit: exit => {
-        if (tasks.get(identity) === handle) tasks.delete(identity);
+        signal?.removeEventListener("abort", aborted);
+        if (tasks.get(identity) === handle) { tasks.delete(identity); owners.delete(identity); }
         if (controller.signal.aborted) reject(controller.signal.reason);
         else if (Exit.isSuccess(exit)) resolve(exit.value);
         else reject(Cause.squash(exit.cause));
@@ -86,7 +93,24 @@ export function createTaskRuntime(options: { enabled?: boolean; capacity?: numbe
     return handle;
   }
   return {
-    start,
+    start: <A>(identity: string, metadata: TaskMetadata, operation: (context: ExecutionContext) => PromiseLike<A>) => startNamed("knowledge.execute", identity, metadata, operation),
+    run: <A>(name: StepKey, metadata: TaskMetadata, operation: (context: ExecutionContext) => PromiseLike<A>, signal?: AbortSignal) =>
+      startNamed(name, randomUUID(), metadata, operation, signal).promise,
+    open(name: StepKey, metadata: TaskMetadata) {
+      let context!: ExecutionContext, succeed!: (value?: unknown) => void, fail!: (error: unknown) => void;
+      const handle = startNamed(name, randomUUID(), metadata, current => {
+        context = current;
+        return new Promise((resolve, reject) => { succeed = resolve; fail = reject; });
+      });
+      let settled = false;
+      return { context, promise: handle.promise,
+        succeed(value?: unknown) { if (!settled) { settled = true; succeed(value); } },
+        fail(error: unknown) { if (!settled) { settled = true; fail(error); } },
+        cancel(reason: CancelReason) { if (!settled) { settled = true; handle.cancel(reason); } } };
+    },
+    cancelListening(id: string, reason: CancelReason = "listening_deleted") {
+      for (const [identity, metadata] of owners) if (metadata.listening_id === id) tasks.get(identity)?.cancel(reason);
+    },
     get activeCount() { return tasks.size; },
     diagnostics: diagnostics.snapshot,
     dispose(): Promise<void> {

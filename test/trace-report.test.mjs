@@ -71,6 +71,11 @@ test('state and step differences align on logical paths and retain both versions
   assert.match(diff.warning, /未观测不等于未执行/);
   for (const event of input.events) event.build.instrumentation_version++;
   assert.equal(compareTraceReports(report(input), before).instrumentationCompatible, false);
+  const legacy = structuredClone(fixture);
+  legacy.build.instrumentation_version = 1;
+  for (const event of legacy.events) event.build.instrumentation_version = 1;
+  assert.deepEqual(report(legacy).spans.map(s => s.state), before.spans.map(s => s.state));
+  assert.equal(compareTraceReports(before, report(legacy)).instrumentationCompatible, false);
 });
 
 test('unknown fields, unsafe errors and unsupported schemas do not enter the standalone report', () => {
@@ -124,11 +129,11 @@ test('CLI renderer writes a self-contained report and refuses to overwrite sourc
 test('successful Effect completion does not hide partial, invalid or continuing business outcomes', async () => {
   const runtime = createTaskRuntime({ enabled: true });
   try {
-    for (const outcome of ['partial', 'invalid', 'continue']) {
+    for (const outcome of ['partial', 'invalid', 'continue', 'failed', 'discarded']) {
       await runtime.start(outcome, { job_id: outcome, listening_id: 'outcomes' }, async () =>
-        outcome === 'continue' ? { kind: 'continue' } : { outcome }).promise;
+        outcome === 'continue' ? { kind: 'continue', outcome: undefined } : { outcome }).promise;
     }
-    assert.deepEqual(report(runtime.diagnostics()).spans.map(s => s.state), ['partial', 'failed', 'waiting']);
+    assert.deepEqual(report(runtime.diagnostics()).spans.map(s => s.state), ['partial', 'failed', 'waiting', 'failed', 'discarded']);
   } finally { await runtime.dispose(); }
 });
 

@@ -15,7 +15,7 @@ export function renderTraceReport(current, baseline) {
 <title>Hearwise · 执行追踪报告</title><style>${reportStyles}</style></head><body>
 <header><div class="eyebrow">HEARWISE / EXECUTION TRACE</div><h1>执行追踪报告</h1><p>收听 → 业务流程 → 执行批次 → 调用步骤 → 事件证据</p></header>
 <div class="toolbar"><label>执行<select id="side"><option value="current">本次执行</option><option value="baseline">基准执行</option></select></label><label>筛选<input id="search" placeholder="步骤、任务 ID、failed、HTTP_429"></label><button id="collapse">折叠当前图</button><button id="export">导出脱敏证据 JSON</button></div>
-<div class="layout"><aside><h2>业务记录</h2><div id="tasks"></div><p class="muted">仅显示已采集的知识流程。翻译、关系与播报尚未接入。</p></aside><main>
+<div class="layout"><aside><h2>业务记录</h2><div id="tasks"></div><p class="muted">显示已采集的识别、翻译、知识、关系和播报。临时请求与试听可能未关联收听记录。旧日志保持原有覆盖范围。</p></aside><main>
 <section class="panel"><div id="integrity"></div><p id="issues"></p><p id="versions"></p></section>
 <section class="panel"><div class="section-title"><h2>调用层级图</h2><span>点击展开 · 各分支独立</span></div><p class="muted">连线表示明确的父子归属，不代表兄弟步骤的执行依赖。</p><div id="tree"></div></section>
 <section class="panel"><h2>时间线</h2><p class="muted">按进程分组，位置使用墙钟，耗时来自单调时钟。时钟变化可能影响位置；不跨进程对时，也不将并行耗时相加或推断关键路径。</p><div id="timeline"></div></section>

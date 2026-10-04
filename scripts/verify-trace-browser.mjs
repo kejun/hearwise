@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { traceReportFixture } from '../test-support/trace-report-fixture.mjs';
+import { fullTraceFixture } from '../test-support/full-trace-fixture.mjs';
 import { createTraceReport } from './trace-report.mjs';
 
 const require = createRequire(import.meta.url);
@@ -71,6 +72,25 @@ try {
   await page.locator('#tree .search-result').first().click();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   if (evidence) await page.screenshot({ path: path.join(directory, 'trace-mobile.png'), fullPage: false });
+  const fullInput = path.join(directory, 'full-pipeline.log'), fullOutput = path.join(directory, 'full-pipeline.html');
+  await writeFile(fullInput, await fullTraceFixture());
+  await createTraceReport(fullInput, fullOutput);
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await page.goto(pathToFileURL(fullOutput).href);
+  for (const family of ['知识整理', '翻译', '关系提取', '播报', '语音识别']) {
+    await page.locator('#tree').getByText(`${family} · 已埋点流程`, { exact: true }).waitFor();
+  }
+  await page.getByRole('textbox', { name: '筛选' }).fill('speech.unit');
+  await page.locator('#tree .search-result').first().click();
+  assert.match(await page.locator('#evidence').textContent(), /pcm_sent.*browser_consumed.*playback_completed/s);
+  await page.locator('#evidence .search-result').filter({ hasText: 'translation.execute' }).click();
+  assert.equal(await page.locator('#evidence h2').textContent(), 'translation.execute');
+  await page.locator('#tasks').getByRole('button', { name: '未关联业务记录', exact: true }).click();
+  await page.getByRole('textbox', { name: '筛选' }).fill('translation.preview');
+  await page.locator('#tree .search-result').first().click();
+  assert.equal(await page.locator('#evidence h2').textContent(), 'translation.preview');
+  checks.push('default application logs expose all workflows, playback evidence and same-segment links; preview is not given a fabricated owner');
+  if (evidence) await page.screenshot({ path: path.join(directory, 'trace-full-pipeline.png'), fullPage: false });
   assert.deepEqual(errors, []); assert.deepEqual(requests, []);
   checks.push('mobile layout fits viewport; no browser errors or network requests');
   console.log(JSON.stringify({ ok: true, checks }));

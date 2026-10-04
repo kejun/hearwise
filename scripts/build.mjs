@@ -17,7 +17,7 @@ export async function buildServer() {
   try {
     await build({ absWorkingDir: root, entryPoints: ['src/server/index.ts'], outfile: path.join(staging, 'index.js'),
       bundle: true, packages: 'external', platform: 'node', format: 'esm', target: 'node24', sourcemap: 'external',
-      define: { __BUILD_META__: JSON.stringify({ git_sha: gitSha, build_dirty: dirty, instrumentation_version: 1 }) },
+      define: { __BUILD_META__: JSON.stringify({ git_sha: gitSha, build_dirty: dirty, instrumentation_version: 2 }) },
       plugins: [{ name: 'legacy-resource-boundary', setup(builder) {
         builder.onResolve({ filter: /\.mjs$/ }, args => {
           if (args.importer.includes(`${path.sep}src${path.sep}`)) return { errors: [{ text: 'Inject legacy .mjs ports from the root composition module; do not bundle their resource paths.' }] };
