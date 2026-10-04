@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import WebSocket from 'ws';
 import { speechFixture } from '../test-support/speech-fixture.mjs';
+import { traceEvents, until } from '../test-support/full-trace-fixture.mjs';
 
 const config = { key: 'mock-only', region: 'beijing', voice: 'Cherry', rate: 1 };
 const first = 'The weather is warm, and the sky is clear';
@@ -69,6 +70,12 @@ for (const enabled of [false, true]) test(`timed ASR trace: ${enabled ? 'candida
   const stored = await (await fetch(`${f.base}/api/listenings/${run.listeningId}`)).json();
   assert.equal(stored.segments[0].original_text, final);
   assert.equal(stored.segments[0].translation_text, translate(final));
+  if (enabled) {
+    await until(() => traceEvents(f.logs()).some(e => e.step_key === 'translation.phrase' && e.state === 'succeeded' && e.attributes.kind === 'remainder'));
+    const phrases = traceEvents(f.logs()).filter(e => e.step_key === 'translation.phrase' && e.state === 'succeeded');
+    assert.ok(phrases.some(e => e.attributes.kind === 'phrase'));
+    assert.ok(phrases.every(e => e.attributes.run_id === run.runId && e.attributes.consumer_id));
+  }
 });
 test('pre-final source correction stops audio explicitly; canonical final still archives corrected text', async t => {
   const { f, asr, speech } = await setup(t);
@@ -90,6 +97,8 @@ test('final overtakes delayed phrase MT: cancels own request, speaks full canoni
   await waitFor(() => f.stats.commits.length === 1);
   assert.equal(f.stats.mtAborted, 1); assert.deepEqual(f.stats.commits, [translate(final)]);
   assert.equal(speech.events.some(e => e.type === 'speech.error'), false);
+  await until(() => traceEvents(f.logs()).some(e => e.step_key === 'translation.phrase' && e.state === 'cancelled'));
+  assert.ok(traceEvents(f.logs()).some(e => e.step_key === 'translation.http' && e.state === 'cancelled'));
 });
 test('mute during phrase translation rejects late audio and cancels upstream', async t => {
   const { f, speech } = await setup(t, { translationDelay: 180 });
@@ -99,6 +108,8 @@ test('mute during phrase translation rejects late audio and cancels upstream', a
   await waitFor(() => f.stats.mtAborted === 1);
   await new Promise(resolve => setTimeout(resolve, 220));
   assert.equal(f.stats.commits.length, 0); assert.equal(speech.pcm.length, 0);
+  const session = traceEvents(f.logs()).find(e => e.step_key === 'speech.session' && e.state === 'cancelled');
+  assert.equal(session.attributes.cancel_reason, 'user_cancelled');
 });
 test('unsupported automatic language and unsafe text retain final-only behavior', async t => {
   const { f, speech } = await setup(t, { source: 'auto' });

@@ -1,25 +1,31 @@
 import { randomUUID } from "node:crypto";
 import { Cause, Exit, Option, Tracer } from "effect";
 import type { BuildMetadata, TraceEvent, TraceState } from "../../shared/diagnostics.js";
+import { TRACE_STEPS, TRACE_EVENTS, TRACE_ERRORS } from "../../shared/diagnostics.js";
 
 declare const __BUILD_META__: BuildMetadata;
 const allowed = new Set(["listening_id", "job_id", "attempt", "part_no", "request_count", "accepted_count",
-  "rejected_count", "http_status", "phase", "outcome", "cancel_reason", "duration_ms"]);
+  "rejected_count", "http_status", "phase", "outcome", "cancel_reason", "duration_ms", "run_id", "segment_id",
+  "consumer_id", "unit_id", "provider", "kind", "queue_ms", "samples", "consumed_samples", "retry_at", "evidence_source"]);
 const safeWords = new Set(["extract", "repair", "headers", "body", "ok", "empty", "partial", "invalid",
-  "continue", "terminal", "listening_deleted", "application_shutdown", "superseded"]);
+  "continue", "terminal", "failed", "discarded", "listening_deleted", "application_shutdown", "superseded",
+  "consumer_closed", "user_cancelled", "qwen", "fish", "preview", "realtime", "background", "phrase", "remainder",
+  "original", "translation", "replay", "live", "check", "client_report"]);
+const identifiers = new Set(["job_id", "listening_id", "run_id", "segment_id", "consumer_id"]);
+const names = new Set<string>(TRACE_EVENTS), errorCodes = new Set<string>(TRACE_ERRORS);
 export function safeAttributes(values: ReadonlyMap<string, unknown> | Record<string, unknown>) {
   const result: Record<string, string | number | boolean> = {};
   const entries = values instanceof Map ? values.entries() : Object.entries(values);
   for (const [key, value] of entries) {
     if (!allowed.has(key)) continue;
     if (typeof value === "number" && Number.isFinite(value)) result[key] = value;
-    else if ((key === "job_id" || key === "listening_id") && typeof value === "string" && /^[\w:/.-]{1,128}$/.test(value)) result[key] = value;
+    else if (identifiers.has(key) && typeof value === "string" && /^[\w:/.-]{1,128}$/.test(value)) result[key] = value;
     else if (typeof value === "string" && safeWords.has(value)) result[key] = value;
   }
   return result;
 }
 
-export function createDiagnostics({ enabled = false, capacity = 2000, onEvent }: {
+export function createDiagnostics({ enabled = true, capacity = 2000, onEvent }: {
   enabled?: boolean; capacity?: number; onEvent?: (event: TraceEvent) => void;
 } = {}) {
   const size = Math.min(10000, Math.max(1, Math.floor(Number.isFinite(capacity) ? capacity : 2000)));
@@ -48,7 +54,9 @@ export function createDiagnostics({ enabled = false, capacity = 2000, onEvent }:
         const error = Cause.squash(exit.cause);
         if (error && typeof error === "object" && "status" in error && typeof error.status === "number" &&
           Number.isInteger(error.status) && error.status >= 100 && error.status <= 599) errorCode = `HTTP_${error.status}`;
-        else if (error && typeof error === "object" && "code" in error && error.code === "KNOWLEDGE_INVALID_RESPONSE") errorCode = "KNOWLEDGE_INVALID_RESPONSE";
+        else if (error && typeof error === "object" && "code" in error && typeof error.code === "string" && errorCodes.has(error.code)) errorCode = error.code;
+        else if (error && typeof error === "object" && "diagnostics" in error && error.diagnostics && typeof error.diagnostics === "object" &&
+          "code" in error.diagnostics && typeof error.diagnostics.code === "string" && errorCodes.has(error.diagnostics.code)) errorCode = error.diagnostics.code;
         else if (error instanceof Error && error.name === "TimeoutError") errorCode = "REQUEST_TIMEOUT";
         else errorCode = "UNCLASSIFIED_FAILURE";
       }
@@ -61,8 +69,6 @@ export function createDiagnostics({ enabled = false, capacity = 2000, onEvent }:
     tracer,
     started: (span: Tracer.Span) => { if (enabled) activeSpans.add(span.spanId); record(span, "running"); },
     event(span: Tracer.Span, name: string, attributes: Record<string, unknown> = {}) {
-      const names = new Set(["checkpoint_reserved", "checkpoint_committed", "response_headers", "response_received",
-        "cancel_requested", "validation_completed", "continuation", "slot_released"]);
       if (names.has(name)) record(span, "event", { event: name,
         attributes: { ...safeAttributes(span.attributes), ...safeAttributes(attributes) } });
     },
@@ -70,7 +76,7 @@ export function createDiagnostics({ enabled = false, capacity = 2000, onEvent }:
       return { schema_version: 1 as const, build: __BUILD_META__, enabled, process_id: processId,
         complete: enabled && dropped === 0 && activeSpans.size === 0, active_spans: activeSpans.size,
         dropped_events: dropped, sink_errors: sinkErrors, sink_complete: enabled && sinkErrors === 0,
-        coverage: ["knowledge.execute", "knowledge.extract", "knowledge.repair", "knowledge.http"],
+        coverage: [...TRACE_STEPS],
         capture: "bounded_process_buffer" as const,
         events: structuredClone(events.length < size || cursor === 0 ? events : [...events.slice(cursor), ...events.slice(0, cursor)]) };
     }

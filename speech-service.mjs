@@ -6,7 +6,7 @@ import { FishTts, FishTtsError } from './fish-tts.mjs';
 import { speechUnits, transcriptSpeechUnits } from './speech-scheduler.mjs';
 import { AUDIO_HEADER_BYTES, PREVIEW_TEXT, TTS_MODEL, TTS_INSTRUCT_MODEL, TTS_SAMPLE_RATE, speechConfig } from './public/speech-protocol.js';
 
-export function createSpeechService({ store, setHead = () => {}, createTts = config => config.provider === 'fish' ? new FishTts(config) : new QwenTts(config),
+export function createSpeechService({ store, taskRuntime, setHead = () => {}, createTts = config => config.provider === 'fish' ? new FishTts(config) : new QwenTts(config),
   incrementalClauses = true, translatePhrase, onDispose = () => {}, now = Date.now, drainMs = 20000, progressTimeoutMs = 12000, translationWaitMs = 30000, pauseTimeoutMs = 300000, onMetric = () => {} }) {
   const consumers = new Set();
   function accept(client) {
@@ -20,16 +20,27 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
     let pausedAt = null;
     let ledger = null, phraseRequest = null;
     let liveUnit = null;
+    let sessionTrace;
+    const unitTraces = new Map();
     const completedSamples = new Map();
     const metric = (event, extra = {}) => onMetric({ event, consumer: owner, run: consumer?.runId, provider, model, ...extra });
     const send = data => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ ...data, epoch })); };
     const dispose = (graceful = false) => {
       if (closed) return;
-      closed = true; clearInterval(timer); clearTimeout(initTimeout); tts?.close(graceful); tts = null;
+      closed = true; clearInterval(timer); clearTimeout(initTimeout);
+      for (const entry of unitTraces.values()) entry.trace.cancel('consumer_closed');
+      unitTraces.clear(); sessionTrace?.cancel('consumer_closed');
+      tts?.close(graceful); tts = null;
       phraseRequest?.abort(); ledger?.close();
       consumers.delete(consumer); onDispose(consumer?.listeningId); setHead(owner, null); units = []; activeKey = null;
     };
     const finish = (type, message, error) => {
+      if (type === 'speech.finished') sessionTrace?.succeed();
+      else {
+        const failure = error || Object.assign(new Error('Speech lifecycle failed'), { code: 'SPEECH_FAILED' });
+        sessionTrace?.fail(failure);
+        for (const entry of unitTraces.values()) entry.trace.fail(failure);
+      }
       message = String(message || '语音服务暂时不可用');
       if (activeKey) message = message.replaceAll(activeKey, '[redacted]');
       message = message.slice(0, 500);
@@ -41,7 +52,11 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
     };
     const state = (name, message, extra = {}) => {
       const data = JSON.stringify({ name, message, ...extra });
-      if (data !== lastState) { lastState = data; send({ type: 'speech.state', state: name, message, ...extra }); }
+      if (data !== lastState) {
+        lastState = data; send({ type: 'speech.state', state: name, message, ...extra });
+        if (name === 'waiting-translation') sessionTrace?.context.event('waiting_translation');
+        if (name === 'draining') sessionTrace?.context.event('draining');
+      }
     };
     const initTimeout = setTimeout(() => finish('speech.error', '语音连接未初始化'), 10000);
     const pump = async () => {
@@ -98,7 +113,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
                 phraseRequest.sourceUnit = candidate;
                 try {
                   const translated = await translatePhrase({ listeningId: consumer.listeningId, text: candidate.source,
-                    signal: phraseRequest.signal, final: false });
+                    consumerId: owner, runId: consumer.runId, signal: phraseRequest.signal, final: false });
                   if (closed) return;
                   if (pausedAt != null || drainAt != null || store.speechRun(consumer.listeningId, consumer.runId)?.state !== 'active') return;
                   if (!ledger.commit(candidate)) continue; // Final/revision won the race; never emit stale speech.
@@ -121,7 +136,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
                 phraseRequest = new AbortController();
                 try {
                   const translated = await translatePhrase({ listeningId: consumer.listeningId, text: remainder.source,
-                    signal: phraseRequest.signal, final: true });
+                    consumerId: owner, runId: consumer.runId, segmentId: segment.id, signal: phraseRequest.signal, final: true });
                   if (closed) return;
                   liveUnit = remainder;
                   segment = { ...segment, translation_state: 'complete', translation_text: translated };
@@ -163,13 +178,20 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
           const index = ++unitIndex;
           const requestedAt = now();
           let frame = 0, samples = 0;
+          const unitTrace = taskRuntime?.open('speech.unit', { listening_id: consumer?.listeningId, run_id: consumer?.runId,
+            job_id: `${owner}:${index}`, consumer_id: owner, segment_id: segment.id || undefined, unit_id: index, provider,
+            kind: preview ? 'preview' : replay ? 'replay' : transcript?.kind || 'live' });
+          if (unitTrace) unitTraces.set(index, { trace: unitTrace, startSamples: sentSamples, consumed: false });
           send({ type: 'speech.unit', unit: index, segmentId: segment.id, sequence: segment.sequence_no, text,
             ...(liveUnit ? { sourceUnit: liveUnit } : {}),
             ...(transcript ? { position, total: transcript.total, kind: transcript.kind, part: parts - units.length, parts } : {}) });
           state('buffering', drainAt == null ? '正在准备语音' : '正在读完最后几句');
-          const response = await tts.synthesize(text, pcm => {
+          const synthesize = context => tts.synthesize(text, pcm => {
             if (closed) return;
-            if (!samples) metric('first_audio', { segment: segment.id, sequence: segment.sequence_no, unit: index, elapsedMs: now() - requestedAt });
+            if (!samples) {
+              context?.event('first_pcm');
+              metric('first_audio', { segment: segment.id, sequence: segment.sequence_no, unit: index, elapsedMs: now() - requestedAt });
+            }
             if (sentSamples + pcm.length / 2 - consumedSamples > TTS_SAMPLE_RATE * 32 || client.bufferedAmount > 1024 * 1024) {
               throw new Error('播放速度跟不上，已停止播报；可重新开启或跳到最新内容');
             }
@@ -182,10 +204,12 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
               client.send(packet, { binary: true });
               sentSamples += chunk.length / 2; samples += chunk.length / 2;
             }
-          });
+          }, context);
+          const response = await (unitTrace ? unitTrace.context.step('speech.synthesize', synthesize) : synthesize());
           if (closed) return;
           send({ type: 'speech.unit-end', unit: index, samples });
           completedSamples.set(index, sentSamples);
+          unitTrace?.context.event('pcm_sent', { samples });
           metric('unit_generated', { segment: segment.id, unit: index, elapsedMs: now() - requestedAt, samples });
           if (response) metric('response', { unit: index, response: response.id, status: response.status, attempts: response.attempts,
             inputTokens: response.usage?.input_tokens, outputTokens: response.usage?.output_tokens });
@@ -202,10 +226,15 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
       let msg;
       try { if (binary) throw new Error(); msg = JSON.parse(raw.toString()); }
       catch { return finish('speech.error', '播报消息格式无效'); }
-      if (msg.type === 'speech.stop') { metric(msg.reason === 'skip' ? 'skip' : 'cancel', { afterSequence: cursor }); dispose(); client.close(); return; }
+      if (msg.type === 'speech.stop') {
+        sessionTrace?.cancel('user_cancelled');
+        for (const entry of unitTraces.values()) entry.trace.cancel('user_cancelled');
+        metric(msg.reason === 'skip' ? 'skip' : 'cancel', { afterSequence: cursor }); dispose(); client.close(); return;
+      }
       if (initialized) {
         if (msg.epoch !== epoch) return;
         if (msg.type === 'speech.pause') {
+          if (pausedAt == null) sessionTrace?.context.event('paused');
           pausedAt ??= now();
           state('paused', '播报已暂停，播放位置保留 5 分钟。');
         }
@@ -216,6 +245,7 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
           if (drainAt != null) drainAt += resumedAt - Math.max(pausedAt, drainAt);
           if (waitingTranslation) waitingTranslation.since += resumedAt - Math.max(pausedAt, waitingTranslation.since);
           pausedAt = null; lastProgress = resumedAt; lastState = '';
+          sessionTrace?.context.event('resumed');
         }
         if (msg.type === 'speech.drain' && !preview && !replay && !transcript) { drainAt ??= now(); state('draining', '正在读完最后几句'); }
         if (msg.type === 'speech.progress') {
@@ -225,6 +255,16 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
             return finish('speech.error', '播放进度无效');
           }
           lastProgress = now(); consumedSamples = msg.consumedSamples; playedUnit = msg.playedUnit;
+          for (const [id, entry] of unitTraces) {
+            if (!entry.consumed && consumedSamples > entry.startSamples) {
+              entry.consumed = true;
+              entry.trace.context.event('browser_consumed', { evidence_source: 'client_report', consumed_samples: consumedSamples });
+            }
+            if (id <= playedUnit) {
+              entry.trace.context.event('playback_completed', { evidence_source: 'client_report' });
+              entry.trace.succeed(); unitTraces.delete(id);
+            }
+          }
           if (Number.isSafeInteger(msg.underruns) && msg.underruns >= underruns) underruns = msg.underruns;
           for (const id of completedSamples.keys()) if (id <= playedUnit) completedSamples.delete(id);
         }
@@ -269,7 +309,13 @@ export function createSpeechService({ store, setHead = () => {}, createTts = con
           observe: (id, text) => { if (ledger && pausedAt == null && drainAt == null) { ledger.observe(id, text); if (phraseRequest?.sourceUnit && !ledger.valid(phraseRequest.sourceUnit)) phraseRequest.abort(); void pump(); } },
           final: segment => { ledger?.finalize(segment); if (phraseRequest?.sourceUnit && !ledger.valid(phraseRequest.sourceUnit)) phraseRequest.abort(); void pump(); },
           correct: () => finish('speech.error', '识别定稿出现冲突，播报已停止；请核对文字记录后完整回放'),
-          stop: () => finish('speech.error', '收听记录已删除') };
+          stop: () => {
+            sessionTrace?.cancel('listening_deleted');
+            for (const entry of unitTraces.values()) entry.trace.cancel('listening_deleted');
+            finish('speech.error', '收听记录已删除');
+          } };
+        sessionTrace = taskRuntime?.open('speech.session', { listening_id: consumer.listeningId, run_id: consumer.runId,
+          job_id: owner, consumer_id: owner, provider, kind: preview ? 'preview' : replay ? 'replay' : transcript?.kind || 'live' });
         consumers.add(consumer); tts = createTts(config); initialized = true;
         if (msg.paused === true) pausedAt = now();
         metric(msg.type, { afterSequence: cursor });

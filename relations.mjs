@@ -196,20 +196,23 @@ export function raceRelationAbort(operation, signal) {
 }
 
 export async function extractRelations(key, input, endpoint, { signal, fetchImpl = fetch, now = () => Date.now(),
-  onUsage = () => {}, requestTimeoutMs = RELATION_REQUEST_TIMEOUT_MS } = {}) {
+  onUsage = () => {}, requestTimeoutMs = RELATION_REQUEST_TIMEOUT_MS, context } = {}) {
   const request = buildRelationRequest(input);
   if (signal?.aborted) throw signal.reason;
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new DOMException('Relation request timed out', 'TimeoutError')), requestTimeoutMs);
   const requestSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
-  const operation = (async () => {
+  const execute = async child => {
+    child?.event('provider_started');
     const response = await fetchImpl(endpoint, { method: 'POST', headers: {
       Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(request.body),
       signal: requestSignal });
+    child?.event('response_headers', { http_status: response.status });
     let result;
     try { result = await response.json(); }
     catch (error) { if (!response.ok) result = {}; else if (error instanceof SyntaxError) invalid('HTTP_JSON_INVALID'); else throw error; }
+    child?.event('response_received', { http_status: response.status });
     const rawUsage = result?.usage;
     const values = rawUsage && typeof rawUsage === 'object' ? Object.fromEntries(
       ['prompt_tokens', 'completion_tokens', 'total_tokens', 'input_tokens', 'output_tokens']
@@ -227,9 +230,13 @@ export async function extractRelations(key, input, endpoint, { signal, fetchImpl
         retryAfterMs: Number.isFinite(delay) ? delay : 0, usage });
     }
     if (result?.choices?.[0]?.finish_reason === 'length') throw Object.assign(new Error('Relation output limit reached'), { code: 'RELATION_OUTPUT_LIMIT', usage });
-    try { return { ...request.parse(result?.choices?.[0]?.message?.content), usage }; }
+    try {
+      const validate = async () => ({ ...request.parse(result?.choices?.[0]?.message?.content), usage });
+      return context ? await context.step('relation.validate', validate) : await validate();
+    }
     catch (error) { error.usage = usage; throw error; }
-  })();
+  };
+  const operation = context ? context.step('relation.http', execute) : execute();
   try { return await raceRelationAbort(operation, requestSignal); }
   finally { clearTimeout(timer); }
 }

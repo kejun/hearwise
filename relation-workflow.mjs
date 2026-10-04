@@ -25,7 +25,8 @@ const stopped = status => ['paused', 'cancelled'].includes(status?.state) ||
 export function createRelationWorkflow({ store, endpoint, extract = extractRelations, provider,
   now = () => Date.now(), onChange = () => {}, onError = () => {}, requestTimeoutMs = RELATION_REQUEST_TIMEOUT_MS }) {
   const notify = (fn, ...args) => { try { fn(...args); } catch { /* Committed state is authoritative. */ } };
-  async function execute(job, key, signal) {
+  async function execute(job, key, signal, context) {
+    const step = (name, operation) => context ? context.step(name, operation) : operation();
     if (!job || !store.hasListening(job.listening_id) || signal?.aborted) return { kind: 'discarded' };
     const id = job.listening_id;
     const status = store.relationProcessing?.(id);
@@ -52,6 +53,7 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
     }
     const reserved = store.beginRelationRequest(job.id, { now: now(), maxRequests: RELATION_MAX_REQUESTS });
     if (!reserved) return { kind: 'discarded' };
+    context?.event('checkpoint_reserved', { request_count: reserved.request_count });
     store.setRelationWaitReason?.(id, null);
     notify(onChange, id);
     const input = reserved.input || job.input;
@@ -75,8 +77,8 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
         if (requestSignal.aborted) return Promise.reject(requestSignal.reason);
         const operation = Promise.resolve().then(() => {
           if (requestSignal.aborted) throw requestSignal.reason;
-          return extract(key, input, endpoint, { signal: requestSignal, now, requestTimeoutMs,
-            onUsage: usage => recordUsage(usage, requestSignal.aborted ? 'late_response' : 'response_received') });
+          return step('relation.extract', child => extract(key, input, endpoint, { signal: requestSignal, now, requestTimeoutMs,
+            context: child, onUsage: usage => recordUsage(usage, requestSignal.aborted ? 'late_response' : 'response_received') }));
         }).then(parsed => {
           recordUsage(parsed?.usage, requestSignal.aborted ? 'late_response' : 'response_received');
           return parsed;
@@ -91,10 +93,15 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
       requestFinished = true;
       if (!store.hasListening(id) || requestSignal.aborted) return { kind: 'discarded' };
       if (stopped(store.relationProcessing?.(id))) return { kind: 'discarded' };
-      const result = store.commitRelationJob(job.id, { relations: parsed.relations,
-        rejected: parsed.rejected || [], returnedCount: parsed.returnedCount, coverageLimited: parsed.coverageLimited === true, usage: parsed.usage || null });
+      const result = await step('relation.commit', async () => {
+        if (!store.hasListening(id) || requestSignal.aborted || stopped(store.relationProcessing?.(id))) return { stale: true };
+        return store.commitRelationJob(job.id, { relations: parsed.relations,
+          rejected: parsed.rejected || [], returnedCount: parsed.returnedCount, coverageLimited: parsed.coverageLimited === true, usage: parsed.usage || null });
+      });
       if (result?.stale) return { kind: 'discarded', reason: 'stale' };
+      context?.event('checkpoint_committed', { accepted_count: result?.accepted || 0, rejected_count: parsed.rejected?.length || 0 });
       notify(onChange, id, result);
+      context?.event('notification_sent');
       return { kind: 'terminal', outcome: result?.state === 'partial' ? 'partial' :
         result?.accepted ? 'ok' : 'empty', ...result };
     } catch (error) {
@@ -107,6 +114,7 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
       if (cooldown) provider?.coolDown?.(key, cooldown);
       store.failRelationJob(job.id, { code, retryAt, terminal: delay == null });
       if (retryAt) store.setRelationWaitReason?.(id, 'network_retry', retryAt);
+      if (retryAt) context?.event('retry_scheduled', { retry_at: retryAt });
       notify(onError, Object.assign(new Error(code), { code, status: error?.status }));
       notify(onChange, id);
       return { kind: delay == null ? 'terminal' : 'continue', outcome: delay == null ? 'failed' : undefined,

@@ -66,25 +66,30 @@ export class QwenTts {
     });
     try { await this.connecting; } finally { this.connecting = null; }
   }
-  async synthesize(text, onAudio) {
+  async synthesize(text, onAudio, context) {
     if (this.pending) throw new Error('语音任务仍在进行');
     // Retry once only if no PCM has escaped. Never replay a partly heard sentence.
     for (let attempt = 0; attempt < 2; attempt++) {
       let audio = false;
       try {
-        await this.connect();
-        const result = await new Promise((resolve, reject) => {
-          const finish = (error, value) => {
-            clearTimeout(timer); this.pending = null;
-            error ? reject(error) : resolve(value);
-          };
-          const timer = setTimeout(() => { finish(new Error('本句语音生成超时')); this.ws?.terminate(); }, 45000);
-          this.pending = { tail: Buffer.alloc(0), audio: false,
-            onAudio: pcm => { audio = true; onAudio(pcm); }, resolve: value => finish(null, value), reject: finish };
-          this.send('input_text_buffer.append', { text });
-          this.send('input_text_buffer.commit');
-        });
-        return { ...result, attempts: attempt + 1 };
+        const request = async child => {
+          if (this.ready && this.ws?.readyState === WebSocket.OPEN) child?.event('connection_reused');
+          await (child ? child.step('speech.connect', () => this.connect()) : this.connect());
+          const stream = () => new Promise((resolve, reject) => {
+            const finish = (error, value) => {
+              clearTimeout(timer); this.pending = null;
+              error ? reject(error) : resolve(value);
+            };
+            const timer = setTimeout(() => { finish(new Error('本句语音生成超时')); this.ws?.terminate(); }, 45000);
+            this.pending = { tail: Buffer.alloc(0), audio: false,
+              onAudio: pcm => { audio = true; onAudio(pcm); }, resolve: value => finish(null, value), reject: finish };
+            this.send('input_text_buffer.append', { text });
+            this.send('input_text_buffer.commit');
+          });
+          const result = await (child ? child.step('speech.stream', stream) : stream());
+          return { ...result, attempts: attempt + 1 };
+        };
+        return await (context ? context.step('speech.attempt', request, { attempt: attempt + 1 }) : request());
       } catch (error) {
         if (this.closed || audio || attempt) throw error;
         this.ready = false; this.ws?.terminate();

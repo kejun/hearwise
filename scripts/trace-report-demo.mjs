@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { traceReportFixture } from '../test-support/trace-report-fixture.mjs';
+import { fullTraceFixture } from '../test-support/full-trace-fixture.mjs';
 import { createTraceReport } from './trace-report.mjs';
 
 // A local, labelled fixture demonstration; no API key or paid model call.
@@ -12,3 +13,7 @@ await writeFile(baseline, JSON.stringify(await traceReportFixture({ recovered: f
 const output = path.join(directory, 'report.html');
 const result = await createTraceReport(input, output, baseline);
 console.log(JSON.stringify({ fixture: true, output, ...result }));
+const fullInput = path.join(directory, 'full-pipeline.log'), fullOutput = path.join(directory, 'full-pipeline.html');
+await writeFile(fullInput, await fullTraceFixture(), { mode: 0o600 });
+const fullResult = await createTraceReport(fullInput, fullOutput);
+console.log(JSON.stringify({ fixture: true, mockedProviders: true, output: fullOutput, ...fullResult }));

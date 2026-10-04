@@ -1,10 +1,10 @@
 import { safeAttributes } from "../runtime/diagnostics.js";
 import type { BuildMetadata, TraceEvent } from "../../shared/diagnostics.js";
+import { TRACE_STEPS, TRACE_EVENTS, TRACE_ERRORS } from "../../shared/diagnostics.js";
 
-const steps = new Set(["knowledge.execute", "knowledge.extract", "knowledge.repair", "knowledge.http"]);
+const steps = new Set<string>(TRACE_STEPS);
 const states = new Set(["running", "event", "succeeded", "failed", "cancelled"]);
-const eventNames = new Set(["checkpoint_reserved", "checkpoint_committed", "response_headers", "response_received",
-  "cancel_requested", "validation_completed", "continuation", "slot_released"]);
+const eventNames = new Set<string>(TRACE_EVENTS), errorCodes = new Set<string>(TRACE_ERRORS);
 const id = (value: unknown): value is string => typeof value === "string" && /^[\w:/.\-]{1,128}$/.test(value);
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 type Json = Record<string, any>;
@@ -25,7 +25,7 @@ function cleanEvent(raw: Json): TraceEvent | undefined {
     !count(raw.build.instrumentation_version)) return;
   if (raw.state === "event" && !eventNames.has(raw.event)) return;
   if (raw.duration_ms !== undefined && (typeof raw.duration_ms !== "number" || !Number.isFinite(raw.duration_ms) || raw.duration_ms < 0)) return;
-  const errorCode = typeof raw.error_code === "string" && /^(HTTP_[1-5][0-9]{2}|KNOWLEDGE_INVALID_RESPONSE|REQUEST_TIMEOUT|UNCLASSIFIED_FAILURE)$/.test(raw.error_code)
+  const errorCode = typeof raw.error_code === "string" && (/^HTTP_[1-5][0-9]{2}$/.test(raw.error_code) || errorCodes.has(raw.error_code))
     ? raw.error_code : undefined;
   return { schema_version: 1, event_id: raw.event_id, sequence: raw.sequence, process_id: raw.process_id,
     trace_id: raw.trace_id, span_id: raw.span_id, step_key: raw.step_key, timestamp_ms: raw.timestamp_ms,
@@ -137,8 +137,9 @@ export function buildTraceReport(capture: TraceCapture): TraceReport {
     span.duration = end?.duration_ms;
     span.ownState = end?.state ?? "unknown";
     if (end?.attributes.outcome === "partial" && span.ownState === "succeeded") span.ownState = "partial";
-    if (end?.attributes.outcome === "invalid" && span.ownState === "succeeded") span.ownState = "failed";
+    if (["invalid", "failed"].includes(String(end?.attributes.outcome)) && span.ownState === "succeeded") span.ownState = "failed";
     if (end?.attributes.outcome === "continue" && span.ownState === "succeeded") span.ownState = "waiting";
+    if (end?.attributes.outcome === "discarded" && span.ownState === "succeeded") span.ownState = "discarded";
     if (starts.length !== 1 || ends.length !== 1 || (end && starts[0] && end.sequence < starts[0].sequence)) span.issues.push("span_boundary_missing_or_invalid");
     if (end && span.events.at(-1) !== end) span.issues.push("event_after_span_end");
     // Build hierarchy from explicit parent IDs only. Never infer dependencies from timestamps.
