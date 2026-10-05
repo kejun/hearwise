@@ -28,8 +28,27 @@ try {
   await open();
   const card = page.locator(`.knowledge-item[data-id="${fixture.seeded.first.nodes[0].id}"]`);
   await card.locator('summary').click();
+  const editUrl = `${fixture.base}/api/listenings/${fixture.seeded.first.listeningId}/knowledge/${fixture.seeded.first.nodes[0].id}`;
+  // A real proxy/mismatched deployment can return HTML rather than the JSON API contract.
+  await page.route(editUrl, route => route.fulfill({ status: 404, contentType: 'text/html', body: '<html>private diagnostic</html>' }), { times: 1 });
+  await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
+  await page.locator('#knowledge-edit-status').filter({ hasText: '读取知识条目失败（HTTP 404）' }).waitFor();
+  assert.equal(await page.locator('#knowledge-edit-save').isDisabled(), true);
+  assert.doesNotMatch(await page.locator('#knowledge-edit-status').textContent(), /private|pattern/);
+  await page.locator('#knowledge-edit-cancel').click();
   await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
   await page.locator('#knowledge-edit-name').waitFor();
+  await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
+  await page.locator('#knowledge-edit-name').fill('Proxy failed draft');
+  const callsBeforeProxy = fixture.stats.providerRequests.length;
+  await page.route(editUrl, route => route.fulfill({ status: 504, contentType: 'text/html', body: '<html>Gateway Timeout</html>' }), { times: 1 });
+  await page.locator('#knowledge-edit-save').click();
+  await page.locator('#knowledge-edit-status').filter({ hasText: '保存知识修改失败（HTTP 504）' }).waitFor();
+  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Proxy failed draft');
+  assert.equal(await page.locator('#knowledge-edit-save').isDisabled(), true);
+  assert.equal(fixture.stats.providerRequests.length, callsBeforeProxy);
+  await page.locator('#knowledge-edit-cancel').click();
+  await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
   await page.locator('#knowledge-edit-name').fill('Discarded draft');
   await page.locator('#knowledge-edit-cancel').click();
@@ -62,11 +81,28 @@ try {
   await card.locator('summary').filter({ hasText: 'Kodak' }).waitFor();
   await page.reload(); await open();
   await card.locator('summary').filter({ hasText: 'Kodak' }).waitFor();
+  await card.locator('summary').click();
+  await card.getByRole('button', { name: '修改或删除 Kodak', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
+  await page.locator('#knowledge-edit-name').fill('Eastman Kodak');
+  const callsBeforeLostResponse = fixture.stats.providerRequests.length;
+  // The server commits, then the gateway loses the successful response. Do not retry the write.
+  await page.route(editUrl, async route => {
+    const result = await route.fetch(); assert.equal(result.status(), 200);
+    await route.fulfill({ status: 502, contentType: 'text/html', body: '<html>upstream connection lost</html>' });
+  }, { times: 1 });
+  await page.locator('#knowledge-edit-save').click();
+  await page.locator('#knowledge-edit-status').filter({ hasText: '保存结果尚未确认' }).waitFor();
+  assert.equal(await page.locator('#knowledge-edit-save').isDisabled(), true);
+  assert.equal(fixture.stats.providerRequests.length, callsBeforeLostResponse + 1);
+  await page.locator('#knowledge-edit-cancel').click();
+  await page.reload(); await open();
+  await card.locator('summary').filter({ hasText: 'Eastman Kodak' }).waitFor();
   await page.locator('#knowledge-view-graph').click();
   await page.locator(`.graph-node[data-node-id="${fixture.seeded.first.nodes[0].id}"]`).click();
   await page.locator('#graph-edit-node').click();
   await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
-  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Kodak');
+  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Eastman Kodak');
   await page.locator('#knowledge-edit-delete').click();
   await page.locator('#knowledge-delete-cancel').click();
   assert.equal(await page.locator('#knowledge-delete-confirm').isHidden(), true);
@@ -80,5 +116,6 @@ try {
   assert.equal((await graph.json()).nodes.length, fixture.seeded.first.nodes.length - 1);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ ok: true, checks: ['cancel preserves content', 'failed regeneration retains draft', 'atomic save',
+    'HTML read failure', 'HTML write failure retains draft', 'lost committed response does not repeat paid request',
     'busy Escape protection', 'desktop/390/320 layout', 'reload persistence', 'graph edit entry', 'delete confirmation', 'no resurrection', 'no page errors'] }));
 } finally { await browser?.close(); await fixture.close(); }
