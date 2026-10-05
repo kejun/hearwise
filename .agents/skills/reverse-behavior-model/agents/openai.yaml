@@ -1,4 +1,4 @@
 interface:
   display_name: "现状行为模型"
   short_description: "基于代码与执行日志还原单条业务流程，区分观测事实、冷路径与假说"
-  default_prompt: "使用 $reverse-behavior-model，基于当前代码与指定时间窗口的日志，还原一条流程的现状行为模型。"
+  default_prompt: "使用 $reverse-behavior-model，基于当前代码与指定时间窗口的日志，还原一条流程的现状行为模型；本次创建独立新报告，保留已有报告。"

@@ -267,3 +267,5 @@ PR 的 Node 24 确定性测试与 Chromium 语音 fixture 会自动运行，不�
 项目内提供 [reverse-behavior-model](.agents/skills/reverse-behavior-model/SKILL.md)。在支持项目 skills 的编码代理中，使用 `$reverse-behavior-model`，并提供一条流程的入口、关联字段、代码范围、日志路径和时间窗口。
 
 该 skill 按类图、活动图、状态图、事件时间线、聚合候选与待确认清单的顺序输出有证据的现状报告，区分实际观测、冷路径、历史或旁路及推断。缺少实例关联或日志证据时会明确留空，不把演示日志当成生产行为。它是项目内的分析工具，不修改应用运行时，也不会自动调用付费模型。
+
+每次新的分析都会创建独立报告，默认保存为 `docs/behavior-models/<flow>--<YYYYMMDDTHHmmssZ>.md`（UTC 时间）；同名时追加序号，保留旧报告。报告头部记录编号、生成时间和实际路径。只有明确要求修改某份已有报告时才更新原文件。
