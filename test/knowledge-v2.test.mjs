@@ -174,7 +174,7 @@ test('真实 v1 数据库迁移：旧记录策略为 v1，新记录为 v2', () =
       PRAGMA user_version=1;`);
     legacy.close();
     const store = new ListeningStore(filename);
-    assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 10);
+    assert.equal(store.db.prepare('PRAGMA user_version').get().user_version, 11);
     assert.equal(store.db.prepare("SELECT knowledge_policy_version FROM listenings WHERE id='legacy'").get().knowledge_policy_version, 1);
     assert.equal(store.db.prepare("SELECT short_description FROM knowledge_items WHERE id='k1'").get().short_description, '旧摘要');
     const fresh = store.createRun(null, settings, '新记录');

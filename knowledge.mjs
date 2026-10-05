@@ -315,7 +315,7 @@ export async function regenerateKnowledge(key, prepared, endpoint, context = {})
       '仅返回 JSON：{"short_description":"简短说明","dialogue_summary":"对话摘要","facts":[{"content":"原文支持的事实","segment_id":"原文ID","quote":"逐字原文引用"}]}。' +
       '最多8条事实，至少1条。每条引用必须包含纠正后的名称。名称以输入name为准。' },
     { role: 'user', content: JSON.stringify({ name: prepared.name, segments }) }
-  ], endpoint, 30000, context);
+  ], endpoint, context.manualTimeoutMs ?? 90000, context);
   const result = readModelJson(raw);
   for (const field of ['short_description', 'dialogue_summary']) {
     if (typeof result?.[field] !== 'string' || !result[field].trim() || result[field].length > 1200) throw new Error('重新生成的卡片内容无效');

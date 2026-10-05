@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { migrateRelations, relationMethods } from './relation-storage.mjs';
-import { migrateKnowledgeEdits, knowledgeEditMethods } from './knowledge-edit.mjs';
+import { migrateKnowledgeEdits, migrateKnowledgeEditJobs, knowledgeEditMethods } from './knowledge-edit.mjs';
 
 const now = () => new Date().toISOString();
 const normalized = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
@@ -27,7 +27,7 @@ export class ListeningStore {
   }
   migrate() {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 10) throw new Error(`不支持的数据库版本：${version}`);
+    if (version > 11) throw new Error(`不支持的数据库版本：${version}`);
     if (version === 0) this.tx(() => {
       this.db.exec(`
         CREATE TABLE listenings (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -115,6 +115,7 @@ export class ListeningStore {
     });
     if (version < 9) this.tx(() => migrateRelations(this));
     if (version < 10) this.tx(() => migrateKnowledgeEdits(this));
+    if (version < 11) this.tx(() => migrateKnowledgeEditJobs(this));
   }
   createRun(listeningId, settings, title) {
     return this.tx(() => {
