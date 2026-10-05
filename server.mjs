@@ -430,7 +430,8 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, error.knowledgeEdit ? error.status : error instanceof SyntaxError ? 400 : 502,
-        { error: error.knowledgeEdit ? error.message : '知识修改失败，原内容未更改，请稍后重试' });
+        { code: 'KNOWLEDGE_EDIT_FAILED', saved: false,
+          error: error.knowledgeEdit ? error.message : '知识修改失败，原内容未更改，请稍后重试' });
     } finally { if (locked) knowledgeEdits.delete(id); }
   }
   const match = /^\/api\/listenings\/([0-9a-f-]{36})(?:\/(retry|export|segments|graph))?$/.exec(url.pathname);
