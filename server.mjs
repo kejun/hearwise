@@ -343,6 +343,31 @@ function resumeProcessing(id, key) {
 }
 
 const knowledgeEdits = new Set();
+store.recoverKnowledgeEditJobs();
+function notifyKnowledgeEdit(id) {
+  try {
+    broadcast(id, { type: 'knowledge-edited', listeningId: id });
+    relationScheduler.schedule(id); publishProcessing(id); maybeReleaseKey(id);
+  } catch (error) { logModelError('knowledge-edit-notify', error); }
+}
+async function runKnowledgeEditJob(id, itemId, jobId, prepared, key) {
+  const started = Date.now();
+  try {
+    const card = await taskRuntime.run('knowledge.execute', { listening_id: id, job_id: jobId, kind: 'manual' }, context =>
+      provider.run({ key, priority: 'knowledge', signal: context.signal }, () => regenerateKnowledge(key, prepared, mtEndpoint, context)));
+    store.saveKnowledgeEdit(id, itemId, prepared, card, jobId);
+    keys.set(id, key); notifyKnowledgeEdit(id);
+    console.info('knowledge_edit', JSON.stringify({ job_id: jobId, state: 'succeeded', elapsed_ms: Date.now() - started }));
+  } catch (error) {
+    const timeout = ['TimeoutError', 'AbortError'].includes(error?.name);
+    const message = error.knowledgeEdit ? error.message : timeout ? '卡片生成超过 90 秒，原内容未更改，请稍后重试。' :
+      error?.status ? `模型服务请求失败（HTTP ${error.status}），原内容未更改，请稍后重试。` :
+        '卡片生成失败或结果未通过校验，原内容未更改，请稍后重试。';
+    store.failKnowledgeEditJob(jobId, message);
+    console.warn('knowledge_edit', JSON.stringify({ job_id: jobId, state: 'failed', elapsed_ms: Date.now() - started,
+      reason: timeout ? 'timeout' : error.knowledgeEdit ? 'conflict' : 'generation_failed', http_status: error.status || null }));
+  } finally { knowledgeEdits.delete(id); }
+}
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   if (['POST', 'PATCH', 'DELETE'].includes(req.method) && !sameOrigin(req)) return sendJson(res, 403, { error: '仅允许同源请求' });
@@ -396,14 +421,29 @@ const server = http.createServer(async (req, res) => {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     return sendJson(res, 200, store.list(page));
   }
+  const editStatusMatch = /^\/api\/listenings\/([0-9a-f-]{36})\/knowledge\/([0-9a-f-]{36})\/edits\/([0-9a-f-]{36})$/.exec(url.pathname);
+  if (editStatusMatch && req.method === 'GET') {
+    const job = store.knowledgeEditJob(...editStatusMatch.slice(1));
+    return job ? sendJson(res, 200, { job }) : sendJson(res, 404, { error: '保存任务不存在，请重新打开条目核对' });
+  }
   const knowledgeMatch = /^\/api\/listenings\/([0-9a-f-]{36})\/knowledge\/([0-9a-f-]{36})$/.exec(url.pathname);
   if (knowledgeMatch && ['GET', 'PATCH', 'DELETE'].includes(req.method)) {
     const [, id, itemId] = knowledgeMatch;
     let locked = false;
     try {
-      if (req.method === 'GET') return sendJson(res, 200, store.knowledgeEditSnapshot(id, itemId));
-      if (knowledgeEdits.has(id)) return sendJson(res, 409, { error: '正在保存知识修改，请稍后再试' });
+      if (req.method === 'GET') {
+        const snapshot = store.knowledgeEditSnapshot(id, itemId);
+        return sendJson(res, 200, { ...snapshot, editJob: store.knowledgeEditForSnapshot(id, itemId, snapshot.revision) });
+      }
       const input = await readJson(req);
+      const asynchronous = req.method === 'PATCH' && req.headers.prefer === 'respond-async';
+      const jobId = req.headers['idempotency-key'];
+      if (asynchronous) {
+        if (typeof jobId !== 'string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(jobId))
+          return sendJson(res, 400, { error: '保存任务编号无效' });
+        const existing = store.knowledgeEditJob(id, itemId, jobId, input);
+        if (existing) return sendJson(res, 202, { job: existing });
+      }
       // Body reads yield: recheck after parsing before owning the per-record lock.
       if (knowledgeEdits.has(id)) return sendJson(res, 409, { error: '正在保存知识修改，请稍后再试' });
       knowledgeEdits.add(id); locked = true;
@@ -416,17 +456,19 @@ const server = http.createServer(async (req, res) => {
         const prepared = store.prepareKnowledgeEdit(id, itemId, input);
         const key = typeof input.key === 'string' && input.key.trim() ? input.key.trim() : keys.get(id);
         if (!key) return sendJson(res, 400, { error: '请先在连接设置填写 API Key' });
+        if (asynchronous) {
+          const job = store.createKnowledgeEditJob(id, itemId, jobId, input);
+          // The job owns the lock after acceptance, independently of the HTTP connection.
+          locked = false;
+          void runKnowledgeEditJob(id, itemId, jobId, prepared, key);
+          return sendJson(res, 202, { job });
+        }
         const card = await taskRuntime.run('knowledge.execute', { listening_id: id, job_id: randomUUID(), kind: 'manual' }, context =>
-          provider.run({ key, priority: 'knowledge', signal: context.signal }, () => regenerateKnowledge(key, prepared, mtEndpoint, context)));
+          provider.run({ key, priority: 'knowledge', signal: context.signal }, () => regenerateKnowledge(key, prepared, mtEndpoint, { ...context, manualTimeoutMs: 30000 })));
         result = { item: store.saveKnowledgeEdit(id, itemId, prepared, card) };
         keys.set(id, key);
       }
-      try {
-        broadcast(id, { type: 'knowledge-edited', listeningId: id });
-        relationScheduler.schedule(id);
-        publishProcessing(id);
-        maybeReleaseKey(id);
-      } catch (error) { logModelError('knowledge-edit-notify', error); }
+      notifyKnowledgeEdit(id);
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, error.knowledgeEdit ? error.status : error instanceof SyntaxError ? 400 : 502,

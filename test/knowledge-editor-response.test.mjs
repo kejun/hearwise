@@ -50,3 +50,12 @@ test('valid editor contracts and transport failures retain their meaning', async
   const error = new DOMException('timeout', 'TimeoutError');
   await assert.rejects(readKnowledgeEditorResponse({ status: 200, text: async () => { throw error; } }), caught => caught === error);
 });
+
+test('async receipts require a consistent terminal outcome before reporting success', async () => {
+  const job = { id: '11111111-1111-4111-8111-111111111111', name: 'OpenAI', source: 'Open Eye', state: 'running', saved: null };
+  assert.deepEqual(await readKnowledgeEditorResponse(Response.json({ job }, { status: 202 }), 'PATCH'), { job });
+  for (const receipt of [{ ...job, state: 'succeeded', saved: true }, { ...job, state: 'failed', saved: false, error: '原内容未更改' }])
+    assert.deepEqual(await readKnowledgeEditorResponse(Response.json({ job: receipt }), 'JOB'), { job: receipt });
+  for (const invalid of [{ ...job, state: 'succeeded' }, { ...job, state: 'failed', saved: false }, { ...job, id: '../other' }])
+    await assert.rejects(readKnowledgeEditorResponse(Response.json({ job: invalid }), 'JOB'), error => error.outcomeUnknown === true);
+});

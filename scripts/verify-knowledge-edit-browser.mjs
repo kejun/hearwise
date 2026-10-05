@@ -7,7 +7,7 @@ import { graphFixture } from '../test-support/graph-fixture.mjs';
 const fixture = await graphFixture({ modelResponse: async body => {
   const input = JSON.parse(body.messages.at(-1).content);
   if (!input.name) return { items: [] };
-  await new Promise(resolve => setTimeout(resolve, 250));
+  await new Promise(resolve => setTimeout(resolve, input.name === 'Kodak' ? Number(process.env.KNOWLEDGE_EDIT_SLOW_MODEL_MS || 1500) : 250));
   return { short_description: '对话介绍的相机制造公司', dialogue_summary: `${input.name} 推出了相机。`,
     facts: [{ content: `${input.name} 推出了相机。`, segment_id: input.segments[0].id,
       quote: input.name === 'Fail' ? 'unverified quote' : input.segments[0].text }] };
@@ -74,10 +74,17 @@ try {
     }
   }
   await page.locator('#knowledge-edit-save').click();
-  await page.waitForFunction(() => document.querySelector('#knowledge-edit-save').disabled);
-  await page.keyboard.press('Escape');
-  assert.equal(await page.locator('#knowledge-editor').isVisible(), true);
-  await page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
+  await page.locator('#knowledge-edit-status').filter({ hasText: '正在后台重新生成' }).waitFor();
+  // Refresh while the model is still running, then resume the same persisted job.
+  const callsDuringSave = fixture.stats.providerRequests.length;
+  await page.reload(); await open();
+  await card.locator('summary').click();
+  await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
+  await page.locator('#knowledge-edit-status').filter({ hasText: '正在后台重新生成' }).waitFor();
+  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Kodak');
+  assert.equal(await page.locator('#knowledge-edit-cancel').isEnabled(), true);
+  await page.locator('#knowledge-editor').waitFor({ state: 'hidden', timeout: 45000 });
+  assert.equal(fixture.stats.providerRequests.length, callsDuringSave);
   await card.locator('summary').filter({ hasText: 'Kodak' }).waitFor();
   await page.reload(); await open();
   await card.locator('summary').filter({ hasText: 'Kodak' }).waitFor();
@@ -86,16 +93,14 @@ try {
   await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
   await page.locator('#knowledge-edit-name').fill('Eastman Kodak');
   const callsBeforeLostResponse = fixture.stats.providerRequests.length;
-  // The server commits, then the gateway loses the successful response. Do not retry the write.
+  // The server accepts, then the gateway loses the response. Recover by reading the job.
   await page.route(editUrl, async route => {
-    const result = await route.fetch(); assert.equal(result.status(), 200);
+    const result = await route.fetch(); assert.equal(result.status(), 202);
     await route.fulfill({ status: 502, contentType: 'text/html', body: '<html>upstream connection lost</html>' });
   }, { times: 1 });
   await page.locator('#knowledge-edit-save').click();
-  await page.locator('#knowledge-edit-status').filter({ hasText: '保存结果尚未确认' }).waitFor();
-  assert.equal(await page.locator('#knowledge-edit-save').isDisabled(), true);
+  await page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
   assert.equal(fixture.stats.providerRequests.length, callsBeforeLostResponse + 1);
-  await page.locator('#knowledge-edit-cancel').click();
   await page.reload(); await open();
   await card.locator('summary').filter({ hasText: 'Eastman Kodak' }).waitFor();
   await page.locator('#knowledge-view-graph').click();
@@ -117,5 +122,6 @@ try {
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ ok: true, checks: ['cancel preserves content', 'failed regeneration retains draft', 'atomic save',
     'HTML read failure', 'HTML write failure retains draft', 'lost committed response does not repeat paid request',
-    'busy Escape protection', 'desktop/390/320 layout', 'reload persistence', 'graph edit entry', 'delete confirmation', 'no resurrection', 'no page errors'] }));
+    'refresh resumes running job', 'model delay ' + (process.env.KNOWLEDGE_EDIT_SLOW_MODEL_MS || 1500) + 'ms',
+    'desktop/390/320 layout', 'reload persistence', 'graph edit entry', 'delete confirmation', 'no resurrection', 'no page errors'] }));
 } finally { await browser?.close(); await fixture.close(); }

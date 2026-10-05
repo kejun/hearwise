@@ -25,7 +25,44 @@ export function migrateKnowledgeEdits(store) {
   `);
 }
 
+export function migrateKnowledgeEditJobs(store) {
+  store.db.exec(`CREATE TABLE IF NOT EXISTS knowledge_edit_jobs (
+    id TEXT PRIMARY KEY, listening_id TEXT NOT NULL REFERENCES listenings(id) ON DELETE CASCADE,
+    item_id TEXT NOT NULL, fingerprint TEXT NOT NULL, revision TEXT NOT NULL, name TEXT NOT NULL, source TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('running','succeeded','failed')), error TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE UNIQUE INDEX IF NOT EXISTS one_running_knowledge_edit ON knowledge_edit_jobs(listening_id) WHERE state='running';
+    PRAGMA user_version=11;`);
+}
+
+const editFingerprint = input => fingerprint([input?.name, input?.source, input?.revision]);
+const publicEditJob = row => row && ({ id: row.id, state: row.state, name: row.name, source: row.source,
+  saved: row.state === 'succeeded' ? true : row.state === 'failed' ? false : null, error: row.error });
+
 export const knowledgeEditMethods = {
+  recoverKnowledgeEditJobs() {
+    this.db.prepare("UPDATE knowledge_edit_jobs SET state='failed',error=?,updated_at=? WHERE state='running'")
+      .run('服务在生成期间重启，原内容未更改，请重新保存。', new Date().toISOString());
+  },
+  knowledgeEditJob(listeningId, itemId, jobId, input) {
+    const row = this.db.prepare('SELECT * FROM knowledge_edit_jobs WHERE id=? AND listening_id=? AND item_id=?').get(jobId, listeningId, itemId);
+    if (row && input && row.fingerprint !== editFingerprint(input)) fail(409, '同一保存任务不能提交不同的修改');
+    return publicEditJob(row);
+  },
+  knowledgeEditForSnapshot(listeningId, itemId, revision) {
+    return publicEditJob(this.db.prepare(`SELECT * FROM knowledge_edit_jobs WHERE listening_id=? AND item_id=?
+      AND (state='running' OR (state='failed' AND revision=?)) ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId, revision));
+  },
+  createKnowledgeEditJob(listeningId, itemId, jobId, input) {
+    const time = new Date().toISOString();
+    this.db.prepare("INSERT INTO knowledge_edit_jobs VALUES (?,?,?,?,?,?,?,'running',NULL,?,?)")
+      .run(jobId, listeningId, itemId, editFingerprint(input), input.revision, input.name.trim(), input.source.trim(), time, time);
+    return this.knowledgeEditJob(listeningId, itemId, jobId);
+  },
+  failKnowledgeEditJob(jobId, message) {
+    this.db.prepare("UPDATE knowledge_edit_jobs SET state='failed',error=?,updated_at=? WHERE id=? AND state='running'")
+      .run(message, new Date().toISOString(), jobId);
+  },
   correctKnowledgeText(listeningId, text) {
     // One pass over original matches: replacement strings cannot trigger other rules.
     const rules = this.db.prepare('SELECT source,target FROM knowledge_corrections WHERE listening_id=? ORDER BY length(source) DESC').all(listeningId);
@@ -87,7 +124,7 @@ export const knowledgeEditMethods = {
       fail(400, '条目引用的原文中找不到这个错误词，请填写原文中的实际写法');
     return { ...snapshot, name, source, correctedSegments: segments };
   },
-  saveKnowledgeEdit(listeningId, itemId, prepared, card) {
+  saveKnowledgeEdit(listeningId, itemId, prepared, card, jobId = null) {
     return this.tx(() => {
       const current = this.prepareKnowledgeEdit(listeningId, itemId, { name: prepared.name, source: prepared.source, revision: prepared.revision });
       const time = new Date().toISOString();
@@ -133,6 +170,10 @@ export const knowledgeEditMethods = {
         this.db.prepare('UPDATE extraction_jobs SET progress_json=? WHERE id=?').run(JSON.stringify({ ...progress, contract_revision: 'v2.1', extra_requests: 0, protocol_retries: 0 }), job.id);
       }
       this.db.prepare('UPDATE listenings SET updated_at=? WHERE id=?').run(time, listeningId);
+      // Commit the receipt with the card and transcript, so restart recovery cannot report
+      // a committed edit as failed or launch the same paid generation again.
+      if (jobId && this.db.prepare("UPDATE knowledge_edit_jobs SET state='succeeded',updated_at=? WHERE id=? AND listening_id=? AND item_id=? AND state='running'")
+        .run(time, jobId, listeningId, itemId).changes !== 1) fail(409, '保存任务状态已改变，请重新打开核对');
       return this.knowledge(listeningId).find(item => item.id === itemId);
     });
   },

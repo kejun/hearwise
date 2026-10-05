@@ -6,6 +6,7 @@ import path from 'node:path';
 import { ListeningStore } from '../storage.mjs';
 import { replaceKnowledgeTerm } from '../knowledge-edit.mjs';
 import { graphFixture } from '../test-support/graph-fixture.mjs';
+import { randomUUID } from 'node:crypto';
 
 const settings = { source: 'en', targetLang: 'Chinese', audioSource: 'microphone' };
 function fixture(t) {
@@ -101,6 +102,87 @@ test('a second correction updates earlier mappings without cascading other rules
   const second = prepare(h, 'Open AI', 'OpenAI');
   h.store.saveKnowledgeEdit(h.listeningId, h.item.id, second, card(second));
   assert.equal(h.store.correctKnowledgeText(h.listeningId, 'Open Eye and OpenAI'), 'Open AI and Open AI');
+});
+
+test('durable edit receipts commit atomically, reject changed retries and recover only unfinished work', t => {
+  const h = fixture(t), prepared = prepare(h), id = randomUUID();
+  const input = { name: prepared.name, source: prepared.source, revision: prepared.revision, key: 'must-not-be-stored' };
+  h.store.createKnowledgeEditJob(h.listeningId, h.item.id, id, input);
+  assert.throws(() => h.store.knowledgeEditJob(h.listeningId, h.item.id, id, { ...input, name: 'Other' }), { status: 409 });
+  assert.doesNotMatch(JSON.stringify(h.store.db.prepare('SELECT * FROM knowledge_edit_jobs').all()), /must-not-be-stored/);
+  assert.throws(() => h.store.saveKnowledgeEdit(h.listeningId, h.item.id, prepared,
+    { ...card(prepared), facts: [{ content: 'bad', segment_id: 'missing', quote: 'bad' }] }, id));
+  assert.equal(h.store.knowledgeEditJob(h.listeningId, h.item.id, id).state, 'running');
+  h.store.saveKnowledgeEdit(h.listeningId, h.item.id, prepared, card(prepared), id);
+  const second = randomUUID();
+  const savedRevision = h.store.knowledgeEditSnapshot(h.listeningId, h.item.id).revision;
+  h.store.createKnowledgeEditJob(h.listeningId, h.item.id, second, { ...input, name: 'Open AI', revision: savedRevision });
+  h.reopen(); h.store.recoverKnowledgeEditJobs();
+  assert.equal(h.store.knowledgeEditJob(h.listeningId, h.item.id, id, input).saved, true);
+  assert.equal(h.store.knowledgeEditJob(h.listeningId, h.item.id, second).saved, false);
+  assert.match(h.store.knowledgeEditJob(h.listeningId, h.item.id, second).error, /重启/);
+  assert.equal(h.store.knowledgeEditForSnapshot(h.listeningId, h.item.id, savedRevision).id, second);
+  assert.equal(h.store.knowledgeEditForSnapshot(h.listeningId, h.item.id, 'different-revision'), undefined);
+  assert.equal(h.store.knowledge(h.listeningId)[0].canonical_name, 'OpenAI');
+});
+
+test('v10 migration adds edit jobs while preserving existing cards and transcript', t => {
+  const h = fixture(t), before = h.store.detail(h.listeningId);
+  h.store.db.exec('DROP TABLE knowledge_edit_jobs; PRAGMA user_version=10');
+  h.reopen();
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 11);
+  assert.deepEqual(h.store.detail(h.listeningId), before);
+  assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM knowledge_edit_jobs').get().n, 0);
+});
+
+test('async saves acknowledge before model completion, deduplicate retries and expose durable outcomes', async t => {
+  let release, invalid = false, generations = 0;
+  let barrier = new Promise(resolve => { release = resolve; });
+  const f = await graphFixture({ modelResponse: async body => {
+    const input = JSON.parse(body.messages.at(-1).content);
+    if (!input.name) return { items: [] };
+    generations++;
+    await barrier;
+    return { short_description: '相机公司', dialogue_summary: '推出相机。', facts: [
+      { content: '推出相机。', segment_id: input.segments[0].id, quote: invalid ? 'fabricated' : input.segments[0].text }] };
+  } });
+  t.after(() => { release(); return f.close(); });
+  const first = f.seeded.first, item = first.nodes[0], id = randomUUID();
+  const url = `${f.base}/api/listenings/${first.listeningId}/knowledge/${item.id}`;
+  const snapshot = await (await fetch(url)).json();
+  const input = { name: 'Kodak', source: 'Eastman Kodak', revision: snapshot.revision, key: 'fixture-key' };
+  const submit = (jobId = id, body = input) => fetch(url, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Prefer: 'respond-async', 'Idempotency-Key': jobId },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(3000) });
+  const responses = await Promise.all([submit(), submit()]);
+  assert.deepEqual(responses.map(r => r.status), [202, 202]);
+  const running = (await responses[0].json()).job;
+  assert.equal(running.state, 'running'); assert.equal(running.saved, null);
+  assert.equal((await (await fetch(url)).json()).editJob.id, id);
+  assert.equal((await submit(randomUUID())).status, 409);
+  assert.equal((await submit(id, { ...input, name: 'Other' })).status, 409);
+  const statusUrl = `${url}/edits/${id}`;
+  assert.equal((await (await fetch(statusUrl)).json()).job.state, 'running');
+  release();
+  async function terminal(jobId) {
+    for (let i = 0; i < 100; i++) {
+      const job = (await (await fetch(`${url}/edits/${jobId}`)).json()).job;
+      if (job.state !== 'running') return job;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.fail('job did not complete');
+  }
+  assert.equal((await terminal(id)).saved, true);
+  assert.equal((await (await submit()).json()).job.saved, true);
+  assert.equal(generations, 1);
+  assert.equal((await (await fetch(url)).json()).item.canonical_name, 'Kodak');
+  const next = await (await fetch(url)).json(), failedId = randomUUID();
+  invalid = true;
+  assert.equal((await submit(failedId, { ...input, source: 'Kodak', name: 'Bad', revision: next.revision })).status, 202);
+  const failed = await terminal(failedId);
+  assert.equal(failed.saved, false); assert.match(failed.error, /原内容未更改/);
+  assert.equal((await (await fetch(url)).json()).revision, next.revision);
+  assert.equal((await fetch(statusUrl.replace(item.id, f.seeded.second.nodes[0].id))).status, 404);
 });
 
 test('HTTP regeneration, schema/origin/key errors, model failure, deletion and export use real server', async t => {
