@@ -1,7 +1,8 @@
 import { createTaskRuntime } from './dist/server/index.js';
 import { validateInterimTranslation, TRANSLATION_TARGETS, RECOGNITION_SOURCES } from './public/translation-params.js';
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -15,11 +16,19 @@ import { createSpeechService } from './speech-service.mjs';
 import { createProviderAdmission } from './provider-admission.mjs';
 import { createRelationScheduler } from './relation-queue.mjs';
 import { createRelationWorkflow } from './relation-workflow.mjs';
+import { DataTransferError, MAX_IMPORT_BYTES, exportDatabase, inspectDatabase, restoreDatabase } from './data-transfer.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || '127.0.0.1';
-const store = new ListeningStore(process.env.LISTENING_DB || path.join(root, 'data', 'listenings.sqlite'));
+const listeningDb = process.env.LISTENING_DB || path.join(root, 'data', 'listenings.sqlite');
+const store = new ListeningStore(listeningDb);
+const dataRoot = path.dirname(listeningDb);
+const importRoot = path.join(dataRoot, '.imports');
+const exportRoot = path.join(dataRoot, '.exports');
+const backupRoot = path.join(dataRoot, 'backups');
+const pendingImports = new Map();
+const IMPORT_TTL_MS = 15 * 60 * 1000;
 const model = 'qwen-audio-3.0-asr-flash-streaming';
 const asrEndpoint = process.env.ASR_ENDPOINT || 'wss://maas.qianwenaiapi.com/api-ws/v1/inference';
 const mtEndpoint = process.env.MT_ENDPOINT || 'https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions';
@@ -116,6 +125,83 @@ async function readJson(req) {
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+function transferError(error, fallback = '数据操作失败') {
+  return {
+    status: error instanceof DataTransferError ? error.status : 500,
+    body: { code: error?.code || 'DATA_TRANSFER_FAILED', error: error?.message || fallback }
+  };
+}
+function backupStamp(date = new Date()) {
+  return date.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+}
+async function receiveDatabase(req, filename) {
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > MAX_IMPORT_BYTES) {
+    throw new DataTransferError('备份文件超过 2 GB 限制', { status: 413, code: 'IMPORT_TOO_LARGE' });
+  }
+  await mkdir(path.dirname(filename), { recursive: true });
+  const handle = await open(filename, 'wx');
+  let bytes = 0;
+  try {
+    for await (const chunk of req) {
+      bytes += chunk.length;
+      if (bytes > MAX_IMPORT_BYTES) {
+        throw new DataTransferError('备份文件超过 2 GB 限制', { status: 413, code: 'IMPORT_TOO_LARGE' });
+      }
+      await handle.write(chunk);
+    }
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await rm(filename, { force: true }).catch(() => {});
+    throw error;
+  }
+  await handle.close();
+  if (!bytes) {
+    await rm(filename, { force: true }).catch(() => {});
+    throw new DataTransferError('备份文件为空', { code: 'INVALID_SQLITE' });
+  }
+  return bytes;
+}
+function retainImport(filename, info) {
+  const token = randomUUID();
+  const timer = setTimeout(() => {
+    pendingImports.delete(token);
+    void rm(filename, { force: true });
+  }, IMPORT_TTL_MS);
+  timer.unref?.();
+  pendingImports.set(token, { filename, info, timer });
+  return token;
+}
+async function discardImport(token) {
+  const pending = pendingImports.get(token);
+  if (!pending) return;
+  pendingImports.delete(token);
+  clearTimeout(pending.timer);
+  await rm(pending.filename, { force: true }).catch(() => {});
+}
+function restoreRuntimeBusy() {
+  if (translations.length || translating || interimTranslating) return '翻译仍在处理，请稍后再导入。';
+  if (knowledgeEdits.size) return '知识修改仍在保存，请稍后再导入。';
+  if ([...keys.keys()].some(id => speech.hasConsumers(id))) return '语音播报仍在运行，请停止播报后再导入。';
+  return null;
+}
+function resetRuntimeAfterRestore(oldListeningIds) {
+  for (const id of oldListeningIds) {
+    translations.remove(id);
+    taskRuntime.cancelListening(id);
+    speech.remove(id);
+    knowledgeScheduler.remove(id);
+    relationScheduler?.remove(id);
+  }
+  for (const clients of listeners.values()) for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) client.close(1012, '数据已恢复，请刷新页面');
+  }
+  listeners.clear();
+  graphRevisions.clear();
+  const oldKeys = [...new Set(keys.values())];
+  keys.clear();
+  for (const key of oldKeys) provider.release(key);
 }
 function broadcast(listeningId, data) {
   for (const ws of listeners.get(listeningId) || []) if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
@@ -371,6 +457,75 @@ async function runKnowledgeEditJob(id, itemId, jobId, prepared, key) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   if (['POST', 'PATCH', 'DELETE'].includes(req.method) && !sameOrigin(req)) return sendJson(res, 403, { error: '仅允许同源请求' });
+
+  if (req.method === 'GET' && url.pathname === '/api/data/export') {
+    const temporary = path.join(exportRoot, `hearwise-export-${randomUUID()}.sqlite`);
+    try {
+      await mkdir(exportRoot, { recursive: true });
+      exportDatabase(store, temporary);
+      const metadata = await stat(temporary);
+      const filename = `hearwise-backup-${backupStamp()}.sqlite`;
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.sqlite3',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': metadata.size,
+        'Cache-Control': 'no-store'
+      });
+      const stream = createReadStream(temporary);
+      const cleanup = () => { void rm(temporary, { force: true }); };
+      stream.once('error', error => { cleanup(); if (!res.destroyed) res.destroy(error); });
+      res.once('close', cleanup);
+      stream.pipe(res);
+      return;
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {});
+      const failure = transferError(error, '生成数据库备份失败');
+      return sendJson(res, failure.status, failure.body);
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/data/import/validate') {
+    const temporary = path.join(importRoot, `hearwise-import-${randomUUID()}.sqlite`);
+    try {
+      await receiveDatabase(req, temporary);
+      const info = inspectDatabase(temporary);
+      const token = retainImport(temporary, info);
+      return sendJson(res, 200, { ...info, token });
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {});
+      const failure = transferError(error, '无法验证备份文件');
+      return sendJson(res, failure.status, failure.body);
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/data/import/commit') {
+    let input;
+    try { input = await readJson(req); }
+    catch { return sendJson(res, 400, { code: 'INVALID_IMPORT_REQUEST', error: '导入请求格式无效' }); }
+    const token = typeof input?.token === 'string' ? input.token : '';
+    const pending = pendingImports.get(token);
+    if (!pending) return sendJson(res, 410, { code: 'IMPORT_EXPIRED', error: '导入文件已过期，请重新选择备份文件' });
+    const busy = restoreRuntimeBusy();
+    if (busy) return sendJson(res, 409, { code: 'RESTORE_BUSY', error: busy });
+
+    const oldListeningIds = store.db.prepare('SELECT id FROM listenings').all().map(row => row.id);
+    const backup = path.join(backupRoot, `before-import-${backupStamp()}-${randomUUID().slice(0, 8)}.sqlite`);
+    try {
+      const result = restoreDatabase(store, pending.filename, backup);
+      resetRuntimeAfterRestore(oldListeningIds);
+      await discardImport(token);
+      return sendJson(res, 200, {
+        ok: true,
+        databaseVersion: result.databaseVersion,
+        listeningCount: result.listeningCount,
+        safetyBackup: path.basename(backup)
+      });
+    } catch (error) {
+      const failure = transferError(error, '导入数据失败，当前数据未被替换');
+      return sendJson(res, failure.status, failure.body);
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/test-connection') {
     try {
       const { key } = await readJson(req);
