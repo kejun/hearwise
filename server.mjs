@@ -1,7 +1,7 @@
 import { createTaskRuntime } from './dist/server/index.js';
 import { validateInterimTranslation, TRANSLATION_TARGETS, RECOGNITION_SOURCES } from './public/translation-params.js';
 import http from 'node:http';
-import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -29,6 +29,14 @@ const exportRoot = path.join(dataRoot, '.exports');
 const backupRoot = path.join(dataRoot, 'backups');
 const pendingImports = new Map();
 const IMPORT_TTL_MS = 15 * 60 * 1000;
+
+async function cleanTransferDirectory(directory) {
+  await mkdir(directory, { recursive: true });
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isFile()) await rm(path.join(directory, entry.name), { force: true });
+  }
+}
+await Promise.all([cleanTransferDirectory(importRoot), cleanTransferDirectory(exportRoot)]);
 const model = 'qwen-audio-3.0-asr-flash-streaming';
 const asrEndpoint = process.env.ASR_ENDPOINT || 'wss://maas.qianwenaiapi.com/api-ws/v1/inference';
 const mtEndpoint = process.env.MT_ENDPOINT || 'https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions';
@@ -192,6 +200,11 @@ function restoreRuntimeBusy() {
   return null;
 }
 function resetRuntimeAfterRestore(oldListeningIds) {
+  // Revoke authorization first: scheduler remove() may repump, and no restored
+  // background work may inherit a pre-restore API key or trigger model usage.
+  const oldKeys = [...new Set(keys.values())];
+  keys.clear();
+  for (const key of oldKeys) provider.release(key);
   for (const id of oldListeningIds) {
     translations.remove(id);
     taskRuntime.cancelListening(id);
@@ -204,9 +217,6 @@ function resetRuntimeAfterRestore(oldListeningIds) {
   }
   listeners.clear();
   graphRevisions.clear();
-  const oldKeys = [...new Set(keys.values())];
-  keys.clear();
-  for (const key of oldKeys) provider.release(key);
 }
 
 function broadcast(listeningId, data) {
