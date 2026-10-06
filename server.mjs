@@ -149,7 +149,12 @@ async function receiveDatabase(req, filename) {
       if (bytes > MAX_IMPORT_BYTES) {
         throw new DataTransferError('备份文件超过 2 GB 限制', { status: 413, code: 'IMPORT_TOO_LARGE' });
       }
-      await handle.write(chunk);
+      let offset = 0;
+      while (offset < chunk.length) {
+        const { bytesWritten } = await handle.write(chunk, offset);
+        if (!bytesWritten) throw new Error('无法写入导入文件');
+        offset += bytesWritten;
+      }
     }
   } catch (error) {
     await handle.close().catch(() => {});
@@ -473,7 +478,7 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-store'
       });
       const stream = createReadStream(temporary);
-      const cleanup = () => { void rm(temporary, { force: true }); };
+      const cleanup = () => { void rm(temporary, { force: true }).catch(() => {}); };
       stream.once('error', error => { cleanup(); if (!res.destroyed) res.destroy(error); });
       res.once('close', cleanup);
       stream.pipe(res);
