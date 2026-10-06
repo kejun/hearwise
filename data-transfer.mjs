@@ -102,6 +102,7 @@ function migrateImportedDatabase(filename) {
   // same restart recovery semantics as a normal Hearwise launch.
   const imported = new ListeningStore(filename);
   try {
+    imported.recoverKnowledgeEditJobs();
     imported.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   } finally {
     imported.close();
