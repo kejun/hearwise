@@ -299,3 +299,19 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 #knowledge-delete-confirm { margin-top: 16px; border-top: 1px solid #ddd; }
 #knowledge-edit-delete, #knowledge-delete-submit { color: #a22; }
 .knowledge-edit-button { margin-top: 12px; }
+
+/* Settings: full Hearwise data backup and restore */
+.tab-bar{overflow-x:auto;scrollbar-width:none}
+.tab-bar::-webkit-scrollbar{display:none}
+.tab-bar>.tab-button{flex:none}
+.data-transfer-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:22px 0 8px}
+.data-transfer-actions .test-button{margin:0}
+.data-import-review{margin-top:18px;padding:16px;border:1px solid #d9e1d8;border-radius:11px;background:#f7faf6;font-size:13px;line-height:1.6;color:#52675a}
+.data-import-review p{margin:0 0 9px}
+.data-import-review .form-note{margin:8px 0 14px}
+.data-danger{width:100%;border:1px solid #d7a69d;border-radius:9px;background:#fff2ef;color:#973d31;font-weight:650;padding:13px;cursor:pointer}
+.data-danger:hover{background:#ffe7e2}
+.data-danger:disabled{opacity:.6;cursor:not-allowed}
+.data-transfer-status{min-height:20px;margin:14px 0 0;color:#315f4d;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.data-transfer-status.error{color:#a34335}
+@media(max-width:700px){.data-transfer-actions{grid-template-columns:1fr}}

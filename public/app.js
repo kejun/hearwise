@@ -33,7 +33,10 @@ const els = {
   retryProcessing: $('retry-processing'), knowledgeList: $('knowledge-list'), knowledgeCount: $('knowledge-count'),
   transcriptList: $('transcript-list'), runsPanel: $('runs-panel'), runsList: $('runs-list'), loadMore: $('load-more'), downloadSelect: $('download-select'),
   knowledgeToggleAll: $('knowledge-toggle-all'), knowledgeTrack: $('knowledge-track'), backToTop: $('back-to-top'),
-  sizeSlider: $('translation-size'), captionMode: $('caption-mode')
+  sizeSlider: $('translation-size'), captionMode: $('caption-mode'),
+  dataExport: $('data-export'), dataImport: $('data-import'), dataImportFile: $('data-import-file'),
+  dataImportReview: $('data-import-review'), dataImportSummary: $('data-import-summary'),
+  dataImportConfirm: $('data-import-confirm'), dataTransferStatus: $('data-transfer-status')
 };
 
 initTranscriptVisibility(document);
@@ -89,6 +92,7 @@ let finalCaptionCorrected = false;
 let lastTranslationAt = 0;
 let startAfterSave = false;
 let testController;
+let pendingImportToken = null;
 let listeningId = null;
 let listeningGeneration = 0;
 let detail = null;
@@ -511,7 +515,8 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape' && !e
 const settingsTabs = [
   { button: $('tab-connection-button'), panel: $('tab-connection') },
   { button: $('tab-language-button'), panel: $('tab-language') },
-  { button: $('tab-speech-button'), panel: $('tab-speech') }
+  { button: $('tab-speech-button'), panel: $('tab-speech') },
+  { button: $('tab-data-button'), panel: $('tab-data') }
 ];
 function activateTab(index, focusButton = false) {
   settingsTabs.forEach((tab, i) => {
@@ -533,6 +538,95 @@ settingsTabs.forEach((tab, index) => {
   });
 });
 activateTab(0);
+
+function setDataTransferStatus(message, failed = false) {
+  els.dataTransferStatus.textContent = message;
+  els.dataTransferStatus.classList.toggle('error', failed);
+}
+function resetImportReview() {
+  pendingImportToken = null;
+  els.dataImportReview.hidden = true;
+  els.dataImportSummary.textContent = '';
+}
+els.dataExport.addEventListener('click', () => {
+  setDataTransferStatus('正在生成备份…');
+  els.dataExport.disabled = true;
+  try {
+    const link = document.createElement('a');
+    link.href = `/api/data/export?download=${Date.now()}`;
+    link.download = '';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setDataTransferStatus('备份已开始下载。');
+  } finally {
+    els.dataExport.disabled = false;
+  }
+});
+els.dataImport.addEventListener('click', () => {
+  if (phase !== 'idle') {
+    setDataTransferStatus('当前正在收听，请结束当前收听后再导入数据。', true);
+    return;
+  }
+  els.dataImportFile.click();
+});
+els.dataImportFile.addEventListener('change', async () => {
+  const file = els.dataImportFile.files?.[0];
+  if (!file) return;
+  resetImportReview();
+  setDataTransferStatus('正在验证备份…');
+  els.dataImport.disabled = true;
+  try {
+    const response = await fetch('/api/data/import/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/vnd.sqlite3' },
+      body: file
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '备份验证失败');
+    pendingImportToken = result.token;
+    els.dataImportSummary.textContent = `数据库版本：${result.databaseVersion} · 历史收听：${result.listeningCount} 条`;
+    els.dataImportReview.hidden = false;
+    setDataTransferStatus('备份验证通过。');
+  } catch (error) {
+    setDataTransferStatus(error.message || '备份验证失败，请重新选择文件。', true);
+  } finally {
+    els.dataImport.disabled = false;
+    els.dataImportFile.value = '';
+  }
+});
+els.dataImportConfirm.addEventListener('click', async () => {
+  if (!pendingImportToken) return;
+  if (phase !== 'idle') {
+    setDataTransferStatus('当前正在收听，请结束当前收听后再导入数据。', true);
+    return;
+  }
+  const confirmed = window.confirm('导入 Hearwise 数据？\n\n当前历史收听、知识条目和知识图谱将被备份文件完整替换，不会自动合并。\n\nHearwise 会先自动备份当前数据库。');
+  if (!confirmed) return;
+  els.dataImportConfirm.disabled = true;
+  els.dataImport.disabled = true;
+  els.dataExport.disabled = true;
+  setDataTransferStatus('正在导入并校验数据…');
+  try {
+    const response = await fetch('/api/data/import/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: pendingImportToken })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '导入失败');
+    pendingImportToken = null;
+    els.dataImportReview.hidden = true;
+    setDataTransferStatus(`数据导入成功，当前数据已自动备份为 ${result.safetyBackup}。正在刷新…`);
+    setTimeout(() => window.location.reload(), 500);
+  } catch (error) {
+    setDataTransferStatus(error.message || '导入失败，当前数据未被替换。', true);
+    els.dataImportConfirm.disabled = false;
+    els.dataImport.disabled = false;
+    els.dataExport.disabled = false;
+  }
+});
+
 els.showKey.addEventListener('click', () => {
   const shown = els.apiKey.type === 'text';
   els.apiKey.type = shown ? 'password' : 'text';

@@ -139,6 +139,7 @@
         <button class="tab-button active" id="tab-connection-button" type="button" role="tab" aria-selected="true" aria-controls="tab-connection">连接设置</button>
         <button class="tab-button" id="tab-language-button" type="button" role="tab" aria-selected="false" aria-controls="tab-language">语言设置</button>
         <button class="tab-button" id="tab-speech-button" type="button" role="tab" aria-selected="false" aria-controls="tab-speech">语音播报</button>
+        <button class="tab-button" id="tab-data-button" type="button" role="tab" aria-selected="false" aria-controls="tab-data">数据</button>
       </div>
       <section class="tab-panel" id="tab-connection" role="tabpanel" aria-labelledby="tab-connection-button">
       <p class="modal-copy">首次使用请填写千问AI平台的通用 API Key。信息只保存在当前浏览器中，不会写入项目文件。</p>
@@ -210,6 +211,22 @@
           <p class="form-note" id="speech-result" role="status" aria-live="polite">试听会朗读一段固定的中文短句。</p>
           <button class="save-button" type="submit">保存播报设置</button>
         </form>
+      </section>
+      <section class="tab-panel" id="tab-data" role="tabpanel" aria-labelledby="tab-data-button" hidden>
+        <p class="modal-copy">备份和恢复 Hearwise 的历史收听、原文、译文、知识条目和知识图谱等数据。</p>
+        <div class="data-transfer-actions">
+          <button class="test-button" id="data-export" type="button">导出全部数据</button>
+          <button class="test-button" id="data-import" type="button">导入数据</button>
+          <input id="data-import-file" type="file" accept=".sqlite,application/vnd.sqlite3" hidden />
+        </div>
+        <p class="form-note">API Key、Fish Audio Key、浏览器偏好和音频不会包含在备份中。</p>
+        <div class="data-import-review" id="data-import-review" hidden>
+          <p class="test-summary">备份有效</p>
+          <p id="data-import-summary"></p>
+          <p class="form-note">导入后，当前历史收听、知识条目和知识图谱会被备份文件完整替换，不会自动合并。Hearwise 会先自动备份当前数据库。</p>
+          <button class="data-danger" id="data-import-confirm" type="button">导入并替换</button>
+        </div>
+        <p class="data-transfer-status" id="data-transfer-status" role="status" aria-live="polite"></p>
       </section>
     </div>
   </div>
