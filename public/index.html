@@ -112,6 +112,11 @@
               <button class="speech-link" id="transcript-speech-pause" type="button" hidden>暂停播报</button>
               <button class="speech-link" id="transcript-speech-stop" type="button" hidden>停止全文播报</button>
             </div>
+            <div class="transcript-speech-progress" id="transcript-speech-progress" hidden>
+              <div class="transcript-speech-progress-label"><label for="transcript-speech-seek">播报进度 · 按句跳转</label><output id="transcript-speech-position" for="transcript-speech-seek"></output></div>
+              <input id="transcript-speech-seek" type="range" min="1" max="1" step="1" value="1" aria-describedby="transcript-speech-seek-hint" disabled>
+              <p id="transcript-speech-seek-hint">拖动后从所选句开头播报；跳转会重新生成语音。</p>
+            </div>
             <p id="transcript-speech-status" role="status" aria-live="polite">从第一句开始，按顺序播报本条记录的全部内容，包含尚未加载的句子。</p>
             <p class="speech-reading" id="transcript-speech-reading" hidden></p>
           </div>

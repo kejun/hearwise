@@ -429,3 +429,78 @@ test('首次等待说明不被缓冲统计覆盖；全文原文允许非中文�
   c.setContext({ phase: 'idle', target: 'English', runId: 'other', listeningId: 'other' });
   assert.equal(players[1].closed, true); assert.equal(c.enabled, false);
 });
+
+for (const kind of ['original', 'translation']) for (const provider of ['qwen', 'fish']) test(`${provider} ${kind} 全文跳转按记录顺序定位，跨分页/片段且不依赖连续序号`, async t => {
+  const f = fixture(t);
+  const expected = [];
+  for (let i = 1; i <= 55; i++) {
+    f.add(`译文${i}。`, `Source ${i}.`);
+    expected.push(kind === 'original' ? `Source ${i}.` : `译文${i}。`);
+  }
+  f.store.db.prepare('UPDATE segments SET sequence_no=sequence_no+100 WHERE listening_id=?').run(f.run.listeningId);
+  f.store.finishRun(f.run.runId);
+  const second = f.store.createRun(f.run.listeningId, { source: 'en', targetLang: 'Chinese', audioSource: 'tab' }, 'next');
+  const row = f.store.addSegment(f.run.listeningId, second.runId, { id: 1, text: 'Last source.' }).segment;
+  f.store.setTranslation(row.id, '最后一句。', false); f.store.finishRun(second.runId);
+  expected.push(kind === 'original' ? 'Last source.' : '最后一句。');
+  const input = provider === 'qwen' ? config : { provider: 'fish', key: 'fake-key', referenceId: 'voice', model: 's2.1-pro-free', rate: 1, latency: 'balanced' };
+  f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind, config: input, startPosition: 55, paused: true });
+  await flush();
+  assert.deepEqual(f.spoken, [], 'paused seeking must not generate paid audio');
+  assert.equal(f.client.events.find(e => e.type === 'speech.ready').position, 55);
+  f.client.message({ type: 'speech.resume', epoch: 7 }); await flush();
+  while (f.client.readyState === 1) { f.ack(); await flush(); }
+  assert.deepEqual(f.spoken, expected.slice(54));
+  assert.deepEqual(f.client.events.filter(e => e.type === 'speech.unit').map(e => e.position), [55, 56]);
+  assert.equal(f.client.events.at(-1).type, 'speech.finished');
+});
+
+test('全文跳转拒绝越界或非整数位置，且不创建上游语音连接', async t => {
+  for (const startPosition of [-1, 0, 2, 1.5, '1', null, {}, Number.MAX_SAFE_INTEGER]) {
+    let connections = 0;
+    const f = fixture(t, { createTts: () => { connections++; throw new Error('should not connect'); } });
+    f.add('一句。'); f.store.finishRun(f.run.runId);
+    f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'translation', config, startPosition });
+    assert.match(f.client.events.at(-1).message, /位置无效/);
+    assert.equal(connections, 0);
+  }
+});
+
+test('全文跳转清空旧音频、丢弃迟到事件，保留暂停/音量/语种，按实际播放更新进度', async () => {
+  const sockets = [], players = [], states = [];
+  const c = createSpeechController({ onChange: state => states.push(state), createPlayer: callback => {
+    const p = { callback, closed: false, async unlock(volume) { this.level = volume; }, close() { this.closed = true; },
+      begin() {}, pause() { this.paused = true; }, async resume() { this.paused = false; return true; }, volume(value) { this.level = value; }, audio() { throw new Error('stale audio reached player'); } };
+    players.push(p); return p;
+  }, createSocket: () => {
+    const s = new EventTarget(); s.readyState = 1; s.sent = [];
+    s.send = data => s.sent.push(JSON.parse(data)); s.close = () => { s.readyState = 3; }; sockets.push(s); return s;
+  } });
+  const event = (socket, data) => socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ epoch: socket.sent[0].epoch, ...data }) }));
+  const ready = (position = 1) => {
+    const s = sockets.at(-1); s.dispatchEvent(new Event('open')); event(s, { type: 'speech.ready', total: 60, position }); return s;
+  };
+  c.setContext({ phase: 'idle', target: 'English', listeningId: 'record' });
+  await c.start(config, { transcript: 'original' }); const old = ready();
+  event(old, { type: 'speech.unit', unit: 1, position: 1, text: 'First.' });
+  event(old, { type: 'speech.unit', unit: 2, position: 2, text: 'Prefetched.' });
+  assert.equal(states.at(-1).position, 1, 'prefetch does not advance the slider');
+  players[0].callback({ type: 'started', unit: 2 }); assert.equal(states.at(-1).position, 2);
+  c.volume(.35); c.pause(); await c.seek(55); const next = ready(55);
+  assert.equal(players[0].closed, true); assert.equal(old.readyState, 3);
+  assert.equal(players[1].level, .35); assert.equal(players[1].paused, true);
+  assert.equal(next.sent[0].startPosition, 55); assert.equal(next.sent[0].kind, 'original'); assert.equal(next.sent[0].paused, true);
+  const count = states.length;
+  event(old, { type: 'speech.error', message: 'stale' });
+  old.dispatchEvent(new MessageEvent('message', { data: new ArrayBuffer(16) }));
+  players[0].callback({ type: 'started', unit: 1 }); old.dispatchEvent(new Event('close'));
+  assert.equal(states.length, count);
+  await c.resume(); assert.equal(c.paused, false);
+  await c.seek(1); ready(1); assert.equal(sockets.at(-1).sent[0].paused, false);
+  await c.seek(60); ready(60); assert.equal(states.at(-1).position, 60);
+  const connections = sockets.length;
+  for (const value of [0, 61, 2.5, NaN]) await c.seek(value);
+  assert.equal(sockets.length, connections);
+  c.stop(); await c.seek(1); assert.equal(sockets.length, connections);
+  assert.equal(c.enabled, false); assert.equal(players.at(-1).closed, true);
+});

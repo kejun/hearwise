@@ -240,6 +240,11 @@ export class ListeningStore {
       COALESCE((SELECT MAX(sequence_no) FROM segments WHERE listening_id=l.id),0) AS maxSequence
       FROM listenings l WHERE l.id=?`).get(listeningId) || null;
   }
+  speechTranscriptCursor(listeningId, position, throughSequence) {
+    if (position === 1) return 0;
+    return this.db.prepare(`SELECT sequence_no FROM segments WHERE listening_id=? AND sequence_no<=?
+      ORDER BY sequence_no LIMIT 1 OFFSET ?`).get(listeningId, throughSequence, position - 2)?.sequence_no ?? null;
+  }
   speechTranscriptNext(listeningId, afterSequence, throughSequence) {
     return this.db.prepare(`SELECT * FROM segments WHERE listening_id=? AND sequence_no>? AND sequence_no<=?
       ORDER BY sequence_no LIMIT 1`).get(listeningId, afterSequence, throughSequence) || null;
