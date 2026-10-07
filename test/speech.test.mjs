@@ -125,7 +125,8 @@ test('全文原文跨片段和分页顺序读取，忽略翻译状态，播放�
   f.client.message({ type: 'speech.transcript', epoch: 7, listeningId: f.run.listeningId, kind: 'original', config });
   await flush();
   assert.equal(f.client.events.find(e => e.type === 'speech.ready').total, 56);
-  while (f.client.readyState === 1) { time += 1000; f.ack(); await flush(); }
+  for (let steps = 0; f.client.readyState === 1 && steps < 200; steps++) { time += 1000; f.ack(); await flush(); }
+  assert.equal(f.client.readyState, 3, 'transcript did not finish within 200 playback acknowledgements');
   assert.ok(time > 20000);
   assert.deepEqual(f.spoken, expected);
   assert.equal(f.client.events.at(-1).message, '原文全文播报完成');
@@ -449,7 +450,8 @@ for (const kind of ['original', 'translation']) for (const provider of ['qwen', 
   assert.deepEqual(f.spoken, [], 'paused seeking must not generate paid audio');
   assert.equal(f.client.events.find(e => e.type === 'speech.ready').position, 55);
   f.client.message({ type: 'speech.resume', epoch: 7 }); await flush();
-  while (f.client.readyState === 1) { f.ack(); await flush(); }
+  for (let steps = 0; f.client.readyState === 1 && steps < 200; steps++) { f.ack(); await flush(); }
+  assert.equal(f.client.readyState, 3, 'seek playback did not finish within 200 acknowledgements');
   assert.deepEqual(f.spoken, expected.slice(54));
   assert.deepEqual(f.client.events.filter(e => e.type === 'speech.unit').map(e => e.position), [55, 56]);
   assert.equal(f.client.events.at(-1).type, 'speech.finished');
