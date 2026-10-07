@@ -22,7 +22,8 @@ test('临时与最终翻译共用两槽，临时请求结束后立即唤醒等�
   const interim = s.post(valid); await waitFor(() => s.held.length === 1);
   s.sentence('Final one.', true, 'one'); s.sentence('Final two.', true, 'two');
   await waitFor(() => s.events.filter(e => e.type === 'segment-final').length === 2);
-  await new Promise(resolve => setTimeout(resolve, 30));
+  // Segment persistence precedes upstream dispatch; wait for admission, not wall-clock luck.
+  await waitFor(() => s.held.length >= 2);
   assert.equal(s.held.length, 2);
   s.release(); await interim;
   await waitFor(() => s.events.filter(e => e.type === 'translation-updated').length === 2);

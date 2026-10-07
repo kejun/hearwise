@@ -1,3 +1,4 @@
+import { closeServer, stopChild, deadline } from './lifecycle.mjs';
 // Local deterministic ASR/MT/TTS fixture. No external services or real credentials.
 import http from 'node:http';
 import { ListeningStore } from '../storage.mjs';
@@ -96,21 +97,33 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
     env: { ...process.env, HEARWISE_INCREMENTAL_SPEECH: legacyIncrementalEnv ? '1' : '0', PORT: '0', LISTENING_DB: filename,
       ASR_ENDPOINT: `ws://127.0.0.1:${asr.address().port}`, MT_ENDPOINT: `http://127.0.0.1:${mt.address().port}`,
       TTS_ENDPOINT: `ws://127.0.0.1:${tts.address().port}`, FISH_TTS_ENDPOINT: `http://127.0.0.1:${fish.address().port}/v1/tts`, EXTRACTION_WAIT_MS: '15000', ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let logs = ''; child.stderr.on('data', data => { logs += data; });
-  const base = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Fixture startup timeout: ' + logs)), 10000);
-    child.stdout.on('data', data => { logs += data; const url = String(data).match(/http:\/\/127\.0\.0\.1:\d+/)?.[0]; if (url) { clearTimeout(timeout); resolve(url); } });
-    child.once('error', reject);
-  });
-  return { base, stats, final, seeded, logs: () => logs,
-    async close() {
-      const exited = once(child, 'exit'); child.kill(); await exited;
-      for (const server of [asr, tts]) { for (const ws of server.clients) ws.terminate(); await new Promise(resolve => server.close(resolve)); }
-      mt.closeAllConnections(); await new Promise(resolve => mt.close(resolve));
-      fish.closeAllConnections(); await new Promise(resolve => fish.close(resolve));
+  let logs = '', closing;
+  const record = data => { logs = (logs + data).slice(-1000000); };
+  child.stderr.on('data', record); child.stdout.on('data', record);
+  function close() {
+    return closing ??= (async () => {
+      const results = await Promise.allSettled([stopChild(child), closeServer(asr, 'ASR'), closeServer(tts, 'TTS'),
+        closeServer(mt, 'model HTTP'), closeServer(fish, 'Fish HTTP')]);
       await rm(directory, { recursive: true, force: true });
-    }
-  };
+      const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+      if (errors.length) throw new AggregateError(errors, 'Fixture cleanup failed: ' + logs.slice(-2000));
+    })();
+  }
+  let onData, onError, onExit, base;
+  try {
+    base = await deadline(() => new Promise((resolve, reject) => {
+      onData = data => { const url = String(data).match(/http:\/\/127\.0\.0\.1:\d+/)?.[0]; if (url) resolve(url); };
+      onError = reject;
+      onExit = (code, signal) => reject(new Error(`Fixture exited before startup: code=${code} signal=${signal}`));
+      child.stdout.on('data', onData); child.once('error', onError); child.once('exit', onExit);
+    }), 10000, 'Fixture startup');
+  } catch (error) {
+    try { await close(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Fixture startup/cleanup failed'); }
+    throw new Error(error.message + ': ' + logs.slice(-4000), { cause: error });
+  } finally {
+    child.stdout.removeListener('data', onData); child.removeListener('error', onError); child.removeListener('exit', onExit);
+  }
+  return { base, stats, final, seeded, logs: () => logs, close };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const f = await speechFixture({ autoSentences: true, audioSamples: 24000 });
