@@ -51,12 +51,14 @@ jobs:
         run: |
           mkdir -p browser-evidence
           node scripts/verify-speech-browser.mjs | tee browser-evidence/result.json
+          node scripts/verify-speech-seek-browser.mjs | tee browser-evidence/speech-seek-result.json
           node scripts/verify-graph-browser.mjs | tee browser-evidence/graph-result.json
           node scripts/verify-relation-progress-browser.mjs | tee browser-evidence/relation-progress-result.json
           node scripts/verify-trace-browser.mjs | tee browser-evidence/trace-result.json
           node scripts/verify-transcript-browser.mjs | tee browser-evidence/transcript-result.json
           node scripts/verify-knowledge-edit-browser.mjs | tee browser-evidence/knowledge-edit-result.json
         env:
+          SPEECH_SEEK_EVIDENCE_DIR: browser-evidence
           GRAPH_EVIDENCE_DIR: browser-evidence
           TRACE_EVIDENCE_DIR: browser-evidence
           TRANSCRIPT_EVIDENCE_DIR: browser-evidence

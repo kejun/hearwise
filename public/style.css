@@ -315,3 +315,18 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .data-transfer-status{min-height:20px;margin:14px 0 0;color:#315f4d;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 .data-transfer-status.error{color:#a34335}
 @media(max-width:700px){.data-transfer-actions{grid-template-columns:1fr}}
+
+.transcript-speech-progress { margin-top: 12px; }
+.transcript-speech-progress-label { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; color: #526057; font-size: 12px; }
+.transcript-speech-progress output { font-variant-numeric: tabular-nums; }
+#transcript-speech-seek { display: block; box-sizing: border-box; width: 100%; min-height: 44px; margin: 0; accent-color: var(--speech-accent); cursor: pointer; }
+#transcript-speech-seek:disabled { cursor: default; }
+#transcript-speech-seek-hint { margin: 0; color: #69776d; font-size: 12px; line-height: 1.6; }
+.knowledge-editor-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -10px -10px 12px 0; }
+.knowledge-editor-header h2 { margin: 0; }
+#knowledge-edit-close { display: inline-flex; flex: 0 0 44px; align-items: center; justify-content: center; width: 44px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #666; }
+#knowledge-edit-close:hover:not(:disabled) { background: #f1f3ef; color: #222; }
+#knowledge-edit-delete { border: 1px solid transparent; border-radius: 8px; background: transparent; margin-left: auto; font: inherit; }
+#knowledge-edit-delete:hover:not(:disabled) { background: #fff0f0; }
+#knowledge-edit-delete:active:not(:disabled) { background: #ffe2e2; }
+#knowledge-edit-close:focus-visible, #knowledge-edit-delete:focus-visible, #transcript-speech-seek:focus-visible { outline: 2px solid var(--speech-accent); outline-offset: 3px; }

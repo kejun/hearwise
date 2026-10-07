@@ -180,11 +180,25 @@ let provisionalFor = null; // { sentenceId }：当前句已显示临时译文，
 const speechEls = Object.fromEntries(['toggle', 'pause', 'preview-pause', 'status', 'reading', 'jump', 'replay', 'backlog', 'settings', 'volume', 'provider', 'region', 'voice', 'rate', 'prompt', 'incremental', 'form', 'preview', 'result']
   .map(name => [name, $(`speech-${name}`)]));
 const fishEls = Object.fromEntries(['key', 'model', 'voice', 'rate', 'latency', 'style'].map(name => [name, $(`speech-fish-${name}`)]));
-const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translation', 'stop', 'pause', 'status', 'reading']
+const transcriptSpeech = Object.fromEntries(['controls', 'original', 'translation', 'stop', 'pause', 'status', 'reading', 'progress', 'seek', 'position']
   .map(name => [name, $(`transcript-speech-${name}`)]));
+let transcriptSeeking = false, transcriptProgressState = null;
+function renderTranscriptProgress() {
+  const state = transcriptProgressState;
+  const active = state?.enabled && state.mode === 'transcript' && state.total > 0;
+  transcriptSpeech.progress.hidden = !active;
+  transcriptSpeech.seek.disabled = !active || state.total < 2;
+  if (!active) { transcriptSeeking = false; return; }
+  transcriptSpeech.seek.max = state.total;
+  if (!transcriptSeeking) transcriptSpeech.seek.value = state.position;
+  const position = Number(transcriptSpeech.seek.value);
+  transcriptSpeech.position.textContent = `第 ${position} / ${state.total} 句`;
+  transcriptSpeech.seek.setAttribute('aria-valuetext', `第 ${position} 句，共 ${state.total} 句`);
+}
 let speechPreview = false;
 let speechCanJump = false;
 const speech = createSpeechController({ onChange(state) {
+  transcriptProgressState = state; renderTranscriptProgress();
   $('speech-tab-indicator').hidden = !state.enabled;
   $('live-speech-tab').title = state.enabled ? '语音播报已开启，点击管理播报' : '';
   speechPreview = state.preview;
@@ -318,6 +332,19 @@ for (const kind of ['original', 'translation']) transcriptSpeech[kind].addEventL
   catch (error) { speechConfigError(error); }
 });
 transcriptSpeech.stop.addEventListener('click', () => speech.stop('全文播报已停止'));
+transcriptSpeech.seek.addEventListener('pointerdown', () => { transcriptSeeking = true; });
+transcriptSpeech.seek.addEventListener('input', () => { transcriptSeeking = true; renderTranscriptProgress(); });
+transcriptSpeech.seek.addEventListener('change', () => {
+  const position = Number(transcriptSpeech.seek.value);
+  transcriptSeeking = false;
+  void speech.seek(position);
+});
+transcriptSpeech.seek.addEventListener('pointerup', () => setTimeout(() => {
+  transcriptSeeking = false; renderTranscriptProgress();
+}, 0));
+for (const event of ['pointercancel', 'blur']) transcriptSpeech.seek.addEventListener(event, () => {
+  transcriptSeeking = false; renderTranscriptProgress();
+});
 function syncTranscriptSpeech() {
   transcriptSpeech.controls.hidden = phase !== 'idle' || !detail?.segmentCount || detail.listening?.id !== listeningId;
   const active = detail?.runs?.some(run => run.state === 'active');

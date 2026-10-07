@@ -55,7 +55,12 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
   dialog.className = 'knowledge-editor'; dialog.id = 'knowledge-editor';
   dialog.setAttribute('aria-labelledby', 'knowledge-editor-title');
   dialog.innerHTML = `<form>
-    <h2 id="knowledge-editor-title">修改知识条目</h2>
+    <div class="knowledge-editor-header">
+      <h2 id="knowledge-editor-title">修改知识条目</h2>
+      <button type="button" id="knowledge-edit-close" aria-label="关闭知识条目编辑" title="关闭">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
     <p class="form-note">纠正本条目引用的原文，并重新生成卡片。本次收听及以后继续收听时，会沿用纠正后的写法。</p>
     <label for="knowledge-edit-source">原文中的错误词</label>
     <input id="knowledge-edit-source" required maxlength="160" autocomplete="off">
@@ -65,7 +70,6 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
     <p id="knowledge-edit-status" role="status" aria-live="polite"></p>
     <div class="knowledge-edit-actions">
       <button type="submit" class="save-button" id="knowledge-edit-save">保存并重新生成</button>
-      <button type="button" id="knowledge-edit-cancel">取消</button>
       <button type="button" id="knowledge-edit-delete">删除条目</button>
     </div>
     <section id="knowledge-delete-confirm" hidden>
@@ -81,15 +85,14 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
   function setBusy(value) {
     busy = value;
     for (const control of dialog.querySelectorAll('input,button')) control.disabled = value;
-    if (polling) $('knowledge-edit-cancel').disabled = false;
-    $('knowledge-edit-cancel').textContent = polling ? '关闭窗口' : '取消';
+    if (polling) $('knowledge-edit-close').disabled = false;
     if (!value) for (const id of ['knowledge-edit-save', 'knowledge-edit-delete', 'knowledge-delete-submit'])
       $(id).disabled = !selected || outcomeUnknown;
     dialog.setAttribute('aria-busy', String(value));
   }
   function close() { if (!busy || polling) { generation++; selected = null; polling = false; setBusy(false); dialog.close(); } }
   dialog.addEventListener('cancel', event => { if (busy && !polling) event.preventDefault(); else close(); });
-  $('knowledge-edit-cancel').onclick = close;
+  $('knowledge-edit-close').onclick = close;
   $('knowledge-edit-delete').onclick = () => { $('knowledge-delete-confirm').hidden = false; $('knowledge-delete-cancel').focus(); };
   $('knowledge-delete-cancel').onclick = () => { $('knowledge-delete-confirm').hidden = true; $('knowledge-edit-delete').focus(); };
   async function waitForJob(current, jobId, initial, gen) {

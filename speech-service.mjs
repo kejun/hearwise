@@ -285,6 +285,11 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
           if (!snapshot.total) throw new Error('暂无可以播报的内容');
           transcript = { kind: msg.kind, total: snapshot.total };
           throughSequence = snapshot.maxSequence;
+          const startPosition = msg.startPosition === undefined ? 1 : msg.startPosition;
+          if (!Number.isSafeInteger(startPosition) || startPosition < 1 || startPosition > snapshot.total) throw new Error('全文播报位置无效');
+          cursor = store.speechTranscriptCursor(msg.listeningId, startPosition, throughSequence);
+          if (cursor == null) throw new Error('全文内容已变化，请重新开启播报');
+          position = startPosition - 1;
           config.language = 'Auto'; // Records can span runs with different source/target languages.
         } else if (!preview) {
           const run = store.speechRun(msg.listeningId, msg.runId);
@@ -321,7 +326,7 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
         metric(msg.type, { afterSequence: cursor });
         clearTimeout(initTimeout); timer = setInterval(() => { void pump(); }, 1000);
         send({ type: 'speech.ready', afterSequence: cursor, sampleRate: TTS_SAMPLE_RATE, incremental: Boolean(ledger),
-          ...(transcript ? { total: transcript.total, kind: transcript.kind } : {}) });
+          ...(transcript ? { total: transcript.total, kind: transcript.kind, position: position + 1 } : {}) });
         void pump();
       } catch (error) { finish('speech.error', error.message); }
     });

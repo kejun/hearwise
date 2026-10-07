@@ -35,7 +35,7 @@ try {
   await page.locator('#knowledge-edit-status').filter({ hasText: '读取知识条目失败（HTTP 404）' }).waitFor();
   assert.equal(await page.locator('#knowledge-edit-save').isDisabled(), true);
   assert.doesNotMatch(await page.locator('#knowledge-edit-status').textContent(), /private|pattern/);
-  await page.locator('#knowledge-edit-cancel').click();
+  await page.locator('#knowledge-edit-close').click();
   await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
   await page.locator('#knowledge-edit-name').waitFor();
   await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
@@ -47,11 +47,11 @@ try {
   assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Proxy failed draft');
   assert.equal(await page.locator('#knowledge-edit-save').isDisabled(), true);
   assert.equal(fixture.stats.providerRequests.length, callsBeforeProxy);
-  await page.locator('#knowledge-edit-cancel').click();
+  await page.locator('#knowledge-edit-close').click();
   await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
   await page.locator('#knowledge-edit-name').fill('Discarded draft');
-  await page.locator('#knowledge-edit-cancel').click();
+  await page.locator('#knowledge-edit-close').click();
   assert.match(await card.textContent(), /Eastman Kodak/);
   await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
@@ -82,7 +82,7 @@ try {
   await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
   await page.locator('#knowledge-edit-status').filter({ hasText: '正在后台重新生成' }).waitFor();
   assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Kodak');
-  assert.equal(await page.locator('#knowledge-edit-cancel').isEnabled(), true);
+  assert.equal(await page.locator('#knowledge-edit-close').isEnabled(), true);
   await page.locator('#knowledge-editor').waitFor({ state: 'hidden', timeout: 45000 });
   assert.equal(fixture.stats.providerRequests.length, callsDuringSave);
   await card.locator('summary').filter({ hasText: 'Kodak' }).waitFor();
