@@ -4,29 +4,47 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+import { deadline, stopChild, closeServer } from '../test-support/lifecycle.mjs';
+import { startServer } from '../test-support/server-fixture.mjs';
 import WebSocket, { WebSocketServer } from 'ws';
 
-const waitFor = (predicate, timeout = 5000) => new Promise((resolve, reject) => {
+async function waitFor(predicate, label, diagnostics, timeout = 5000) {
   const started = Date.now();
-  const timer = setInterval(async () => {
-    try { if (await predicate()) { clearInterval(timer); resolve(); return; } } catch {}
-    if (Date.now() - started > timeout) { clearInterval(timer); reject(new Error('等待超时')); }
-  }, 15);
-});
-const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+  while (!predicate()) {
+    if (Date.now() - started >= timeout) throw new Error(`${label} timed out after ${timeout}ms\n${diagnostics()}`);
+    await delay(15);
+  }
+}
+const listen = async server => {
+  server.listen(0, '127.0.0.1');
+  await deadline(() => once(server, 'listening'), 5000, 'Model HTTP startup');
+  return server.address().port;
+};
 
 test('ASR 断句参数按 run 下发、被拒时显式回退、事件携带 runId', async t => {
   const dir = mkdtempSync(path.join(tmpdir(), 'asr-params-'));
-  const modelServer = http.createServer(async (req, res) => {
+  const clients = new Set();
+  let app, asrServer, modelServer;
+  t.after(async () => {
+    for (const ws of clients) ws.terminate();
+    const results = await Promise.allSettled([
+      app && stopChild(app.child), asrServer && closeServer(asrServer, 'ASR'), modelServer && closeServer(modelServer, 'model HTTP')
+    ]);
+    rmSync(dir, { recursive: true, force: true });
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, `ASR fixture cleanup failed\n${app?.logs() || ''}`);
+  });
+  modelServer = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: '已翻译：' + body.messages[0].content } }] }));
   });
   const modelPort = await listen(modelServer);
-  const asrServer = new WebSocketServer({ port: 0, host: '127.0.0.1' });
-  await new Promise(resolve => asrServer.on('listening', resolve));
+  asrServer = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await deadline(() => once(asrServer, 'listening'), 5000, 'ASR stub startup');
   let sentenceNo = 0;
   let rejectSegmentation = false;
   const runTaskPayloads = [];
@@ -52,31 +70,28 @@ test('ASR 断句参数按 run 下发、被拒时显式回退、事件携带 runI
       if (message.header?.action === 'finish-task') ws.send(JSON.stringify({ header: { event: 'task-finished', task_id: taskId } }));
     });
   });
-  const port = 38000 + Math.floor(Math.random() * 1000);
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve('.'), env: { ...process.env, PORT: String(port),
+  app = await startServer({ env: {
     LISTENING_DB: path.join(dir, 'history.sqlite'), ASR_ENDPOINT: `ws://127.0.0.1:${asrServer.address().port}`,
-    MT_ENDPOINT: `http://127.0.0.1:${modelPort}/chat/completions` }, stdio: ['ignore', 'pipe', 'pipe'] });
-  const serverLog = [];
-  child.stderr.on('data', d => serverLog.push(String(d)));
-  child.stdout.on('data', d => serverLog.push(String(d)));
-  t.after(async () => {
-    child.kill(); await new Promise(resolve => child.once('exit', resolve));
-    await new Promise(resolve => asrServer.close(resolve));
-    await new Promise(resolve => modelServer.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
-  });
-  await waitFor(async () => { try { return (await fetch(`http://127.0.0.1:${port}`)).ok; } catch { return false; } });
+    MT_ENDPOINT: `http://127.0.0.1:${modelPort}/chat/completions`
+  } });
+  const wait = (predicate, label, events = []) => waitFor(predicate, label,
+    () => `Events: ${JSON.stringify(events)}\n${app.logs()}`);
+  const closed = (ws, label) => ws.readyState === WebSocket.CLOSED ? Promise.resolve() :
+    deadline(() => once(ws, 'close'), 5000, label);
 
   async function startRun(extra = {}, waitReady = true) {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const ws = new WebSocket(`${app.base.replace('http:', 'ws:')}/ws`);
+    clients.add(ws);
+    ws.once('close', () => clients.delete(ws));
     const events = [];
+    ws.on('error', error => events.push({ type: 'socket-error', message: error.message }));
     ws.on('message', raw => events.push(JSON.parse(raw.toString())));
-    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await deadline(() => once(ws, 'open'), 5000, 'Client WebSocket open');
     ws.send(JSON.stringify({ type: 'start', key: 'test-key', source: 'en', targetLang: 'Chinese', audioSource: 'microphone', ...extra }));
-    if (waitReady) await waitFor(() => events.some(e => e.type === 'listening-ready' || e.type === 'error'));
+    if (waitReady) await wait(() => events.some(e => e.type === 'listening-ready' || e.type === 'error'), 'Listening ready', events);
     return { ws, events };
   }
-  const stopRun = ws => { ws.send(JSON.stringify({ type: 'stop' })); return new Promise(resolve => ws.once('close', resolve)); };
+  const stopRun = ws => { const stopped = closed(ws, 'Run stop'); ws.send(JSON.stringify({ type: 'stop' })); return stopped; };
 
   // 默认实时优先：下发低延迟断句参数，事件带 runId
   const realtime = await startRun();
@@ -88,7 +103,7 @@ test('ASR 断句参数按 run 下发、被拒时显式回退、事件携带 runI
   assert.equal(params.max_sentence_silence, 2500);
   assert.equal(params.multi_threshold_mode_enabled, true);
   realtime.ws.send(Buffer.from([0, 0]));
-  await waitFor(() => realtime.events.some(e => e.type === 'segment-final'));
+  await wait(() => realtime.events.some(e => e.type === 'segment-final'), 'Final ASR segment', realtime.events);
   const final = realtime.events.find(e => e.type === 'segment-final');
   assert.equal(final.runId, ready.runId);
   assert.equal(final.segment.run_id, ready.runId);
@@ -111,14 +126,15 @@ test('ASR 断句参数按 run 下发、被拒时显式回退、事件携带 runI
   assert.equal(fallback.events.filter(e => e.type === 'listening-ready').length, 1);
   assert.equal(runTaskPayloads.length, before + 2);
   assert.equal('max_sentence_silence' in runTaskPayloads.at(-1), false);
-  await waitFor(() => serverLog.some(line => line.includes('asr_param_fallback')));
+  await wait(() => app.logs().includes('asr_param_fallback'), 'ASR fallback diagnostic', fallback.events);
   await stopRun(fallback.ws);
 
   // 非法 captionMode 拒绝启动
   rejectSegmentation = false;
   const invalid = await startRun({ captionMode: 'turbo' }, false);
-  const invalidClosed = new Promise(resolve => invalid.ws.once('close', resolve));
-  await waitFor(() => invalid.events.some(e => e.type === 'error'));
+  const invalidClosed = closed(invalid.ws, 'Invalid settings close');
+  await Promise.all([
+    wait(() => invalid.events.some(e => e.type === 'error'), 'Invalid settings error', invalid.events), invalidClosed
+  ]);
   assert.match(invalid.events.find(e => e.type === 'error').message, /收听设置/);
-  await invalidClosed;
 });
