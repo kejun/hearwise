@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
-import { mkdir, rename, rm } from 'node:fs/promises';
+import { mkdir, rename, rm, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -8,6 +8,11 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const output = path.join(root, 'dist/server');
 const staging = path.join(root, 'dist/.server-build');
 export async function buildServer() {
+  // Serve the exact locked renderer locally. No CDN, runtime download or telemetry.
+  const license = await readFile(path.join(root, 'node_modules/cytoscape/LICENSE'), 'utf8');
+  await build({ absWorkingDir: root, entryPoints: ['cytoscape'], outfile: path.join(root, 'public/vendor/cytoscape.js'),
+    bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: true,
+    legalComments: 'none', banner: { js: `/*! Cytoscape.js\n${license}*/` } });
   let gitSha = 'unknown', dirty = true;
   try {
     gitSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();

@@ -24,6 +24,7 @@
     "check:format": "node scripts/check-text-format.mjs"
   },
   "dependencies": {
+    "cytoscape": "3.34.3",
     "effect": "4.0.0",
     "ws": "^8.18.3"
   },

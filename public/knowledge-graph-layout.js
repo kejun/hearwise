@@ -1,149 +1,180 @@
-// Compact cells leave clear horizontal and vertical lanes for edges.
-// Connected nodes occupy the upper group; independent items form a lower grid.
-export const GRAPH_NODE = Object.freeze({ width: 156, height: 40, stepX: 212, stepY: 92, margin: 40 });
+// All coordinates are Cytoscape node centres. Layout only uses real relations;
+// component boundaries and the independent section are whitespace, not nodes.
+export const GRAPH_NODE = Object.freeze({ width: 164, height: 56, margin: 36 });
+const NODE_GAP = 28, COMPONENT_GAP = 88, GROUP_GAP = 132;
+const compareId = (a, b) => a.id() < b.id() ? -1 : a.id() > b.id() ? 1 : 0;
+const finiteSize = (value, fallback) => Number.isFinite(value) && value > 0 ? value : fallback;
 
-export function stableGraphLayout(nodes, relations, previous = new Map(), columns = 5) {
-  const ids = new Set(nodes.map(n => n.id));
-  columns = Math.max(1, Math.floor(columns) || 1);
-  const neighbors = new Map(nodes.map(n => [n.id, new Set()]));
-  for (const r of relations) {
-    if (!ids.has(r.subject_item_id) || !ids.has(r.object_item_id) || r.subject_item_id === r.object_item_id ||
-      !(r.assertions || []).some(a => ['active', 'needs_review'].includes(a.status))) continue;
-    neighbors.get(r.subject_item_id).add(r.object_item_id);
-    neighbors.get(r.object_item_id).add(r.subject_item_id);
+function dimensions(node) {
+  return { width: Math.max(GRAPH_NODE.width, finiteSize(node.outerWidth(), GRAPH_NODE.width)),
+    height: Math.max(GRAPH_NODE.height, finiteSize(node.outerHeight(), GRAPH_NODE.height)) };
+}
+
+function bounds(points) {
+  const left = Math.min(...points.map(p => p.x - p.width / 2)), top = Math.min(...points.map(p => p.y - p.height / 2));
+  return { left, top, width: Math.max(...points.map(p => p.x + p.width / 2)) - left,
+    height: Math.max(...points.map(p => p.y + p.height / 2)) - top };
+}
+
+// A depth-first ordering keeps relation neighbourhoods together before CoSE.
+// Unique, slightly asymmetric seeds avoid CoSE's random coincident-node rescue.
+function seedComponent(nodes, neighbors, sizes) {
+  const byDegree = (a, b) => neighbors.get(b.id()).size - neighbors.get(a.id()).size || compareId(a, b);
+  const root = nodes.slice().sort(byDegree)[0], order = [], seen = new Set(), stack = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (seen.has(node.id())) continue;
+    seen.add(node.id()); order.push(node);
+    const next = [...neighbors.get(node.id())].filter(n => !seen.has(n.id())).sort(byDegree);
+    stack.push(...next.reverse());
   }
-  const connected = new Set([...ids].filter(id => neighbors.get(id).size));
-  // Keep an unchanged upper group stable, but reclaim gaps after nodes leave it.
-  const regroup = [...previous].some(([id, p]) => p.group === 'connected' && !connected.has(id));
-  const result = new Map(regroup ? [] : [...previous].filter(([id, p]) => connected.has(id) && p.group === 'connected' && p.col < columns));
-  const occupied = new Set([...result.values()].map(p => `${p.col},${p.row}`));
-  const byDegree = (a, b) => neighbors.get(b).size - neighbors.get(a).size || a.localeCompare(b);
-  const order = [], visited = new Set();
-  for (const id of [...connected].sort(byDegree)) {
-    if (visited.has(id)) continue;
-    const queue = [id]; visited.add(id);
-    for (let i = 0; i < queue.length; i++) {
-      const next = queue[i]; order.push(next);
-      for (const neighbor of [...neighbors.get(next)].sort(byDegree)) {
-        if (!visited.has(neighbor)) { visited.add(neighbor); queue.push(neighbor); }
+  const radius = Math.max(140, nodes.length * (Math.max(...sizes.map(s => s.width)) + NODE_GAP) / (2 * Math.PI));
+  order.forEach((node, i) => {
+    const angle = 2 * Math.PI * i / order.length + .17;
+    node.position({ x: radius * Math.cos(angle) + i * .013, y: radius * Math.sin(angle) + i * .021 });
+  });
+}
+
+// CoSE avoids most collisions, but its force approximation does not guarantee
+// rectangular label clearance. Separate locally, then use a finite sweep as a
+// guarantee, including headless and unusually dense graphs.
+function separateOverlaps(points) {
+  for (let pass = 0; pass < 40; pass++) {
+    let moved = false;
+    for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
+      const a = points[i], b = points[j], dx = b.x - a.x, dy = b.y - a.y;
+      const overlapX = (a.width + b.width) / 2 + NODE_GAP - Math.abs(dx);
+      const overlapY = (a.height + b.height) / 2 + NODE_GAP - Math.abs(dy);
+      if (overlapX <= 0 || overlapY <= 0) continue;
+      moved = true;
+      if (overlapX < overlapY) {
+        const shift = (overlapX + .1) / 2 * (dx < 0 ? -1 : 1); a.x -= shift; b.x += shift;
+      } else {
+        const shift = (overlapY + .1) / 2 * (dy < 0 ? -1 : 1); a.y -= shift; b.y += shift;
       }
     }
+    if (!moved) return;
   }
-  for (const id of order) {
-    if (result.has(id)) continue;
-    const near = [...neighbors.get(id)].map(n => result.get(n)).filter(Boolean);
-    const candidates = new Map();
-    for (const p of near) for (const [dc, dr] of [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, 1]]) {
-      const col = p.col + dc, row = p.row + dr, key = `${col},${row}`;
-      if (col >= 0 && col < columns && row >= 0 && !occupied.has(key)) candidates.set(key, { col, row });
+  const ordered = points.slice().sort((a, b) => a.y - b.y || a.x - b.x || compareId(a.node, b.node));
+  for (let i = 0; i < ordered.length; i++) for (let j = 0; j < i; j++) {
+    const a = ordered[j], b = ordered[i];
+    if (Math.abs(a.x - b.x) < (a.width + b.width) / 2 + NODE_GAP) {
+      b.y = Math.max(b.y, a.y + (a.height + b.height) / 2 + NODE_GAP);
     }
-    const distance = p => near.reduce((sum, n) => sum + Math.abs(p.col - n.col) + Math.abs(p.row - n.row), 0);
-    let cell = [...candidates.values()].sort((a, b) => distance(a) - distance(b) || a.row - b.row || a.col - b.col)[0];
-    for (let i = 0; !cell; i++) {
-      const col = i % columns, row = Math.floor(i / columns);
-      if (!occupied.has(`${col},${row}`)) cell = { col, row };
-    }
-    occupied.add(`${cell.col},${cell.row}`);
-    result.set(id, { ...cell, group: 'connected', x: GRAPH_NODE.margin + cell.col * GRAPH_NODE.stepX, y: GRAPH_NODE.margin + cell.row * GRAPH_NODE.stepY });
   }
-  // A clear separator row prevents unrelated items filling holes among edges.
-  const startRow = result.size ? Math.max(...[...result.values()].map(p => p.row)) + 2 : 0;
-  const independent = [...ids].filter(id => !connected.has(id)).sort((a, b) => {
-    const p = previous.get(a), q = previous.get(b);
-    const rank = p => p?.group === 'independent' ? p.row * columns + p.col : Infinity;
-    return rank(p) - rank(q) || a.localeCompare(b);
+}
+
+function arrangeComponent(cy, nodes, edges, neighbors, viewport) {
+  const sizes = nodes.map(dimensions);
+  if (nodes.length < 3) {
+    nodes.forEach((node, i) => node.position({ x: i * (Math.max(...sizes.map(s => s.width)) + 112), y: 0 }));
+  } else {
+    seedComponent(nodes, neighbors, sizes);
+    cy.collection([...nodes, ...edges]).layout({
+      name: 'cose', animate: false, randomize: false, fit: false,
+      nodeDimensionsIncludeLabels: false, nodeRepulsion: 28000, nodeOverlap: 16,
+      idealEdgeLength: 112, edgeElasticity: 100, gravity: .12,
+      numIter: 700, initialTemp: 160, coolingFactor: .985, minTemp: .25
+    }).run();
+  }
+  const initial = nodes.map((node, i) => ({ node, ...sizes[i],
+    x: Number.isFinite(node.position('x')) ? node.position('x') : i * (sizes[i].width + NODE_GAP),
+    y: Number.isFinite(node.position('y')) ? node.position('y') : 0 }));
+  const centre = initial.reduce((sum, p) => ({ x: sum.x + p.x / nodes.length, y: sum.y + p.y / nodes.length }), { x: 0, y: 0 });
+  const covariance = initial.reduce((sum, p) => ({ xx: sum.xx + (p.x - centre.x) ** 2,
+    yy: sum.yy + (p.y - centre.y) ** 2, xy: sum.xy + (p.x - centre.x) * (p.y - centre.y) }), { xx: 0, yy: 0, xy: 0 });
+  const principalAngle = .5 * Math.atan2(2 * covariance.xy, covariance.xx - covariance.yy);
+  // CoSE's orientation is arbitrary. Compare rigid rotations before packing so
+  // a long chain does not unnecessarily shrink to fit a landscape viewport.
+  const rotations = nodes.length < 3 ? [0] : [0, Math.PI / 2, -principalAngle, Math.PI / 2 - principalAngle];
+  const alternatives = rotations.map(angle => {
+    const points = initial.map(p => ({ ...p, x: (p.x - centre.x) * Math.cos(angle) - (p.y - centre.y) * Math.sin(angle),
+      y: (p.x - centre.x) * Math.sin(angle) + (p.y - centre.y) * Math.cos(angle) }));
+    separateOverlaps(points);
+    const box = bounds(points);
+    return { points, box, fit: Math.min(viewport.width / box.width, viewport.height / box.height) };
+  }).sort((a, b) => b.fit - a.fit);
+  const { points, box } = alternatives[0];
+  for (const point of points) { point.x -= box.left; point.y -= box.top; }
+  return { points, width: box.width, height: box.height, id: nodes[0].id() };
+}
+
+function packAtWidth(components, independent, sizes, targetWidth) {
+  let x = 0, y = 0, rowHeight = 0, width = 0;
+  const placements = [];
+  for (const component of components) {
+    if (x && x + component.width > targetWidth) { x = 0; y += rowHeight + COMPONENT_GAP; rowHeight = 0; }
+    placements.push({ component, x, y });
+    width = Math.max(width, x + component.width);
+    rowHeight = Math.max(rowHeight, component.height);
+    x += component.width + COMPONENT_GAP;
+  }
+  const connectedHeight = y + rowHeight;
+  const columns = Math.max(1, Math.min(independent.length, Math.floor((targetWidth + NODE_GAP) / (sizes.width + NODE_GAP))));
+  const independentY = connectedHeight ? connectedHeight + GROUP_GAP : 0;
+  const rows = Math.ceil(independent.length / columns);
+  if (independent.length) width = Math.max(width, columns * (sizes.width + NODE_GAP) - NODE_GAP);
+  return { placements, columns, independentY, width,
+    height: independent.length ? independentY + rows * (sizes.height + NODE_GAP) - NODE_GAP : connectedHeight };
+}
+
+function packComponents(components, independent, viewport) {
+  components.sort((a, b) => b.height - a.height || b.width - a.width || (a.id < b.id ? -1 : 1));
+  const sizes = { width: Math.max(GRAPH_NODE.width, ...independent.map(n => dimensions(n).width)),
+    height: Math.max(GRAPH_NODE.height, ...independent.map(n => dimensions(n).height)) };
+  const minWidth = Math.max(sizes.width, ...components.map(c => c.width));
+  const area = components.reduce((sum, c) => sum + (c.width + COMPONENT_GAP) * (c.height + COMPONENT_GAP), 0) +
+    independent.length * (sizes.width + NODE_GAP) * (sizes.height + NODE_GAP);
+  const idealWidth = Math.sqrt(area * viewport.width / viewport.height);
+  const candidates = new Set([minWidth]);
+  for (let i = 8; i <= 32; i++) candidates.add(Math.max(minWidth, idealWidth * i / 16));
+  // Exact grid widths avoid rounding a useful final column away on a narrow view.
+  for (let columns = 1; columns <= independent.length; columns++) candidates.add(Math.max(minWidth, columns * (sizes.width + NODE_GAP) - NODE_GAP));
+  const layouts = [...candidates].map(targetWidth => {
+    const layout = packAtWidth(components, independent, sizes, targetWidth);
+    layout.fit = Math.min(viewport.width / (layout.width + GRAPH_NODE.margin * 2), viewport.height / (layout.height + GRAPH_NODE.margin * 2));
+    return layout;
   });
-  independent.forEach((id, index) => {
-    const col = index % columns, row = startRow + Math.floor(index / columns);
-    result.set(id, { col, row, group: 'independent', x: GRAPH_NODE.margin + col * GRAPH_NODE.stepX, y: GRAPH_NODE.margin + row * GRAPH_NODE.stepY });
-  });
-  return result;
+  layouts.sort((a, b) => b.fit - a.fit || a.width * a.height - b.width * b.height || a.width - b.width);
+  return { ...layouts[0], sizes };
 }
 
-export function graphLayoutBounds(positions) {
-  const values = [...positions.values()], { width, height, margin } = GRAPH_NODE;
-  if (!values.length) return { x: 0, y: 0, width: width + margin * 2, height: height + margin * 2 };
-  const x = Math.min(...values.map(p => p.x)) - margin, y = Math.min(...values.map(p => p.y)) - margin;
-  return { x, y, width: Math.max(...values.map(p => p.x)) + width + margin - x,
-    height: Math.max(...values.map(p => p.y)) + height + margin - y };
-}
-
-// Match both viewport dimensions, rather than a fixed column cap. Prefer the
-// most readable fit, then the layout using more of the available screen area.
-export function graphViewportColumns(nodes, relations, viewportWidth, viewportHeight) {
-  const w = Math.max(1, viewportWidth - 24), h = Math.max(1, viewportHeight - 24);
-  // Include layouts wider than the unscaled viewport: in a short landscape
-  // view, a wider grid can fit more legibly than a tall, heavily reduced one.
-  const balanced = Math.sqrt(nodes.length * w * GRAPH_NODE.stepY / (h * GRAPH_NODE.stepX));
-  const maxColumns = Math.min(nodes.length || 1, Math.max(2, Math.ceil(balanced * 2) + 2));
-  const fits = [];
-  for (let columns = 1; columns <= maxColumns; columns++) {
-    const bounds = graphLayoutBounds(stableGraphLayout(nodes, relations, new Map(), columns));
-    const scale = Math.min(2, w / bounds.width, h / bounds.height), area = bounds.width * bounds.height * scale * scale;
-    fits.push({ columns, scale, area });
+// Call on topology changes or an explicit relayout, never on label, selection,
+// or progress changes. This function deliberately does not fit, pan, or zoom.
+export function arrangeGraph(cy, { width = 960, height = 600 } = {}) {
+  const nodes = cy.nodes().toArray().sort(compareId), edges = cy.edges().toArray().sort(compareId);
+  if (!nodes.length) return { connected: 0, independent: 0, components: 0 };
+  const neighbors = new Map(nodes.map(node => [node.id(), new Set()])), byId = new Map(nodes.map(node => [node.id(), node]));
+  for (const edge of edges) {
+    const source = byId.get(edge.data('source')), target = byId.get(edge.data('target'));
+    if (!source || !target) continue;
+    neighbors.get(source.id()).add(target); neighbors.get(target.id()).add(source);
   }
-  const largest = Math.max(...fits.map(fit => fit.scale));
-  // Within 5% of the most readable fit, prefer using more of the screen.
-  return fits.filter(fit => fit.scale >= largest * .95).sort((a, b) => b.area - a.area || b.scale - a.scale || a.columns - b.columns)[0].columns;
-}
-
-function crossesNode(a, b, node) {
-  let low = 0, high = 1;
-  for (const [axis, size] of [['x', GRAPH_NODE.width], ['y', GRAPH_NODE.height]]) {
-    const delta = b[axis] - a[axis], min = node[axis] - 8, max = node[axis] + size + 8;
-    if (!delta) { if (a[axis] < min || a[axis] > max) return false; continue; }
-    const t1 = (min - a[axis]) / delta, t2 = (max - a[axis]) / delta;
-    low = Math.max(low, Math.min(t1, t2)); high = Math.min(high, Math.max(t1, t2));
-    if (low > high) return false;
-  }
-  return true;
-}
-const length = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
-function compact(points) {
-  const result = [];
-  for (const p of points) {
-    const b = result.at(-1), a = result.at(-2);
-    if (b && b.x === p.x && b.y === p.y) continue;
-    if (a && (a.x === b.x && b.x === p.x || a.y === b.y && b.y === p.y)) result.pop();
-    result.push(p);
-  }
-  return result;
-}
-
-// Straight edges are used only when clear. Otherwise use the cell lanes, which
-// remain free even when a later streaming update fills a previously empty cell.
-export function routeGraphRelation(relation, positions, lane = 0, parallelCount = 1) {
-  const a = positions.get(relation.subject_item_id), b = positions.get(relation.object_item_id);
-  if (!a || !b || a === b) return null;
-  const { width: w, height: h, stepX, stepY } = GRAPH_NODE;
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const factor = Math.min(dx ? w / 2 / Math.abs(dx) : Infinity, dy ? h / 2 / Math.abs(dy) : Infinity);
-  const direct = [{ x: a.x + w / 2 + dx * factor, y: a.y + h / 2 + dy * factor },
-    { x: b.x + w / 2 - dx * factor, y: b.y + h / 2 - dy * factor }];
-  let points;
-  if (!lane && ![...positions.values()].some(p => p !== a && p !== b && crossesNode(...direct, p))) points = direct;
-  else {
-    const offset = (lane % 5 - 2) * 4, gapY = (stepY - h) / 2, gapX = (stepX - w) / 2;
-    const candidates = [];
-    for (const sideA of [-1, 1]) for (const sideB of [-1, 1]) {
-      const start = { x: a.x + w / 2, y: a.y + (sideA < 0 ? 0 : h) };
-      const end = { x: b.x + w / 2, y: b.y + (sideB < 0 ? 0 : h) };
-      const y1 = start.y + sideA * gapY + offset, y2 = end.y + sideB * gapY + offset;
-      for (const x of [a.x - gapX + offset, a.x + w + gapX + offset, b.x - gapX + offset, b.x + w + gapX + offset]) {
-        candidates.push(compact([start, { x: start.x, y: y1 }, { x, y: y1 }, { x, y: y2 }, { x: end.x, y: y2 }, end]));
+  const independent = nodes.filter(node => !neighbors.get(node.id()).size), components = [], visited = new Set();
+  const viewport = { width: finiteSize(width, 960), height: finiteSize(height, 600) };
+  cy.batch(() => {
+    for (const node of nodes) node.data('group', neighbors.get(node.id()).size ? 'connected' : 'independent');
+    for (const node of nodes) {
+      if (!neighbors.get(node.id()).size || visited.has(node.id())) continue;
+      const members = [], queue = [node]; visited.add(node.id());
+      for (let i = 0; i < queue.length; i++) {
+        const current = queue[i]; members.push(current);
+        for (const neighbor of neighbors.get(current.id())) if (!visited.has(neighbor.id())) {
+          visited.add(neighbor.id()); queue.push(neighbor);
+        }
       }
+      members.sort(compareId);
+      const ids = new Set(members.map(member => member.id()));
+      components.push(arrangeComponent(cy, members, edges.filter(edge => ids.has(edge.data('source')) && ids.has(edge.data('target'))), neighbors, viewport));
     }
-    const cost = p => p.slice(1).reduce((sum, next, i) => sum + length(p[i], next), 0) + p.length * 12;
-    points = candidates.sort((a, b) => cost(a) - cost(b))[0];
-  }
-  // Put the label on a long segment; its width fits between node boundaries.
-  let best = 0;
-  for (let i = 1; i < points.length - 1; i++) if (length(points[i], points[i + 1]) > length(points[best], points[best + 1])) best = i;
-  const p = points[best], q = points[best + 1];
-  // Parallel relation labels share the available segment instead of stacking.
-  const portion = (lane + .5) / parallelCount;
-  const fraction = p.x < q.x || p.x === q.x && p.y < q.y ? portion : 1 - portion;
-  return { points, path: points.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' '),
-    label: { x: p.x + (q.x - p.x) * fraction, y: p.y + (q.y - p.y) * fraction,
-      width: Math.min(120, Math.max(40, Math.abs(q.x - p.x) / parallelCount || 120)) - 8 } };
+    const packed = packComponents(components, independent, viewport);
+    for (const { component, x, y } of packed.placements) for (const point of component.points) {
+      point.node.position({ x: GRAPH_NODE.margin + x + point.x, y: GRAPH_NODE.margin + y + point.y });
+    }
+    independent.forEach((node, i) => node.position({
+      x: GRAPH_NODE.margin + packed.sizes.width / 2 + (i % packed.columns) * (packed.sizes.width + NODE_GAP),
+      y: GRAPH_NODE.margin + packed.independentY + packed.sizes.height / 2 + Math.floor(i / packed.columns) * (packed.sizes.height + NODE_GAP)
+    }));
+  });
+  return { connected: nodes.length - independent.length, independent: independent.length, components: components.length };
 }
