@@ -226,7 +226,8 @@ try {
   await page.locator('#graph-fullscreen').focus();
   for (let tab = 0; tab < 14; tab++) {
     await page.keyboard.press('Tab');
-    assert.equal(await page.locator('#graph-fullscreen-dialog').evaluate(el => el.contains(document.activeElement)), true, 'fullscreen keeps keyboard focus inside its dialog');
+    const focusState = await page.locator('#graph-fullscreen-dialog').evaluate(el => ({ inside: el.contains(document.activeElement), target: document.activeElement?.outerHTML.slice(0, 180) }));
+    assert.equal(focusState.inside, true, `fullscreen keeps keyboard focus inside its dialog: tab ${tab}, ${focusState.target}`);
   }
   await openList('.graph-results');
   await source.focus(); await page.keyboard.press('Enter'); await page.keyboard.press('Escape');

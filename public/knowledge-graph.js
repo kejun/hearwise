@@ -328,11 +328,19 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   fullscreenDialog.addEventListener('keydown', event => {
     if (event.key !== 'Tab' || !fullscreenDialog.open) return;
     const controls = [...fullscreenDialog.querySelectorAll('button, input, select, summary, a[href], [tabindex]')]
-      .filter(control => !control.disabled && control.tabIndex >= 0 && control.getClientRects().length);
-    const first = controls[0], last = controls.at(-1);
-    if (event.shiftKey && doc.activeElement === first || !event.shiftKey && doc.activeElement === last) {
-      event.preventDefault(); (event.shiftKey ? last : first)?.focus({ preventScroll: true });
-    }
+      .filter(control => {
+        if (control.disabled || control.hasAttribute('tabindex') && control.tabIndex < 0 || !control.getClientRects().length) return false;
+        // Closed details can retain layout boxes in Chromium, but their body
+        // controls are not tabbable. Keep only the summary for each closed level.
+        for (let parent = control.parentElement; parent && parent !== fullscreenDialog; parent = parent.parentElement) {
+          if (parent.tagName === 'DETAILS' && !parent.open && !parent.querySelector(':scope > summary')?.contains(control)) return false;
+        }
+        return true;
+      });
+    if (!controls.length) return;
+    const current = controls.indexOf(doc.activeElement);
+    const next = (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+    event.preventDefault(); controls[next].focus({ preventScroll: true });
   });
   fullscreenDialog.addEventListener('cancel', event => { event.preventDefault(); setFullscreen(false); });
   fullscreenDialog.addEventListener('close', () => { if (savedView && !fullscreenDialog.open) setFullscreen(false); });
