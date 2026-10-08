@@ -104,7 +104,8 @@ try {
   await page.reload(); await open();
   await card.locator('summary').filter({ hasText: 'Eastman Kodak' }).waitFor();
   await page.locator('#knowledge-view-graph').click();
-  await page.locator(`.graph-node[data-node-id="${fixture.seeded.first.nodes[0].id}"]`).click();
+  await page.locator('.graph-results > summary').click();
+  await page.locator(`[data-result-node-id="${fixture.seeded.first.nodes[0].id}"]`).click();
   await page.locator('#graph-edit-node').click();
   await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
   assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Eastman Kodak');
@@ -114,7 +115,7 @@ try {
   await page.locator('#knowledge-edit-delete').click();
   await page.locator('#knowledge-delete-submit').click();
   await page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
-  await page.waitForFunction(id => !document.querySelector(`.graph-node[data-node-id="${id}"]`), fixture.seeded.first.nodes[0].id);
+  await page.waitForFunction(id => !document.querySelector(`[data-result-node-id="${id}"]`), fixture.seeded.first.nodes[0].id);
   await page.reload(); await open();
   assert.equal(await card.count(), 0);
   const graph = await page.request.get(`${fixture.base}/api/listenings/${fixture.seeded.first.listeningId}/graph`);

@@ -31,7 +31,7 @@ async function rebuild() {
 }
 await rebuild();
 const watcher = watch('.', { recursive: true }, (_event, filename) => {
-  if (!filename || /^(?:node_modules|dist|data|\.git)\//.test(filename)) return;
+  if (!filename || /^(?:node_modules|dist|data|public\/vendor|\.git)\//.test(filename)) return;
   if (!/\.(?:mjs|js|ts|json|md)$/.test(filename)) return;
   clearTimeout(debounce); debounce = setTimeout(rebuild, 100);
 });

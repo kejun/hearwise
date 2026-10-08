@@ -1,5 +1,4 @@
-import { GRAPH_NODE, stableGraphLayout, routeGraphRelation, graphLayoutBounds, graphViewportColumns } from './knowledge-graph-layout.js';
-export { stableGraphLayout } from './knowledge-graph-layout.js';
+import { createGraphRenderer } from './knowledge-graph-renderer.js';
 
 // The graph is a presentation of persisted knowledge, never a source of new facts.
 export const KNOWLEDGE_VIEW_KEY = 'tongsheng:knowledge-view';
@@ -226,9 +225,8 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     const node = element('button', className, text); node.type = 'button'; if (id) node.id = id;
     node.addEventListener('click', action); return node;
   }
-  let listeningId = null, nodes = [], relations = [], positions = new Map(), snapshotStatus = {}, selected = null;
-  let scale = 1, width = 800, height = 420, columns = 5, active = false, generation = 0, detailGeneration = 0, trigger = null;
-  let originX = 0, originY = 0, offsetX = 0, offsetY = 0, autoFit = false, fullscreenLayoutKey = '';
+  let listeningId = null, nodes = [], relations = [], snapshotStatus = {}, selected = null;
+  let active = false, generation = 0, detailGeneration = 0, trigger = null, renderer = null, autoFit = true;
   let generated = false, generating = false, cancelling = false, recovering = false, progressTimer = null, localId = null, panelFingerprint = '', updates = 0;
   let terminalSyncing = false, lastTerminalSignature = null, retryIntent = null;
   const nodeElements = new Map(), edgeElements = new Map(), resultElements = new Map(), evidenceControllers = new Set();
@@ -237,33 +235,35 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const search = element('input'); search.type = 'search'; search.id = 'graph-search'; search.placeholder = '名称、别名或简介'; searchLabel.append(search);
   const typeLabel = element('label', 'graph-type-label', '类型');
   const type = element('select'); type.id = 'graph-type'; typeLabel.append(type);
-  const zoomOut = button('−', 'graph-zoom-out', () => zoom(scale / 1.2)); zoomOut.setAttribute('aria-label', '缩小图谱');
-  const zoomIn = button('+', 'graph-zoom-in', () => zoom(scale * 1.2)); zoomIn.setAttribute('aria-label', '放大图谱');
+  const zoomOut = button('−', 'graph-zoom-out', () => zoom(1 / 1.2)); zoomOut.setAttribute('aria-label', '缩小图谱');
+  const zoomIn = button('+', 'graph-zoom-in', () => zoom(1.2)); zoomIn.setAttribute('aria-label', '放大图谱');
   const fit = button('适应全部', 'graph-fit', () => fitView());
-  const local = button('一跳邻居', 'graph-local', () => { localId = localId ? null : selected?.kind === 'node' ? selected.id : null; render(); });
+  const local = button('一跳邻居', 'graph-local', () => { localId = localId ? null : selected?.kind === 'node' ? selected.id : null; render(); fitView(); });
   local.setAttribute('aria-pressed', 'false'); local.title = '选择节点后查看它和直接相连的节点';
-  const relayout = button('重新布局', 'graph-relayout', () => { arrangeForViewport(); render(); fitView(); });
+  const relayout = button('重新布局', 'graph-relayout', () => { renderer?.arrange(); render(); fitView(); });
   relayout.title = '按当前关系重新聚拢节点';
   const fullscreen = button('全屏', 'graph-fullscreen', () => setFullscreen(!savedView));
   fullscreen.setAttribute('aria-pressed', 'false'); fullscreen.setAttribute('aria-label', '全屏查看图谱');
   toolbar.append(searchLabel, typeLabel, zoomOut, zoomIn, fit, relayout, local, fullscreen);
   const count = element('p', 'graph-count'); count.id = 'graph-count'; count.setAttribute('role', 'status');
-  const viewport = element('div', 'graph-viewport'); viewport.id = 'graph-viewport'; viewport.tabIndex = 0;
-  viewport.setAttribute('aria-label', '知识图谱，可滚动浏览。使用缩放按钮或下方节点列表');
-  const canvas = element('div', 'graph-canvas'), world = element('div', 'graph-world');
+  const viewport = element('div', 'graph-viewport'); viewport.id = 'graph-viewport'; viewport.tabIndex = 0; viewport.setAttribute('role', 'group');
+  viewport.setAttribute('aria-label', '知识图谱：拖动节点或空白处，滚轮或双指缩放。也可用方向键平移、加减键缩放，或下方列表浏览');
+  const help = element('p', 'graph-help', '拖动节点调整位置 · 拖动空白平移 · 滚轮 / 双指缩放 · 选择节点突出直接关系');
+  help.id = 'graph-help'; viewport.setAttribute('aria-describedby', help.id);
+  const legend = element('div', 'graph-legend'); legend.setAttribute('aria-label', '图谱分组');
   const groupLabels = new Map(['connected', 'independent'].map(group => {
-    const label = element('h3', 'graph-group-label'); label.dataset.graphGroup = group; world.append(label); return [group, label];
+    const label = element('span', 'graph-group-label'); label.dataset.graphGroup = group; legend.append(label); return [group, label];
   }));
-  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.classList.add('graph-edges'); svg.setAttribute('aria-hidden', 'true');
-  const defs = doc.createElementNS(svg.namespaceURI, 'defs');
-  const marker = doc.createElementNS(svg.namespaceURI, 'marker');
-  for (const [key, value] of Object.entries({ id: 'graph-arrow', viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' })) marker.setAttribute(key, value);
-  const arrow = doc.createElementNS(svg.namespaceURI, 'path'); arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); marker.append(arrow); defs.append(marker); svg.append(defs);
-  world.append(svg); canvas.append(world); viewport.append(canvas);
   const noNodes = element('p', 'graph-empty', '尚无知识条目，最终原文出现后会持续整理。');
   const resultDetails = element('details', 'graph-results');
-  resultDetails.append(element('summary', '', '节点列表（可用键盘浏览）'));
+  resultDetails.append(element('summary', '', '节点列表'));
   const resultList = element('ul'); resultList.id = 'graph-results'; resultDetails.append(resultList);
+  const relationDetails = element('details', 'graph-relations');
+  relationDetails.append(element('summary', '', '关系列表与依据'));
+  const relationList = element('ul'); relationDetails.append(relationList);
+  resultDetails.setAttribute('aria-label', '节点列表，可用键盘浏览');
+  relationDetails.setAttribute('aria-label', '关系列表，包含方向、限定与依据');
+  const accessibleLists = element('div', 'graph-accessible'); accessibleLists.append(resultDetails, relationDetails);
   const refresh = button('刷新关系', 'graph-refresh', () => { void loader.refresh(); });
   refresh.title = '仅重新读取已保存的关系，不调用模型';
   const status = element('p', 'graph-status'); status.id = 'graph-status'; status.setAttribute('role', 'status');
@@ -296,36 +296,52 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   const close = button('关闭', 'graph-close', () => closeDetails()); panelHeader.append(panelTitle, close);
   const panelBody = element('div', 'graph-details-body'); panel.append(panelHeader, panelBody);
   const explorer = element('section', 'graph-explorer'); explorer.setAttribute('aria-label', '知识图谱');
-  explorer.append(toolbar, count, viewport, noNodes, notice, resultDetails, disclaimer, panel);
+  explorer.append(toolbar, count, legend, viewport, help, noNodes, notice, accessibleLists, disclaimer, panel);
   const fullscreenDialog = element('dialog', 'graph-fullscreen-dialog'); fullscreenDialog.id = 'graph-fullscreen-dialog';
   fullscreenDialog.setAttribute('aria-label', '全屏知识图谱');
   let savedView = null;
-  function layoutKey() {
-    return JSON.stringify([nodes.map(n => n.id).sort(), relations.filter(r => visibleAssertions(r).length)
-      .map(r => [r.subject_item_id, r.object_item_id].sort().join('\0')).sort()]);
-  }
-  function arrangeForViewport() {
-    columns = savedView ? graphViewportColumns(nodes, relations, viewport.clientWidth, viewport.clientHeight)
-      : Math.max(1, Math.floor((viewport.clientWidth - GRAPH_NODE.margin * 2 + GRAPH_NODE.stepX - GRAPH_NODE.width) / GRAPH_NODE.stepX) || 5);
-    fullscreenLayoutKey = layoutKey();
-    positions = new Map();
+  function ensureRenderer() {
+    if (!renderer && active && viewport.clientWidth && viewport.clientHeight) renderer = createGraphRenderer({ container: viewport,
+      onSelect: (kind, id) => openDetails(kind, id, viewport), onBackground: () => closeDetails(false),
+      onViewportChange: () => { autoFit = false; } });
+    return renderer;
   }
   function setFullscreen(value, restoreFocus = true) {
     if (value === Boolean(savedView)) return;
     if (value) {
-      savedView = { scale, columns, positions, autoFit, left: viewport.scrollLeft, top: viewport.scrollTop, overflow: doc.body.style.overflow };
+      savedView = { view: renderer?.save(), autoFit, overflow: doc.body.style.overflow };
       fullscreenDialog.append(explorer); fullscreenDialog.showModal(); doc.body.style.overflow = 'hidden';
       fullscreen.textContent = '退出全屏'; fullscreen.setAttribute('aria-label', '退出全屏图谱');
-      fullscreen.setAttribute('aria-pressed', 'true'); autoFit = true; arrangeForViewport(); render(); fullscreen.focus({ preventScroll: true });
+      fullscreen.setAttribute('aria-pressed', 'true'); autoFit = true; renderer?.resize(); renderer?.arrange(); render(); fitView(); fullscreen.focus({ preventScroll: true });
     } else {
       const previous = savedView; savedView = null;
       fullscreenDialog.close(); root.append(explorer); doc.body.style.overflow = previous.overflow;
       fullscreen.textContent = '全屏'; fullscreen.setAttribute('aria-label', '全屏查看图谱'); fullscreen.setAttribute('aria-pressed', 'false');
-      columns = previous.columns; positions = previous.positions; scale = previous.scale; autoFit = previous.autoFit; render();
-      viewport.scrollLeft = previous.left; viewport.scrollTop = previous.top;
+      autoFit = false; render(); renderer?.resize();
+      if (previous.view && !renderer?.restore(previous.view)) { renderer?.arrange(); render(); fitView(); }
+      else autoFit = previous.autoFit;
       if (restoreFocus) fullscreen.focus({ preventScroll: true });
     }
   }
+  // Native modal dialogs make the page inert, but Chromium can still move Tab
+  // focus to browser chrome. Keep keyboard graph navigation inside this view.
+  fullscreenDialog.addEventListener('keydown', event => {
+    if (event.key !== 'Tab' || !fullscreenDialog.open) return;
+    const controls = [...fullscreenDialog.querySelectorAll('button, input, select, summary, a[href], [tabindex]')]
+      .filter(control => {
+        if (control.disabled || control.hasAttribute('tabindex') && control.tabIndex < 0 || !control.getClientRects().length) return false;
+        // Closed details can retain layout boxes in Chromium, but their body
+        // controls are not tabbable. Keep only the summary for each closed level.
+        for (let parent = control.parentElement; parent && parent !== fullscreenDialog; parent = parent.parentElement) {
+          if (parent.tagName === 'DETAILS' && !parent.open && !parent.querySelector(':scope > summary')?.contains(control)) return false;
+        }
+        return true;
+      });
+    if (!controls.length) return;
+    const current = controls.indexOf(doc.activeElement);
+    const next = (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+    event.preventDefault(); controls[next].focus({ preventScroll: true });
+  });
   fullscreenDialog.addEventListener('cancel', event => { event.preventDefault(); setFullscreen(false); });
   fullscreenDialog.addEventListener('close', () => { if (savedView && !fullscreenDialog.open) setFullscreen(false); });
   jobPanel.append(status, progress, progressBar, round, actions, actionNotice, retryPanel, diagnostics, costs);
@@ -369,37 +385,13 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     }
     nodes = [...all.values()];
   }
-  function syncScale() {
-    const viewportWidth = viewport.clientWidth || 0, viewportHeight = viewport.clientHeight || 0;
-    offsetX = Math.max(0, (viewportWidth - width * scale) / 2);
-    offsetY = Math.max(0, (viewportHeight - height * scale) / 2);
-    world.style.transform = `translate(${offsetX - originX * scale}px, ${offsetY - originY * scale}px) scale(${scale})`;
-    canvas.style.width = `${Math.ceil(Math.max(viewportWidth, width * scale))}px`;
-    canvas.style.height = `${Math.ceil(Math.max(viewportHeight, height * scale))}px`;
-    root.classList.toggle('graph-zoom-small', scale < .6);
-  }
-  function zoom(next) {
-    autoFit = false;
-    const old = scale, centerX = viewport.scrollLeft + viewport.clientWidth / 2 - offsetX, centerY = viewport.scrollTop + viewport.clientHeight / 2 - offsetY;
-    scale = Math.min(2, Math.max(.01, next)); syncScale();
-    viewport.scrollLeft = centerX / old * scale + offsetX - viewport.clientWidth / 2;
-    viewport.scrollTop = centerY / old * scale + offsetY - viewport.clientHeight / 2;
-  }
-  function fitView() {
-    autoFit = true;
-    if (savedView) { arrangeForViewport(); render(); }
-    else applyFit();
-  }
-  function applyFit() {
-    if (!viewport.clientWidth || !viewport.clientHeight) return;
-    scale = Math.min(savedView ? 2 : 1, Math.max(.01, Math.min((viewport.clientWidth - 24) / width, (viewport.clientHeight - 24) / height)));
-    syncScale(); viewport.scrollLeft = 0; viewport.scrollTop = 0;
-  }
+  function zoom(factor) { autoFit = false; ensureRenderer()?.zoom(factor); }
+  function fitView() { autoFit = true; ensureRenderer()?.fit(); }
   function abortEvidence() { for (const c of evidenceControllers) c.abort(); evidenceControllers.clear(); }
   function closeDetails(restore = true) {
     panel.hidden = true; selected = null; panelFingerprint = ''; detailGeneration++; abortEvidence();
     if (restore && active) {
-      const target = trigger?.isConnected && !trigger.hidden ? trigger : search;
+      const target = trigger?.isConnected && !trigger.hidden && trigger.getClientRects().length ? trigger : viewport;
       target.focus({ preventScroll: true });
     }
     trigger = null; render();
@@ -449,7 +441,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     section.append(element('summary', '', `${visibleAssertions(relation).length ? '' : '历史表述 · '}${subject?.canonical_name || '知识'} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${relationLabel(relation)} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${object?.canonical_name || '知识'}`));
     const otherId = selected?.id === relation.subject_item_id ? relation.object_item_id : relation.subject_item_id;
     const other = nodes.find(n => n.id === otherId);
-    if (other) section.append(button(`查看知识：${other.canonical_name}`, '', event => openDetails('node', otherId, nodeElements.get(otherId) || event.currentTarget)));
+    if (other) section.append(button(`查看知识：${other.canonical_name}`, '', event => openDetails('node', otherId, nodeElements.get(otherId) || viewport)));
     for (const assertion of relation.assertions || []) {
       const article = element('article', 'graph-assertion');
       article.append(element('p', 'graph-statement', assertion.statement));
@@ -490,71 +482,54 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   }
   function render() {
     const filtered = filterGraph(nodes, relations, { query: search.value, type: type.value, localId });
-    if (savedView && autoFit && fullscreenLayoutKey !== layoutKey()) arrangeForViewport();
-    positions = stableGraphLayout(nodes, relations, positions, columns);
     const options = ['全部类型', ...new Set(nodes.map(knowledgeType).sort())];
     if (JSON.stringify([...type.options].map(o => o.textContent)) !== JSON.stringify(options)) {
       const value = type.value; type.replaceChildren(...options.map((label, index) => { const option = element('option', '', label); option.value = index ? label : ''; return option; })); type.value = value;
     }
     const shown = new Set(filtered.nodes.map(n => n.id));
-    const bounds = graphLayoutBounds(new Map(filtered.nodes.map(n => [n.id, positions.get(n.id)])));
-    ({ width, height, x: originX, y: originY } = bounds);
-    world.style.width = `${width + originX}px`; world.style.height = `${height + originY}px`;
-    svg.setAttribute('width', String(width + originX)); svg.setAttribute('height', String(height + originY));
+    const valid = filterGraph(nodes, relations);
+    const connected = new Set(valid.relations.flatMap(r => [r.subject_item_id, r.object_item_id]));
     for (const [group, label] of groupLabels) {
-      const items = filtered.nodes.map(n => positions.get(n.id)).filter(p => p.group === group);
-      label.hidden = !items.length;
-      if (items.length) {
-        label.textContent = `${group === 'connected' ? '有关联的条目' : '独立条目'} · ${items.length}`;
-        label.style.left = `${Math.min(...items.map(p => p.x))}px`; label.style.top = `${Math.min(...items.map(p => p.y)) - 28}px`;
-      }
+      const length = filtered.nodes.filter(n => connected.has(n.id) === (group === 'connected')).length;
+      label.hidden = !length; label.textContent = `${group === 'connected' ? '有关联的条目' : '独立条目'} · ${length}`;
     }
     const pendingEdges = relations.filter(r => visibleAssertions(r).length && (!nodes.some(n => n.id === r.subject_item_id) || !nodes.some(n => n.id === r.object_item_id))).length;
     count.textContent = `正在显示 ${filtered.nodes.length} / ${nodes.length} 个节点 · ${terminalSyncing ? '正在读取最新关系数量…' : `${filtered.relations.length} 条关系`}${localId ? ' · 一跳邻居' : ''}${pendingEdges ? ' · 部分关系等待节点同步' : ''}`;
     noNodes.hidden = filtered.nodes.length > 0;
     noNodes.textContent = nodes.length ? '没有符合筛选的知识。可清空搜索、选择全部类型或退出一跳视图。' : '尚无知识条目，最终原文出现后会持续整理。';
     local.disabled = !localId && selected?.kind !== 'node'; local.setAttribute('aria-pressed', String(Boolean(localId))); local.textContent = localId ? '退出一跳视图' : '一跳邻居';
+    const allIds = new Set(nodes.map(n => n.id));
+    for (const [id, entry] of resultElements) if (!allIds.has(id)) { entry.remove(); resultElements.delete(id); nodeElements.delete(id); }
     for (const node of nodes) {
-      let nodeButton = nodeElements.get(node.id), entry = resultElements.get(node.id);
-      if (!nodeButton) {
-        nodeButton = button('', '', event => openDetails('node', node.id, event.currentTarget), 'graph-node'); nodeButton.dataset.nodeId = node.id;
-        nodeButton.append(element('strong'), element('span', 'graph-node-type')); world.append(nodeButton); nodeElements.set(node.id, nodeButton);
-        entry = element('li'); const b = button('', '', event => openDetails('node', node.id, event.currentTarget), 'graph-result-button'); b.dataset.resultNodeId = node.id; entry.append(b); resultList.append(entry); resultElements.set(node.id, entry);
+      let entry = resultElements.get(node.id);
+      if (!entry) {
+        entry = element('li'); const b = button('', '', event => openDetails('node', node.id, event.currentTarget), 'graph-result-button');
+        b.dataset.resultNodeId = node.id; entry.append(b); resultList.append(entry); resultElements.set(node.id, entry); nodeElements.set(node.id, b);
       }
-      const p = positions.get(node.id); nodeButton.style.left = `${p.x}px`; nodeButton.style.top = `${p.y}px`;
-      nodeButton.dataset.nodeGroup = p.group;
-      nodeButton.firstChild.textContent = node.canonical_name; nodeButton.lastChild.textContent = knowledgeType(node);
-      nodeButton.title = `${node.canonical_name} · ${knowledgeType(node)}`;
-      nodeButton.setAttribute('aria-label', `查看${knowledgeType(node)}：${node.canonical_name}`);
-      nodeButton.setAttribute('aria-pressed', String(selected?.kind === 'node' && selected.id === node.id));
-      nodeButton.hidden = !shown.has(node.id); entry.hidden = !shown.has(node.id); entry.firstChild.textContent = `${node.canonical_name} · ${knowledgeType(node)}`;
+      entry.hidden = !shown.has(node.id); entry.firstChild.textContent = `${node.canonical_name} · ${knowledgeType(node)}`;
+      entry.firstChild.setAttribute('aria-pressed', String(selected?.kind === 'node' && selected.id === node.id));
+      entry.firstChild.setAttribute('aria-label', `查看${knowledgeType(node)}：${node.canonical_name}`);
     }
     const visibleEdges = new Set(filtered.relations.map(r => r.id));
-    for (const [id, entry] of edgeElements) if (!visibleEdges.has(id)) { entry.line.remove(); entry.button.remove(); edgeElements.delete(id); }
-    const pairLanes = new Map(), pairCounts = new Map();
-    const pairKey = r => [r.subject_item_id, r.object_item_id].sort().join('\0');
-    for (const relation of filtered.relations) pairCounts.set(pairKey(relation), (pairCounts.get(pairKey(relation)) || 0) + 1);
-    for (const relation of [...filtered.relations].sort((a, b) => a.id.localeCompare(b.id))) {
+    for (const [id, entry] of edgeElements) if (!visibleEdges.has(id)) { entry.remove(); edgeElements.delete(id); }
+    for (const relation of filtered.relations) {
       let entry = edgeElements.get(relation.id);
       if (!entry) {
-        const line = doc.createElementNS(svg.namespaceURI, 'path'); svg.append(line);
-        const b = button('', '', event => openDetails('relation', relation.id, event.currentTarget), 'graph-edge-label'); b.dataset.relationId = relation.id; world.append(b);
-        entry = { line, button: b }; edgeElements.set(relation.id, entry);
+        entry = element('li'); const b = button('', '', event => openDetails('relation', relation.id, event.currentTarget), 'graph-result-button');
+        b.dataset.relationId = relation.id; entry.append(b); relationList.append(entry); edgeElements.set(relation.id, entry);
       }
-      const pair = pairKey(relation);
-      const lane = pairLanes.get(pair) || 0; pairLanes.set(pair, lane + 1);
-      const route = routeGraphRelation(relation, positions, lane, pairCounts.get(pair));
-      entry.line.setAttribute('d', route?.path || ''); entry.button.hidden = !route;
-      if (SYMMETRIC.has(relation.predicate)) entry.line.removeAttribute('marker-end'); else entry.line.setAttribute('marker-end', 'url(#graph-arrow)');
-      entry.button.textContent = relationLabel(relation);
-      if (route) {
-        entry.button.style.left = `${route.label.x}px`; entry.button.style.top = `${route.label.y}px`;
-        entry.button.style.maxWidth = `${route.label.width}px`;
-      }
-      const adjacent = selected?.kind === 'node' && [relation.subject_item_id, relation.object_item_id].includes(selected.id);
-      entry.line.classList.toggle('graph-edge-adjacent', adjacent);
-      entry.button.title = relationLabel(relation); entry.button.setAttribute('aria-label', `查看关系依据：${nodes.find(n => n.id === relation.subject_item_id)?.canonical_name}，${relationLabel(relation)}，${nodes.find(n => n.id === relation.object_item_id)?.canonical_name}`);
-      entry.button.classList.toggle('graph-adjacent', selected?.kind === 'node' && [relation.subject_item_id, relation.object_item_id].includes(selected.id));
+      const subject = nodes.find(n => n.id === relation.subject_item_id), object = nodes.find(n => n.id === relation.object_item_id);
+      const label = `${subject?.canonical_name} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${relationLabel(relation)} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${object?.canonical_name}`;
+      entry.firstChild.textContent = label; entry.firstChild.setAttribute('aria-label', `查看关系依据：${label}`);
+      entry.firstChild.setAttribute('aria-pressed', String(selected?.kind === 'relation' && selected.id === relation.id));
+    }
+    resultDetails.hidden = !filtered.nodes.length; relationDetails.hidden = !filtered.relations.length;
+    const engine = ensureRenderer();
+    if (engine) {
+      const change = engine.update(nodes.map(n => ({ ...n, typeLabel: knowledgeType(n) })), valid.relations.map(r => ({ ...r,
+        label: relationLabel(r), symmetric: SYMMETRIC.has(r.predicate), qualified: visibleAssertions(r).some(a => assertionQualifiers(a).length) })),
+      { visibleNodes: filtered.nodes, visibleRelations: filtered.relations, selection: selected });
+      if (autoFit && (change.structural || change.filtered)) engine.fit();
     }
     generate.disabled = generating || cancelling || recovering || terminalSyncing || !listeningId || snapshotStatus.state !== 'waiting_key' && graphWorkActive(snapshotStatus);
     generate.hidden = ['failed', 'partial', 'invalid'].includes(snapshotStatus.state);
@@ -574,7 +549,6 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     generate.textContent = generating ? '正在启动…' : recovering ? '正在确认服务器状态…' : ['failed', 'invalid'].includes(snapshotStatus.state) ? '重试未完成的关系' : snapshotStatus.state === 'partial' ? '检查新增或变化的内容' : generated ? '继续关系整理' : '生成本次收听的关系';
     loader.setPolling(!generating && !cancelling && graphWorkActive(snapshotStatus) && snapshotStatus.state !== 'waiting_key' && snapshotStatus.waitReason !== 'waiting_key' && snapshotStatus.keyAvailable !== false);
     renderProgress();
-    if (savedView && autoFit) applyFit(); else syncScale();
     renderDetails();
   }
   function renderProgress() {
@@ -640,11 +614,15 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   }
   function startGeneration() { if (!generate.hidden) return changeGeneration('POST'); }
   function cancelGeneration() { return changeGeneration('DELETE'); }
-  search.addEventListener('input', render); type.addEventListener('change', render);
-  viewport.addEventListener('click', event => { if ([viewport, canvas, world, svg].includes(event.target)) closeDetails(); });
+  const changeFilter = () => { render(); fitView(); };
+  search.addEventListener('input', changeFilter); type.addEventListener('change', changeFilter);
   root.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !panel.hidden) { event.preventDefault(); event.stopPropagation(); closeDetails(); }
-    if (event.target === viewport && ['+', '-', '0'].includes(event.key)) { event.preventDefault(); if (event.key === '0') fitView(); else zoom(event.key === '+' ? scale * 1.2 : scale / 1.2); }
+    if (event.target === viewport && ['+', '=', '-', '0', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+      event.preventDefault(); if (event.key === '0') fitView();
+      else if (event.key.startsWith('Arrow')) { autoFit = false; renderer?.pan(event.key === 'ArrowLeft' ? 50 : event.key === 'ArrowRight' ? -50 : 0, event.key === 'ArrowUp' ? 50 : event.key === 'ArrowDown' ? -50 : 0); }
+      else zoom(event.key === '-' ? 1 / 1.2 : 1.2);
+    }
   });
   const reconcile = () => { if (doc.visibilityState !== 'hidden') void loader.refresh(); };
   doc.defaultView?.addEventListener('online', reconcile);
@@ -658,8 +636,8 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       const size = `${viewport.clientWidth},${viewport.clientHeight}`;
       if (size === lastViewportSize) return;
       lastViewportSize = size;
-      if (savedView && autoFit) { arrangeForViewport(); render(); }
-      else syncScale();
+      ensureRenderer()?.resize();
+      if (autoFit) { if (savedView) renderer?.arrange(); render(); fitView(); }
     });
   }) : null;
   viewportObserver?.observe(viewport);
@@ -668,14 +646,14 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     select(id) {
       if (id === listeningId) return;
       deletedNodes.clear();
-      setFullscreen(false, false); generation++; actionNotice.textContent = ''; terminalSyncing = false; lastTerminalSignature = null; retryIntent = null; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; positions = new Map(); snapshotStatus = {}; generated = generating = cancelling = recovering = false;
+      setFullscreen(false, false); generation++; actionNotice.textContent = ''; terminalSyncing = false; lastTerminalSignature = null; retryIntent = null; abortEvidence(); closeDetails(false); listeningId = id; nodes = []; relations = []; snapshotStatus = {}; generated = generating = cancelling = recovering = false;
       for (const b of nodeElements.values()) b.remove(); nodeElements.clear();
       for (const e of resultElements.values()) e.remove(); resultElements.clear();
-      search.value = ''; type.value = ''; localId = null; scale = 1; autoFit = false; updates = 0; notice.textContent = ''; status.textContent = graphStatusText();
+      search.value = ''; type.value = ''; localId = null; autoFit = true; updates = 0; notice.textContent = ''; status.textContent = graphStatusText();
       viewport.scrollLeft = viewport.scrollTop = 0; loader.select(id); render();
     },
     setNodes(items) { mergeNodes(items); render(); return [...nodes]; },
-    setActive(value) { if (!value) setFullscreen(false, false); active = value; root.hidden = !value; renderProgress(); },
+    setActive(value) { if (!value) setFullscreen(false, false); active = value; root.hidden = !value; if (value) { render(); renderer?.resize(); if (autoFit) fitView(); } renderProgress(); },
     invalidate(id, revision) { loader.invalidate(id, revision); },
     refresh() { return loader.refresh(); },
     setProcessing(value = {}) {
@@ -696,8 +674,8 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     highlight(id, follow) {
       if (!active) return;
       updates++; notice.textContent = `已收到 ${updates} 次知识更新`;
-      if (follow) { const node = nodeElements.get(id); node?.classList.remove('graph-node-updated'); if (node) { void node.offsetWidth; node.classList.add('graph-node-updated'); } }
+      if (follow) { renderer?.highlight(id); const node = nodeElements.get(id); node?.classList.remove('graph-node-updated'); if (node) { void node.offsetWidth; node.classList.add('graph-node-updated'); } }
     },
-    destroy() { setFullscreen(false, false); generation++; viewportObserver?.disconnect(); if (resizeFrame != null) doc.defaultView.cancelAnimationFrame(resizeFrame); doc.defaultView?.removeEventListener('online', reconcile); doc.removeEventListener?.('visibilitychange', reconcile); clearTimeout(progressTimer); abortEvidence(); loader.stop(); root.replaceChildren(); }
+    destroy() { setFullscreen(false, false); generation++; viewportObserver?.disconnect(); if (resizeFrame != null) doc.defaultView.cancelAnimationFrame(resizeFrame); doc.defaultView?.removeEventListener('online', reconcile); doc.removeEventListener?.('visibilitychange', reconcile); clearTimeout(progressTimer); abortEvidence(); loader.stop(); renderer?.destroy(); root.replaceChildren(); }
   };
 }

@@ -4,3 +4,4 @@ data/
 dist/
 test-evidence/
 browser-evidence/
+public/vendor/
