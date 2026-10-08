@@ -37,7 +37,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/style.css"><title>关系整理进度验证</title><body style="padding:20px;background:#f6f7f1"><main style="max-width:960px;margin:auto"><h1 style="font-size:20px;color:#315f4d">本次收听 · 知识图谱</h1><p>浏览器测试示例，使用本地模拟状态</p><div id="graph" class="knowledge-graph"></div></main><script type="module">import { createKnowledgeGraph } from '/knowledge-graph.js'; window.key=''; window.started=[]; window.required=0; window.graph=createKnowledgeGraph({root:document.querySelector('#graph'), getKey:()=>window.key,onRequireKey:()=>window.required++,onStarted:id=>window.started.push(id),loadSegment:async()=>({}),locateSegment:()=>{}}); graph.select('a'); graph.setActive(true);</script></body></html>`);
   }
-  if (['/style.css', '/knowledge-graph.js', '/knowledge-graph-layout.js'].includes(req.url)) {
+  if (['/style.css', '/knowledge-graph.js', '/knowledge-graph-layout.js', '/knowledge-graph-renderer.js', '/vendor/cytoscape.js'].includes(req.url)) {
     res.writeHead(200, { 'content-type': req.url.endsWith('css') ? 'text/css' : 'text/javascript' });
     return res.end(await readFile(new URL(`../public${req.url}`, import.meta.url)));
   }
@@ -145,7 +145,7 @@ try {
   await page.locator('#graph-round').filter({ hasText: '本轮请求 14 次' }).waitFor();
   assert.match(await page.locator('#graph-progress').textContent(), /4 \/ 10.*剩余 6/);
   assert.match(await page.locator('#graph-usage').textContent(), /63 次关系请求.*59 次请求用量未知/);
-  await page.locator('[data-relation-id]').first().waitFor();
+  await page.waitForFunction(() => document.querySelector('#graph-viewport')?._cyreg?.cy.edges(':visible').length === 1);
   assert.equal(await page.locator('[data-relation-id]').count(), 1);
   await page.evaluate(() => window.graph.setProcessing({ state: 'not_generated', enabled: false, round: null }));
   assert.match(await page.locator('#graph-status').textContent(), /正在整理关系/);
@@ -176,7 +176,7 @@ try {
   await settledContinuation();
   assert.equal(await page.locator('#graph-generate').isEnabled(), true);
   assert.equal(await page.locator('#graph-cancel').isHidden(), true);
-  await page.locator('[data-relation-id]').first().waitFor();
+  await page.waitForFunction(() => document.querySelector('#graph-viewport')?._cyreg?.cy.edges(':visible').length === 1);
   assert.equal(await page.locator('[data-relation-id]').count(), 1);
   await screenshot('relation-progress-desktop-cancelled.png');
   const terminalRound = await page.locator('#graph-round').textContent();
@@ -212,13 +212,13 @@ try {
   holdPost = deferred(); const beforeLate = counters.POST;
   await page.locator('#graph-generate').click(); await until(() => counters.POST > beforeLate);
   await page.evaluate(() => window.graph.select('b'));
-  await page.locator('[data-node-id="other"]').waitFor();
+  await page.waitForFunction(() => document.querySelector('#graph-viewport')?._cyreg?.cy.getElementById('other').visible());
   const finishedStart = page.waitForEvent('requestfinished', request => request.method() === 'POST');
   holdPost.resolve(); holdPost = null;
   await finishedStart; await page.evaluate(() => new Promise(requestAnimationFrame));
   await page.locator('#graph-status').filter({ hasText: '尚未生成' }).waitFor();
   assert.equal(await page.evaluate(() => window.started.length), startedEvents);
-  assert.equal(await page.locator('[data-node-id="kodak"]').count(), 0);
+  assert.equal(await page.locator('[data-result-node-id="kodak"]').count(), 0);
   assert.equal(await page.locator('#graph-cancel').isHidden(), true);
   await page.evaluate(() => window.graph.select('a'));
   await page.locator('#graph-cancel').waitFor();
@@ -313,7 +313,7 @@ try {
   savedRelations.a = [relation]; revision++;
   await page.evaluate(value => { window.graph.setProcessing(value); window.graph.setProcessing(value); }, statuses.a);
   await page.locator('#graph-count').filter({ hasText: '1 条关系' }).waitFor();
-  await page.locator('[data-relation-id="edge"]').waitFor();
+  await page.waitForFunction(() => document.querySelector('#graph-viewport')?._cyreg?.cy.getElementById('relation:edge').visible());
   staleZeroRead.resolve(); await page.evaluate(() => new Promise(requestAnimationFrame));
   assert.match(await page.locator('#graph-count').textContent(), /1 条关系/);
   assert.equal(counters.POST, beforeFinalSnapshotPosts);
