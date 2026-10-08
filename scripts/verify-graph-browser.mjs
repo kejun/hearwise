@@ -73,8 +73,12 @@ try {
     await page.waitForFunction(() => {
       const viewport = document.querySelector('#graph-viewport'), cy = viewport?._cyreg?.cy;
       if (!cy || !cy.nodes(':visible').length) return false;
-      const bounds = cy.elements(':visible').renderedBoundingBox({ includeLabels: true, includeOverlays: false });
       const width = cy.width(), height = cy.height();
+      // Playwright's resize can resolve before either ResizeObserver runs.
+      // An old fitted graph must not pass against Cytoscape's old cached size.
+      // The viewport has no padding; client dimensions exclude its CSS border.
+      if (width !== viewport.clientWidth || height !== viewport.clientHeight) return false;
+      const bounds = cy.elements(':visible').renderedBoundingBox({ includeLabels: true, includeOverlays: false });
       return Math.abs((bounds.x1 + bounds.x2 - width) / 2) < 2 && Math.abs((bounds.y1 + bounds.y2 - height) / 2) < 2 &&
         bounds.x1 >= -1 && bounds.x2 <= width + 1 && bounds.y1 >= -1 && bounds.y2 <= height + 1 &&
         Math.max(bounds.w / width, bounds.h / height) > .7 &&
