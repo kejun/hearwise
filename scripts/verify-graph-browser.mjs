@@ -70,7 +70,12 @@ try {
     return ready.jsonValue();
   };
   const assertFullscreenFit = async () => {
-    await page.waitForFunction(() => {
+    const expectedViewport = page.viewportSize();
+    await settle();
+    await page.waitForFunction(expected => {
+      // The browser can acknowledge setViewportSize before the window and both
+      // graph observers have adopted it. Check the requested size end to end.
+      if (innerWidth !== expected.width || innerHeight !== expected.height) return false;
       const viewport = document.querySelector('#graph-viewport'), cy = viewport?._cyreg?.cy;
       if (!cy || !cy.nodes(':visible').length) return false;
       const width = cy.width(), height = cy.height();
@@ -83,7 +88,7 @@ try {
         bounds.x1 >= -1 && bounds.x2 <= width + 1 && bounds.y1 >= -1 && bounds.y2 <= height + 1 &&
         Math.max(bounds.w / width, bounds.h / height) > .7 &&
         viewport.scrollWidth <= viewport.clientWidth + 1 && viewport.scrollHeight <= viewport.clientHeight + 1;
-    });
+    }, expectedViewport);
     await assertGroups();
   };
   const assertNeighborFocus = async id => {
@@ -369,6 +374,12 @@ try {
     if (cycle === 0) {
       const tappedView = await view();
       await page.setViewportSize({ width: 1180, height: 880 });
+      await page.waitForFunction(previous => {
+        const cy = document.querySelector('#graph-viewport')?._cyreg?.cy;
+        if (!cy) return false;
+        const pan = cy.pan();
+        return cy.zoom() !== previous.zoom || pan.x !== previous.pan.x || pan.y !== previous.pan.y;
+      }, tappedView);
       await assertFullscreenFit();
       const resizedView = await view();
       assert.notDeepEqual({ zoom: resizedView.zoom, pan: resizedView.pan }, { zoom: tappedView.zoom, pan: tappedView.pan }, 'a node tap leaves auto-fit active for a subsequent fullscreen resize');
