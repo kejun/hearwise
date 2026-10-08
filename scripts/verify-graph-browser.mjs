@@ -321,11 +321,18 @@ try {
   assert.ok(Math.abs(afterPan.pan.x - beforePan.pan.x - background.dx) < 4, 'background drag pans horizontally');
   assert.ok(Math.abs(afterPan.pan.y - beforePan.pan.y - background.dy) < 4, 'background drag pans vertically');
   assert.deepEqual(afterPan.positions, beforePan.positions, 'background pan leaves model positions unchanged');
+  // Cytoscape ignores wheel zoom for 250 ms after document scroll. Allow that
+  // input debounce to settle, then use a real multi-event wheel gesture: its
+  // first four deltas are deliberately clamped while the device is calibrated.
+  await page.waitForTimeout(300);
   const viewportBox = await graph().boundingBox(), beforeWheel = (await view()).zoom;
   await page.mouse.move(viewportBox.x + viewportBox.width / 2, viewportBox.y + viewportBox.height / 2);
-  await page.mouse.wheel(0, -180);
+  for (let step = 0; step < 8; step++) {
+    await page.mouse.wheel(0, -180);
+    await page.waitForTimeout(20);
+  }
   await page.waitForFunction(previous => document.querySelector('#graph-viewport')._cyreg.cy.zoom() > previous * 1.05, beforeWheel);
-  // Cytoscape intentionally coalesces wheel events for a short interval.
+  // Let the renderer leave its 150 ms wheel-gesture drawing mode.
   await page.waitForTimeout(200);
   assert.deepEqual((await view()).positions, beforePan.positions, 'wheel zoom leaves model positions unchanged');
 
