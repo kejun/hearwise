@@ -1,5 +1,9 @@
 # 实时收听 → 字幕定稿 → 翻译 → 知识抽取：现状行为模型
 
+> 报告编号：realtime-caption-translation-knowledge--20261004T082718Z。生成日期：2026-10-04（Asia/Shanghai；原报告未记载生成时分秒）。保存路径：`docs/behavior-models/realtime-caption-translation-knowledge--20261004T082718Z.md`。历史参考：本文件为旧报告归档。
+>
+> 命名整理说明（2026-10-09）：文件名已符合与新报告一致的 `<flow>--<YYYYMMDDTHHmmssZ>.md` 格式，故保留原流程名和时间标识 `20261004T082718Z`，不伪造新的生成时间。该标识沿用原文件名，不作为生成时分秒已验证的证据。下方原始正文保持不变；其范围差异与待修正结论见[本次对比报告](knowledge-organize-comparison--20261008T224028Z.md)。
+
 > **范围**：入口为浏览器 `WS /ws` 的一次收听会话（`start` → ASR 上游 → 字幕定稿 → 翻译 → 知识抽取）。相关代码：`server.mjs`（组合根、`/ws` 网关、`queueTranslation`、`executeKnowledge`）、`knowledge-queue.mjs`、`knowledge-workflow.mjs`、`storage.mjs`、`src/server/**`（Effect 运行时与 `execution_trace` 采集）。**只覆盖这一条实时链路**，不含 `preview`（`/api/translate` 临时翻译）、播报（`/ws/tts`）、关系图谱（`relations*`）。
 > **代码版本**：分析时仓库 HEAD = `e636cac`（工作区干净，无未提交改动）。
 > **日志**：`/tmp/hearwise-real.log`，312 行 `execution_trace`（另 1 行为 `tee` 截断半行，见「完整性」），单一进程 `287899ef-3296-4cd0-b76f-8267c883ccfb`，时间窗 **2026-10-04 13:58:48.439 — 13:59:46.215（Asia/Shanghai, GMT+8）**，约 57.8s。日志内构建 `git_sha=59c4be24…`、`instrumentation_version=2`。
