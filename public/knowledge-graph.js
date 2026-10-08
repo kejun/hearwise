@@ -323,6 +323,17 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       if (restoreFocus) fullscreen.focus({ preventScroll: true });
     }
   }
+  // Native modal dialogs make the page inert, but Chromium can still move Tab
+  // focus to browser chrome. Keep keyboard graph navigation inside this view.
+  fullscreenDialog.addEventListener('keydown', event => {
+    if (event.key !== 'Tab' || !fullscreenDialog.open) return;
+    const controls = [...fullscreenDialog.querySelectorAll('button, input, select, summary, a[href], [tabindex]')]
+      .filter(control => !control.disabled && control.tabIndex >= 0 && control.getClientRects().length);
+    const first = controls[0], last = controls.at(-1);
+    if (event.shiftKey && doc.activeElement === first || !event.shiftKey && doc.activeElement === last) {
+      event.preventDefault(); (event.shiftKey ? last : first)?.focus({ preventScroll: true });
+    }
+  });
   fullscreenDialog.addEventListener('cancel', event => { event.preventDefault(); setFullscreen(false); });
   fullscreenDialog.addEventListener('close', () => { if (savedView && !fullscreenDialog.open) setFullscreen(false); });
   jobPanel.append(status, progress, progressBar, round, actions, actionNotice, retryPanel, diagnostics, costs);
