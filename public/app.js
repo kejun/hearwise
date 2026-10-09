@@ -36,7 +36,9 @@ const els = {
   sizeSlider: $('translation-size'), captionMode: $('caption-mode'),
   dataExport: $('data-export'), dataImport: $('data-import'), dataImportFile: $('data-import-file'),
   dataImportReview: $('data-import-review'), dataImportSummary: $('data-import-summary'),
-  dataImportConfirm: $('data-import-confirm'), dataTransferStatus: $('data-transfer-status')
+  dataImportConfirm: $('data-import-confirm'), dataTransferStatus: $('data-transfer-status'),
+  dataImportAppend: $('data-import-append'), dataImportModeNote: $('data-import-mode-note'),
+  dataImportSkipped: $('data-import-skipped'), dataImportSkippedList: $('data-import-skipped-list')
 };
 
 initTranscriptVisibility(document);
@@ -93,6 +95,10 @@ let lastTranslationAt = 0;
 let startAfterSave = false;
 let testController;
 let pendingImportToken = null;
+let pendingImportReview = null;
+let importRequestVersion = 0;
+let importCommitting = false;
+let reloadAfterImport = false;
 let listeningId = null;
 let listeningGeneration = 0;
 let detail = null;
@@ -503,6 +509,11 @@ function clearError(source) {
 els.audioInput.addEventListener('change', () => { clearError(); setPhase(phase); });
 
 function openSettings(continueAfterSave = false) {
+  if (!importCommitting) {
+    resetImportReview();
+    els.dataImportAppend.checked = false;
+    updateImportMode();
+  }
   startAfterSave = continueAfterSave;
   if (!els.apiKey.value) activateTab(0);
   els.modal.hidden = false;
@@ -523,6 +534,9 @@ function resetConnectionTest() {
 }
 
 function closeSettings() {
+  if (importCommitting) return;
+  if (reloadAfterImport) { window.location.reload(); return; }
+  resetImportReview();
   // Closing without saving must not turn an experimental path on (or alter a running epoch).
   speechEls.incremental.checked = speechPreferences.incremental === true;
   if (speechPreview) speech.stop();
@@ -571,9 +585,12 @@ function setDataTransferStatus(message, failed = false) {
   els.dataTransferStatus.classList.toggle('error', failed);
 }
 function resetImportReview() {
+  importRequestVersion++;
   pendingImportToken = null;
+  pendingImportReview = null;
   els.dataImportReview.hidden = true;
   els.dataImportSummary.textContent = '';
+  els.dataImportConfirm.disabled = true;
 }
 els.dataExport.addEventListener('click', () => {
   setDataTransferStatus('正在生成备份…');
@@ -597,60 +614,121 @@ els.dataImport.addEventListener('click', () => {
   }
   els.dataImportFile.click();
 });
+function updateImportMode() {
+  const append = els.dataImportAppend.checked;
+  els.dataImportModeNote.textContent = append
+    ? '保留当前数据，仅追加 ID 不存在的完整收听记录；已有记录整条跳过，不同步内容。已删除的收听若仍在备份中，会重新追加。'
+    : '当前历史收听、知识条目和知识图谱将被备份完整替换。导入前会自动备份当前数据库。';
+  els.dataImportConfirm.textContent = append ? '确认追加' : '确认覆盖';
+  els.dataImportConfirm.classList.toggle('data-append', append);
+}
+function showImportReview(result) {
+  pendingImportToken = result.token;
+  pendingImportReview = result;
+  els.dataImportSummary.textContent = `数据库版本：${result.databaseVersion} · 当前收听：${result.currentCount} 条 · 备份收听：${result.listeningCount} 条 · ` +
+    (result.mode === 'append' ? `追加：新增 ${result.addedCount} 条，跳过 ${result.skippedCount} 条` : '覆盖：完整替换当前数据');
+  els.dataImportSkipped.hidden = result.mode !== 'append' || !result.skippedCount;
+  els.dataImportSkippedList.replaceChildren(...result.skipped.map(row => {
+    const li = document.createElement('li'); li.textContent = row.title || '未命名收听'; return li;
+  }));
+  els.dataImportReview.hidden = false;
+  els.dataImportConfirm.disabled = result.mode === 'append' && !result.addedCount;
+  setDataTransferStatus(result.mode === 'append' && !result.addedCount
+    ? '没有可追加的数据，已有记录保持不变。' : '备份验证通过。导入前会自动备份当前数据库；未完成的任务需手动重试。');
+}
+async function refreshImportPreview() {
+  if (!pendingImportToken || importCommitting) return;
+  const token = pendingImportToken, version = ++importRequestVersion;
+  pendingImportReview = null;
+  els.dataImportConfirm.disabled = true;
+  els.dataImportSkipped.hidden = true;
+  els.dataImportSummary.textContent = '正在重新计算导入预览…';
+  setDataTransferStatus('正在重新计算导入预览…');
+  try {
+    const response = await fetch('/api/data/import/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, mode: els.dataImportAppend.checked ? 'append' : 'replace' })
+    });
+    const result = await response.json();
+    if (version !== importRequestVersion) return;
+    if (!response.ok) throw new Error(result.error || '无法预览备份');
+    showImportReview(result);
+  } catch (error) {
+    if (version === importRequestVersion) setDataTransferStatus(error.message || '无法预览备份，请重新选择文件。', true);
+  }
+}
+els.dataImportAppend.addEventListener('change', () => { updateImportMode(); void refreshImportPreview(); });
 els.dataImportFile.addEventListener('change', async () => {
   const file = els.dataImportFile.files?.[0];
   if (!file) return;
   resetImportReview();
+  const version = importRequestVersion;
   setDataTransferStatus('正在验证备份…');
   els.dataImport.disabled = true;
+  els.dataImportAppend.disabled = true;
   try {
-    const response = await fetch('/api/data/import/validate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/vnd.sqlite3' },
-      body: file
+    const mode = els.dataImportAppend.checked ? 'append' : 'replace';
+    const response = await fetch(`/api/data/import/validate?mode=${mode}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/vnd.sqlite3' }, body: file
     });
     const result = await response.json();
+    if (version !== importRequestVersion) return;
     if (!response.ok) throw new Error(result.error || '备份验证失败');
-    pendingImportToken = result.token;
-    els.dataImportSummary.textContent = `数据库版本：${result.databaseVersion} · 历史收听：${result.listeningCount} 条`;
-    els.dataImportReview.hidden = false;
-    setDataTransferStatus('备份验证通过。');
+    showImportReview(result);
   } catch (error) {
-    setDataTransferStatus(error.message || '备份验证失败，请重新选择文件。', true);
+    if (version === importRequestVersion) setDataTransferStatus(error.message || '备份验证失败，请重新选择文件。', true);
   } finally {
     els.dataImport.disabled = false;
+    els.dataImportAppend.disabled = false;
     els.dataImportFile.value = '';
   }
 });
 els.dataImportConfirm.addEventListener('click', async () => {
-  if (!pendingImportToken) return;
+  if (!pendingImportToken || !pendingImportReview || importCommitting) return;
   if (phase !== 'idle') {
     setDataTransferStatus('当前正在收听，请结束当前收听后再导入数据。', true);
     return;
   }
-  const confirmed = window.confirm('导入 Hearwise 数据？\n\n当前历史收听、知识条目和知识图谱将被备份文件完整替换，不会自动合并。\n\nHearwise 会先自动备份当前数据库。');
+  const review = pendingImportReview;
+  const confirmed = window.confirm(review.mode === 'append'
+    ? `追加 Hearwise 数据？\n\n将新增 ${review.addedCount} 条收听，跳过 ${review.skippedCount} 条已有收听。已有记录及其内容保持不变。\n\n导入前会自动备份当前数据库。`
+    : `覆盖 Hearwise 数据？\n\n当前 ${review.currentCount} 条收听及关联知识数据将被备份中的 ${review.listeningCount} 条收听完整替换，不会自动合并。\n\n导入前会自动备份当前数据库。`);
   if (!confirmed) return;
+  importCommitting = true;
   els.dataImportConfirm.disabled = true;
   els.dataImport.disabled = true;
   els.dataExport.disabled = true;
+  els.dataImportAppend.disabled = true;
   setDataTransferStatus('正在导入并校验数据…');
   try {
     const response = await fetch('/api/data/import/commit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: pendingImportToken })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: pendingImportToken, mode: review.mode, previewToken: review.previewToken })
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '导入失败');
-    pendingImportToken = null;
-    els.dataImportReview.hidden = true;
-    setDataTransferStatus(`数据导入成功，当前数据已自动备份为 ${result.safetyBackup}。正在刷新…`);
-    setTimeout(() => window.location.reload(), 500);
+    if (!response.ok) {
+      if (result.code === 'IMPORT_PREVIEW_STALE') {
+        importCommitting = false;
+        await refreshImportPreview();
+        throw new Error('当前数据或导入方式已变化，预览已刷新，请核对后再次确认。');
+      }
+      throw new Error(result.error || '导入失败');
+    }
+    resetImportReview();
+    const summary = result.mode === 'append' ? `追加完成：新增 ${result.addedCount} 条，跳过 ${result.skippedCount} 条。` : '数据覆盖完成。';
+    setDataTransferStatus(result.changed ? `${summary}当前数据已自动备份为 ${result.safetyBackup}。请核对后关闭设置。` : '没有可追加的数据，已有记录保持不变。');
+    // Keep the result and backup name visible. Fetch fresh lists; reload on close
+    // to clear any selected transcript/graph after a replacement.
+    if (result.changed) reloadAfterImport = true;
+    await reloadHistory().catch(() => {});
   } catch (error) {
-    setDataTransferStatus(error.message || '导入失败，当前数据未被替换。', true);
-    els.dataImportConfirm.disabled = false;
+    setDataTransferStatus(error.message || '导入结果尚未确认，请刷新后核对，避免重复提交。', true);
+  } finally {
+    importCommitting = false;
+    els.dataImportConfirm.disabled = !pendingImportReview || (pendingImportReview.mode === 'append' && !pendingImportReview.addedCount);
     els.dataImport.disabled = false;
     els.dataExport.disabled = false;
+    els.dataImportAppend.disabled = false;
   }
 });
 

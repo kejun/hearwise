@@ -16,7 +16,7 @@ import { createSpeechService } from './speech-service.mjs';
 import { createProviderAdmission } from './provider-admission.mjs';
 import { createRelationScheduler } from './relation-queue.mjs';
 import { createRelationWorkflow } from './relation-workflow.mjs';
-import { DataTransferError, MAX_IMPORT_BYTES, exportDatabase, inspectDatabase, restoreDatabase } from './data-transfer.mjs';
+import { DataTransferError, MAX_IMPORT_BYTES, exportDatabase, restoreDatabase, previewImport, appendDatabase, importMode } from './data-transfer.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -183,7 +183,7 @@ function retainImport(filename, info) {
     void rm(filename, { force: true });
   }, IMPORT_TTL_MS);
   timer.unref?.();
-  pendingImports.set(token, { filename, info, timer });
+  pendingImports.set(token, { filename, info, timer, previewToken: randomUUID(), consumed: false });
   return token;
 }
 async function discardImport(token) {
@@ -503,13 +503,30 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/data/import/validate') {
     const temporary = path.join(importRoot, `hearwise-import-${randomUUID()}.sqlite`);
     try {
+      const mode = importMode(url.searchParams.get('mode'));
       await receiveDatabase(req, temporary);
-      const info = inspectDatabase(temporary);
+      const info = previewImport(store, temporary, mode);
       const token = retainImport(temporary, info);
-      return sendJson(res, 200, { ...info, token });
+      return sendJson(res, 200, { ...info, token, previewToken: pendingImports.get(token).previewToken });
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => {});
       const failure = transferError(error, '无法验证备份文件');
+      return sendJson(res, failure.status, failure.body);
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/data/import/preview') {
+    try {
+      const input = await readJson(req);
+      const mode = importMode(input?.mode);
+      const pending = pendingImports.get(input?.token);
+      if (!pending || pending.consumed) throw new DataTransferError('导入文件已过期，请重新选择备份文件', { status: 410, code: 'IMPORT_EXPIRED' });
+      const info = previewImport(store, pending.filename, mode, { prepared: true });
+      pending.info = info;
+      pending.previewToken = randomUUID();
+      return sendJson(res, 200, { ...info, token: input.token, previewToken: pending.previewToken });
+    } catch (error) {
+      const failure = transferError(error, '无法预览备份文件');
       return sendJson(res, failure.status, failure.body);
     }
   }
@@ -520,21 +537,34 @@ const server = http.createServer(async (req, res) => {
     catch { return sendJson(res, 400, { code: 'INVALID_IMPORT_REQUEST', error: '导入请求格式无效' }); }
     const token = typeof input?.token === 'string' ? input.token : '';
     const pending = pendingImports.get(token);
-    if (!pending) return sendJson(res, 410, { code: 'IMPORT_EXPIRED', error: '导入文件已过期，请重新选择备份文件' });
+    if (!pending || pending.consumed) return sendJson(res, 410, { code: 'IMPORT_EXPIRED', error: '导入文件已过期，请重新选择备份文件' });
+    try { importMode(input.mode); }
+    catch (error) { return sendJson(res, error.status, { code: error.code, error: error.message }); }
+    if (input.mode !== pending.info.mode || input.previewToken !== pending.previewToken) {
+      return sendJson(res, 409, { code: 'IMPORT_PREVIEW_STALE', error: '导入方式或预览已变化，请重新预览后再导入' });
+    }
     const busy = restoreRuntimeBusy();
     if (busy) return sendJson(res, 409, { code: 'RESTORE_BUSY', error: busy });
 
     const oldListeningIds = store.db.prepare('SELECT id FROM listenings').all().map(row => row.id);
     const backup = path.join(backupRoot, `before-import-${backupStamp()}-${randomUUID().slice(0, 8)}.sqlite`);
     try {
-      const result = restoreDatabase(store, pending.filename, backup);
-      resetRuntimeAfterRestore(oldListeningIds);
+      const options = { prepared: true, revision: pending.info.revision };
+      const result = input.mode === 'append' ? appendDatabase(store, pending.filename, backup, options) :
+        restoreDatabase(store, pending.filename, backup, options);
+      pending.consumed = true; // Claim before asynchronous cleanup; never execute a token twice.
+      if (input.mode === 'replace') resetRuntimeAfterRestore(oldListeningIds);
+      else for (const id of result.addedIds) graphRevisions.delete(id);
       await discardImport(token);
       return sendJson(res, 200, {
         ok: true,
         databaseVersion: result.databaseVersion,
         listeningCount: result.listeningCount,
-        safetyBackup: path.basename(backup)
+        mode: input.mode,
+        changed: result.changed !== false,
+        addedCount: input.mode === 'append' ? result.addedCount : result.listeningCount,
+        skippedCount: input.mode === 'append' ? result.skippedCount : 0,
+        safetyBackup: result.changed === false ? null : path.basename(backup)
       });
     } catch (error) {
       const failure = transferError(error, '导入数据失败，当前数据未被替换');

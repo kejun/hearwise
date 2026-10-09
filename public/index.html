@@ -225,11 +225,13 @@
           <input id="data-import-file" type="file" accept=".sqlite,application/vnd.sqlite3" hidden />
         </div>
         <p class="form-note">API Key、Fish Audio Key、浏览器偏好和音频不会包含在备份中。</p>
+        <label class="data-import-mode"><input id="data-import-append" type="checkbox" aria-describedby="data-import-mode-note" />追加数据，否则覆盖原数据</label>
+        <p class="form-note" id="data-import-mode-note">当前数据将被备份完整替换。导入前会自动备份当前数据库。</p>
         <div class="data-import-review" id="data-import-review" hidden>
           <p class="test-summary">备份有效</p>
           <p id="data-import-summary"></p>
-          <p class="form-note">导入后，当前历史收听、知识条目和知识图谱会被备份文件完整替换，不会自动合并。Hearwise 会先自动备份当前数据库。</p>
-          <button class="data-danger" id="data-import-confirm" type="button">导入并替换</button>
+          <details id="data-import-skipped" hidden><summary>查看跳过的收听记录</summary><p class="form-note">ID 已存在，不代表内容完全相同；已有记录整条跳过，不同步内容。已删除的记录若仍在备份中，会重新追加。</p><ul id="data-import-skipped-list"></ul></details>
+          <button class="data-danger" id="data-import-confirm" type="button" disabled>确认覆盖</button>
         </div>
         <p class="data-transfer-status" id="data-transfer-status" role="status" aria-live="polite"></p>
       </section>

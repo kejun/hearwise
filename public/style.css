@@ -292,6 +292,12 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .data-transfer-actions .test-button{margin:0}
 .data-import-review{margin-top:18px;padding:16px;border:1px solid #d9e1d8;border-radius:11px;background:#f7faf6;font-size:13px;line-height:1.6;color:#52675a}
 .data-import-review p{margin:0 0 9px}
+.data-import-mode{display:flex;align-items:center;gap:8px;font-size:13px;line-height:1.6;cursor:pointer}
+.data-import-mode input{width:16px;height:16px;flex:none;accent-color:#52675a}
+#data-import-summary,#data-import-skipped-list{overflow-wrap:anywhere}
+#data-import-skipped-list{max-height:180px;overflow:auto;padding-left:22px}
+.data-danger.data-append{background:#edf5ed;border-color:#b5c9b5;color:#365c3b}
+.data-danger.data-append:hover{background:#e2efe2}
 .data-import-review .form-note{margin:8px 0 14px}
 .data-danger{width:100%;border:1px solid #d7a69d;border-radius:9px;background:#fff2ef;color:#973d31;font-weight:650;padding:13px;cursor:pointer}
 .data-danger:hover{background:#ffe7e2}
