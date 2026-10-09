@@ -39,6 +39,8 @@ const rows = (store, table) => store.db.prepare(`SELECT * FROM ${table} ORDER BY
 
 test('display-only correction preserves source/card/provenance and in-flight relationship input', t => {
   const h = fixture(t);
+  h.store.db.prepare('INSERT INTO knowledge_facts VALUES (?,?,?,?,?,?,?)').run(randomUUID(), h.item.id, h.evidence.id,
+    h.evidence.original_text, '推出 Brownie 相机', 'clear', new Date().toISOString());
   h.store.enableRelations(h.listeningId);
   const relation = h.store.beginRelationRequest(h.store.nextRelationJob(h.listeningId, { quietMs: 0 }).id);
   const tables = ['segments', 'knowledge_aliases', 'knowledge_mentions', 'knowledge_facts', 'relations', 'relation_assertions', 'relation_supports', 'relation_windows'];
@@ -101,6 +103,7 @@ test('evidence must be exact, linked and a complete name; schema failures never 
   assert.throws(() => validateNameCorrectionResult({ ...valid, outcome: 'unchanged' }, input), { status: 502 });
   assert.equal(validateNameCorrectionResult({ ...valid, name: 'RAIL' }, input).outcome, 'insufficient_evidence');
   assert.equal(validateNameCorrectionResult({ ...valid, name: 'Kod' }, input).outcome, 'insufficient_evidence');
+  assert.equal(validateNameCorrectionResult({ ...valid, name: 'EASTMAN KODAK' }, input).outcome, 'insufficient_evidence');
   const neighbor = input.segments.find(row => !row.linked);
   assert.ok(neighbor);
   assert.equal(validateNameCorrectionResult({ ...valid, name: 'Transcript',

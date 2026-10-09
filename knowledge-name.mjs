@@ -103,7 +103,7 @@ export function validateNameCorrectionResult(result, input) {
     // An unrelated neighboring entity or a name guessed only from model memory
     // is insufficient. The new spelling must occur in a target-linked quote.
     const grounded = evidence.some(ref => input.segments.find(row => row.id === ref.segment_id)?.linked &&
-      findIdentitySpans(ref.quote, name).length > 0);
+      findIdentitySpans(ref.quote, name).some(span => span.quote === name));
     if (!grounded) return { outcome: 'insufficient_evidence', name: input.name,
       reason: '关联原文或译文中没有可核对的新名称，已保留原名。', evidence: [] };
     if (name === input.name) return { outcome: 'unchanged', name, reason, evidence };

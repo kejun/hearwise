@@ -29,7 +29,9 @@ async function serverAddress(child) {
       onExit = (code, signal) => reject(new Error(`Test server exited before startup: code=${code} signal=${signal}`));
       child.stdout.on('data', onData); child.once('error', onError); child.once('exit', onExit);
       if (child.exitCode != null || child.signalCode != null) onExit(child.exitCode, child.signalCode);
-    }), 3000, 'Test server startup');
+    // Match the shared speech fixture's bounded cold-start allowance.
+    // Assertions and model-response deadlines remain independent of startup.
+    }), 10000, 'Test server startup');
   } finally {
     child.stdout.removeListener('data', onData); child.removeListener('error', onError); child.removeListener('exit', onExit);
   }

@@ -9,6 +9,7 @@ import { processingView, createProcessingPoller } from '../public/processing-sta
 import { createSpeechController } from '../public/speech-controller.js';
 import { speechConfig } from '../public/speech-protocol.js';
 import { readKnowledgeView, saveKnowledgeView } from '../public/knowledge-graph.js';
+import { knowledgeName } from '../public/knowledge-name.js';
 
 // Execute the actual app and event handlers with a minimal DOM and controllable HTTP responses.
 // Deliberately let aborted requests resolve to exercise the stale-response guards.
@@ -47,6 +48,7 @@ function app(t, preferences = []) {
   const context = vm.createContext({
     // Graph/editor DOM interaction has dedicated browser suites; keep these MT lifecycle tests isolated.
     createKnowledgeEditor: () => ({ open() {}, close() {} }),
+    createNameCorrector: () => ({ correct() {}, close() {} }), knowledgeName,
     readKnowledgeView, saveKnowledgeView, createKnowledgeGraph: () => ({ select() {}, setNodes() {}, setActive() {}, setProcessing() {}, invalidate() {}, highlight() {}, refresh() {} }),
     initTranscriptVisibility, ...translationParams, createCaptionFrontier, processingView, createProcessingPoller, createSpeechController, speechConfig, Date, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
     WebSocket: Socket, Event, console, location: { protocol: 'http:', host: 'localhost' },
