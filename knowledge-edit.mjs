@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { publicNameCorrectionJob, NAME_CORRECTION_OPERATION, knowledgeDisplayName } from './knowledge-name.mjs';
 
 const norm = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status, knowledgeEdit: true }); };
@@ -36,26 +37,30 @@ export function migrateKnowledgeEditJobs(store) {
 }
 
 const editFingerprint = input => fingerprint([input?.name, input?.source, input?.revision]);
-const publicEditJob = row => row && ({ id: row.id, state: row.state, name: row.name, source: row.source,
+const publicEditJob = row => row?.operation === NAME_CORRECTION_OPERATION ? publicNameCorrectionJob(row) : row && ({ id: row.id, state: row.state, name: row.name, source: row.source,
   saved: row.state === 'succeeded' ? true : row.state === 'failed' ? false : null, error: row.error });
 
 export const knowledgeEditMethods = {
   recoverKnowledgeEditJobs() {
-    this.db.prepare("UPDATE knowledge_edit_jobs SET state='failed',error=?,updated_at=? WHERE state='running'")
-      .run('服务在生成期间重启，原内容未更改，请重新保存。', new Date().toISOString());
+    this.db.prepare(`UPDATE knowledge_edit_jobs SET state='failed',
+      error=CASE WHEN operation='name_correction' THEN ? ELSE ? END,updated_at=? WHERE state='running'`)
+      .run('服务在名称校正期间重启，原名称未更改；可明确重试。',
+        '服务在生成期间重启，原内容未更改，请重新保存。', new Date().toISOString());
   },
   knowledgeEditJob(listeningId, itemId, jobId, input) {
     const row = this.db.prepare('SELECT * FROM knowledge_edit_jobs WHERE id=? AND listening_id=? AND item_id=?').get(jobId, listeningId, itemId);
-    if (row && input && row.fingerprint !== editFingerprint(input)) fail(409, '同一保存任务不能提交不同的修改');
+    if (row && input && (row.operation !== 'manual_regenerate' || row.fingerprint !== editFingerprint(input))) fail(409, '同一保存任务不能提交不同的修改');
     return publicEditJob(row);
   },
   knowledgeEditForSnapshot(listeningId, itemId, revision) {
     return publicEditJob(this.db.prepare(`SELECT * FROM knowledge_edit_jobs WHERE listening_id=? AND item_id=?
-      AND (state='running' OR (state='failed' AND revision=?)) ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId, revision));
+      AND operation='manual_regenerate' AND (state='running' OR (state='failed' AND revision=?)) ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId, revision));
   },
   createKnowledgeEditJob(listeningId, itemId, jobId, input) {
     const time = new Date().toISOString();
-    this.db.prepare("INSERT INTO knowledge_edit_jobs VALUES (?,?,?,?,?,?,?,'running',NULL,?,?)")
+    this.db.prepare(`INSERT INTO knowledge_edit_jobs
+      (id,listening_id,item_id,fingerprint,revision,name,source,state,error,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,'running',NULL,?,?)`)
       .run(jobId, listeningId, itemId, editFingerprint(input), input.revision, input.name.trim(), input.source.trim(), time, time);
     return this.knowledgeEditJob(listeningId, itemId, jobId);
   },
@@ -115,7 +120,7 @@ export const knowledgeEditMethods = {
     const snapshot = this.knowledgeEditSnapshot(listeningId, itemId);
     if (input.revision !== snapshot.revision) fail(409, '条目或原文已改变，请关闭后重新打开编辑');
     const name = input.name.trim(), source = input.source.trim();
-    if (this.knowledge(listeningId).some(item => item.id !== itemId && [item.canonical_name, ...item.aliases].some(alias => norm(alias) === norm(name))))
+    if (this.knowledge(listeningId).some(item => item.id !== itemId && [item.canonical_name, knowledgeDisplayName(item), ...item.aliases].some(alias => norm(alias) === norm(name))))
       fail(409, '已存在同名条目，请使用可区分的名称');
     const existing = this.db.prepare('SELECT * FROM knowledge_corrections WHERE listening_id=? AND normalized_source=?').get(listeningId, norm(source));
     if (existing && existing.item_id !== itemId) fail(409, '这个错误词已用于其他条目的纠正');
@@ -152,7 +157,8 @@ export const knowledgeEditMethods = {
         .run(randomUUID(), itemId, fact.segment_id, fact.quote, fact.content, 'clear', time);
       this.db.prepare('DELETE FROM knowledge_aliases WHERE item_id=?').run(itemId);
       this.db.prepare(`UPDATE knowledge_items SET canonical_name=?,normalized_name=?,short_description=?,dialogue_summary=?,
-        background_note=NULL,certainty='clear',content_version=content_version+1,updated_at=? WHERE id=?`)
+        background_note=NULL,certainty='clear',name_override=NULL,name_override_identity=NULL,
+        content_version=content_version+1,updated_at=? WHERE id=?`)
         .run(current.name, norm(current.name), card.short_description, card.dialogue_summary, time, itemId);
       this.db.prepare('INSERT INTO knowledge_revisions VALUES (?,?,?,?,?,?,?,?)')
         .run(randomUUID(), itemId, 'manual', current.item.canonical_name, current.name, null, '人工纠正并重新生成', time);
@@ -172,7 +178,7 @@ export const knowledgeEditMethods = {
       this.db.prepare('UPDATE listenings SET updated_at=? WHERE id=?').run(time, listeningId);
       // Commit the receipt with the card and transcript, so restart recovery cannot report
       // a committed edit as failed or launch the same paid generation again.
-      if (jobId && this.db.prepare("UPDATE knowledge_edit_jobs SET state='succeeded',updated_at=? WHERE id=? AND listening_id=? AND item_id=? AND state='running'")
+      if (jobId && this.db.prepare("UPDATE knowledge_edit_jobs SET state='succeeded',updated_at=? WHERE id=? AND listening_id=? AND item_id=? AND state='running' AND operation='manual_regenerate'")
         .run(time, jobId, listeningId, itemId).changes !== 1) fail(409, '保存任务状态已改变，请重新打开核对');
       return this.knowledge(listeningId).find(item => item.id === itemId);
     });

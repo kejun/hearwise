@@ -29,7 +29,7 @@ test('export creates a standalone consistent sqlite snapshot while WAL is enable
 
   assert.equal(store.db.prepare('PRAGMA journal_mode').get().journal_mode, 'wal');
   const info = exportDatabase(store, backup);
-  assert.deepEqual(info, { valid: true, databaseVersion: 11, listeningCount: 1 });
+  assert.deepEqual(info, { valid: true, databaseVersion: 12, listeningCount: 1 });
   assert.ok(existsSync(backup));
 
   const exported = new DatabaseSync(backup, { readOnly: true });
@@ -55,7 +55,7 @@ test('inspection rejects non-Hearwise and future-version sqlite files', t => {
   store.close();
 
   const future = new DatabaseSync(backup);
-  future.exec('PRAGMA user_version = 12');
+  future.exec('PRAGMA user_version = 13');
   future.close();
   assert.throws(() => inspectDatabase(backup), /更新版本/);
 });
@@ -79,7 +79,7 @@ test('restore replaces all business data transactionally and preserves a safety 
   source.close();
 
   const result = restoreDatabase(current, importFile, safetyFile);
-  assert.equal(result.databaseVersion, 11);
+  assert.equal(result.databaseVersion, 12);
   assert.equal(result.listeningCount, 1);
   assert.equal(current.list().items.length, 1);
   assert.equal(current.list().items[0].title, 'Imported data');
@@ -138,7 +138,7 @@ test('HTTP data transfer endpoints export, validate and restore a backup', async
   assert.equal(validated.status, 200);
   const review = await validated.json();
   assert.equal(review.valid, true);
-  assert.equal(review.databaseVersion, 11);
+  assert.equal(review.databaseVersion, 12);
   assert.equal(review.listeningCount, 1);
   assert.match(review.token, /^[0-9a-f-]{36}$/);
 
@@ -350,7 +350,7 @@ test('append rejects embedded cross-listening references and accepts migrated v1
   h.source.db.exec("DELETE FROM knowledge_revisions WHERE id='audit-reference'; DROP TABLE knowledge_edit_jobs; PRAGMA user_version=10");
   const old = path.join(h.directory, 'v10.sqlite'); h.source.db.exec(`VACUUM INTO '${old}'`);
   const plan = previewImport(h.current, old, 'append');
-  assert.equal(plan.databaseVersion, 11); assert.equal(plan.addedCount, 1);
+  assert.equal(plan.databaseVersion, 12); assert.equal(plan.addedCount, 1);
   appendDatabase(h.current, old, h.backup, { revision: plan.revision });
   assert.equal(h.current.list().total, 2);
 });

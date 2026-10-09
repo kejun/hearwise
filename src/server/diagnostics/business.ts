@@ -11,7 +11,7 @@ export const BUSINESS_DOMAINS = [
 const calls = new Set(['knowledge.http', 'translation.http', 'relation.http', 'speech.http', 'speech.stream']);
 const businessSteps = new Set(['recognition.session', 'knowledge.execute', 'relation.execute', 'translation.execute',
   'translation.phrase', 'translation.preview', 'translation.check', 'speech.unit', 'speech.session']);
-const purposeNames: Record<string, string> = { preview: '预览 / 试听', check: '模型检查', realtime: '定稿翻译',
+const purposeNames: Record<string, string> = { name_correction: '知识名称校正', preview: '预览 / 试听', check: '模型检查', realtime: '定稿翻译',
   background: '后台 / 恢复翻译', phrase: '提前播报短句', remainder: '提前播报尾句', original: '全文原文',
   translation: '全文译文', replay: '单句回放', live: '实时播报' };
 const activities: Record<string, string> = { provider_started: '获准调用服务', request_started: '请求已发起',

@@ -1,4 +1,6 @@
 import { createKnowledgeEditor } from './knowledge-editor.js';
+import { createNameCorrector } from './knowledge-name-correction.js';
+import { knowledgeName } from './knowledge-name.js';
 import { initTranscriptVisibility } from './transcript-visibility.js';
 import { createCaptionFrontier } from './caption-frontier.js';
 import { INTERIM_TRANSLATION_MAX_LENGTH, validateInterimTranslation } from './translation-params.js';
@@ -148,6 +150,14 @@ const knowledgeEditor = createKnowledgeEditor({ getId: () => listeningId, getKey
   onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
   onSaved: refreshEditedKnowledge
 });
+const nameCorrector = createNameCorrector({ getId: () => listeningId, getKey: () => saved.key,
+  onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
+  onSaved: refreshCorrectedKnowledge
+});
+async function refreshCorrectedKnowledge(id) {
+  if (id !== listeningId) return;
+  await fetchDetail(); await knowledgeGraph.refresh();
+}
 async function refreshEditedKnowledge(id) {
   if (id !== listeningId) return;
   listeningGeneration++;
@@ -161,6 +171,7 @@ const knowledgeGraph = createKnowledgeGraph({
   onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
   onStarted: id => { if (id === listeningId) { fetchDetail().catch(() => {}); startPolling(); } },
   onEdit: item => knowledgeEditor.open(item),
+  onCorrectName: item => nameCorrector.correct(item),
   loadSegment: loadKnowledgeEvidence,
   locateSegment: locateKnowledgeEvidence,
   onNodes: items => { if (detail?.listening.id === listeningId) { detail.knowledge = items; renderKnowledge(); } },
@@ -1061,7 +1072,7 @@ function renderKnowledge() {
     const heading = el('summary', 'knowledge-heading');
     const titleLine = el('span', 'knowledge-title-line');
     const labels = { person: '人物', organization: '组织', product: '产品', work: '作品', method: '方法', event: '事件', place: '地点' };
-    titleLine.append(el('strong', '', item.canonical_name), el('span', 'knowledge-type', labels[item.display_label] || names[item.type] || item.type));
+    titleLine.append(el('strong', '', knowledgeName(item)), el('span', 'knowledge-type', labels[item.display_label] || names[item.type] || item.type));
     if (item.certainty === 'needs_review') titleLine.append(el('span', 'needs-review', '待确认'));
     heading.append(titleLine);
     if (item.short_description || item.dialogue_summary) heading.append(el('span', 'knowledge-brief', item.short_description || item.dialogue_summary));
@@ -1087,9 +1098,13 @@ function renderKnowledge() {
       evidence.append(link);
     }
     const edit = el('button', 'knowledge-edit-button', '修改 / 删除'); edit.type = 'button';
-    edit.setAttribute('aria-label', `修改或删除 ${item.canonical_name}`);
+    edit.setAttribute('aria-label', `修改或删除 ${knowledgeName(item)}`);
     edit.addEventListener('click', () => { void knowledgeEditor.open(item); });
-    card.append(evidence, edit); els.knowledgeList.append(card);
+    const correctName = el('button', 'knowledge-edit-button', '校正名称'); correctName.type = 'button';
+    correctName.setAttribute('aria-label', `校正 ${knowledgeName(item)} 的名称`);
+    correctName.addEventListener('click', () => { void nameCorrector.correct(item); });
+    const actions = el('div', 'knowledge-item-actions'); actions.append(correctName, edit);
+    card.append(evidence, actions); els.knowledgeList.append(card);
   }
   syncKnowledgeToggleAll();
 }
@@ -1271,6 +1286,7 @@ function showListening() {
   updatePinnedCaption();
 }
 async function showHistory() {
+  nameCorrector.close();
   knowledgeEditor.close();
   closeRecordEditor();
   if (phase !== 'idle') return;
@@ -1373,6 +1389,7 @@ els.recordLoadingBack.addEventListener('click', () => {
   showHistory().catch(error => { els.historyError.textContent = error.message; els.historyError.hidden = false; });
 });
 function resetListening() {
+  nameCorrector.close();
   knowledgeEditor.close();
   openingHistory?.controller.abort();
   openingHistory = null;
@@ -1574,6 +1591,8 @@ async function start(preselected) {
         }
       }
       if (message.type === 'knowledge-edited' && message.listeningId === listeningId) void refreshEditedKnowledge(listeningId);
+      if (message.type === 'knowledge-name-corrected' && message.listeningId === listeningId)
+        void refreshCorrectedKnowledge(listeningId).catch(() => {});
       if (message.type === 'knowledge-upserted' && (!message.listeningId || message.listeningId === listeningId)) {
         liveKnowledge.set(message.item.id, message.item);
         if (detail) {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ListeningStore } from './storage.mjs';
 
-export const CURRENT_DATABASE_VERSION = 11;
+export const CURRENT_DATABASE_VERSION = 12;
 export const MAX_IMPORT_BYTES = 2 * 1024 * 1024 * 1024;
 export const REQUIRED_TABLES = Object.freeze([
   'listenings', 'listening_runs', 'segments', 'knowledge_items'
@@ -299,6 +299,7 @@ const softReferences = {
   knowledge_edit_jobs: { item_id: 'knowledge_items' }
 };
 const jsonColumns = {
+  knowledge_edit_jobs: ['result_json'],
   extraction_jobs: ['progress_json'],
   extraction_parts: ['focus_refs', 'unresolved', 'results', 'stats', 'input_snapshot'],
   relation_jobs: ['input_json', 'rejected_json', 'usage_json'],

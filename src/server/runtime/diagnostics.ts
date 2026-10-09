@@ -4,10 +4,11 @@ import type { BuildMetadata, TraceEvent, TraceState } from "../../shared/diagnos
 import { TRACE_STEPS, TRACE_EVENTS, TRACE_ERRORS } from "../../shared/diagnostics.js";
 
 declare const __BUILD_META__: BuildMetadata;
-const allowed = new Set(["listening_id", "job_id", "attempt", "part_no", "request_count", "accepted_count",
+const allowed = new Set(["listening_id", "job_id", "attempt", "part_no", "request_count", "cache_hit", "accepted_count",
   "rejected_count", "http_status", "phase", "outcome", "cancel_reason", "duration_ms", "run_id", "segment_id",
   "consumer_id", "unit_id", "provider", "kind", "queue_ms", "samples", "consumed_samples", "retry_at", "evidence_source", "segment_sequence", "segment_count", "returned_count", "audio_ms"]);
 const safeWords = new Set(["extract", "repair", "headers", "body", "ok", "empty", "partial", "invalid",
+  "name_correction", "corrected", "unchanged", "insufficient_evidence",
   "continue", "terminal", "failed", "discarded", "listening_deleted", "application_shutdown", "superseded",
   "consumer_closed", "user_cancelled", "qwen", "fish", "preview", "realtime", "background", "phrase", "remainder",
   "original", "translation", "replay", "live", "check", "client_report"]);
