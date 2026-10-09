@@ -338,3 +338,14 @@ test('append rejects embedded cross-listening references and accepts migrated v1
   appendDatabase(h.current, old, h.backup, { revision: plan.revision });
   assert.equal(h.current.list().total, 2);
 });
+
+test('failed preview lock acquisition detaches the backup and permits a later retry', t => {
+  const h = transferFixture(t);
+  seed(h.source, 'New'); exportDatabase(h.source, h.importFile);
+  previewImport(h.current, h.importFile, 'append');
+  const writer = new DatabaseSync(path.join(h.directory, 'current.sqlite'));
+  h.current.db.exec('PRAGMA busy_timeout=0'); writer.exec('BEGIN IMMEDIATE');
+  try { assert.throws(() => previewImport(h.current, h.importFile, 'append', { prepared: true }), /locked/); }
+  finally { writer.exec('ROLLBACK'); writer.close(); }
+  assert.equal(previewImport(h.current, h.importFile, 'append', { prepared: true }).addedCount, 1);
+});

@@ -393,13 +393,17 @@ export function previewImport(store, source, mode, { prepared = false } = {}) {
   const info = prepared ? inspectDatabase(source) : migrateImportedDatabase(source);
   const db = store.db;
   db.prepare('ATTACH DATABASE ? AS imported').run(source);
+  let transaction = false;
   try {
-    db.exec('BEGIN IMMEDIATE');
+    db.exec('BEGIN IMMEDIATE'); transaction = true;
     validateImportSchema(db);
     const plan = buildImportPlan(store, info, mode);
     if (mode === 'append') validateAppendReferences(db, plan.addedIds);
     return plan;
-  } finally { db.exec('ROLLBACK'); db.exec('DETACH DATABASE imported'); }
+  } finally {
+    try { if (transaction) db.exec('ROLLBACK'); }
+    finally { db.exec('DETACH DATABASE imported'); }
+  }
 }
 
 export function appendDatabase(store, source, backupDestination, { revision } = {}) {
