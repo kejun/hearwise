@@ -8,6 +8,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from './storage.mjs';
+import { logKnowledgeRevisionConflict } from './knowledge-revision.mjs';
 import { extractKnowledge, repairKnowledge, splitFocusSegments, regenerateKnowledge, correctKnowledgeName } from './knowledge.mjs';
 import { createTranslationScheduler } from './translation-queue.mjs';
 import { createKnowledgeScheduler } from './knowledge-queue.mjs';
@@ -462,6 +463,7 @@ async function runKnowledgeEditJob(id, itemId, jobId, prepared, key) {
     keys.set(id, key); notifyKnowledgeEdit(id);
     console.info('knowledge_edit', JSON.stringify({ job_id: jobId, state: 'succeeded', elapsed_ms: Date.now() - started }));
   } catch (error) {
+    logKnowledgeRevisionConflict(error, id, itemId, 'manual_regenerate');
     const timeout = ['TimeoutError', 'AbortError'].includes(error?.name);
     const message = error.knowledgeEdit ? error.message : timeout ? '卡片生成超过 90 秒，原内容未更改，请稍后重试。' :
       error?.status ? `模型服务请求失败（HTTP ${error.status}），原内容未更改，请稍后重试。` :
@@ -501,6 +503,7 @@ async function runNameCorrectionJob(id, itemId, jobId, prepared, key) {
     console.info('knowledge_name_correction', JSON.stringify({ job_id: jobId, operation: 'name_correction',
       request_count: requests, cache_hit: false, outcome: job.result.outcome, elapsed_ms: Date.now() - started }));
   } catch (error) {
+    logKnowledgeRevisionConflict(error, id, itemId, 'name_correction');
     const timeout = ['TimeoutError', 'AbortError'].includes(error?.name);
     const message = error.knowledgeEdit ? error.message : timeout ? '名称校正超过 30 秒，原名称未更改；可明确重试。' :
       error?.status ? `模型服务请求失败（HTTP ${error.status}），原名称未更改；可明确重试。` :
@@ -691,8 +694,11 @@ const server = http.createServer(async (req, res) => {
       }
       return sendJson(res, 202, { job: accepted.job });
     } catch (error) {
+      logKnowledgeRevisionConflict(error, id, itemId, 'name_correction');
       return sendJson(res, error.knowledgeEdit ? error.status : error instanceof SyntaxError ? 400 : 502,
-        { code: 'KNOWLEDGE_EDIT_FAILED', saved: false, error: error.knowledgeEdit ? error.message : '无法创建名称校正任务，原名称未更改' });
+        { code: error.code === 'KNOWLEDGE_EDIT_STALE' ? error.code : 'KNOWLEDGE_EDIT_FAILED', saved: false,
+          ...(error.code === 'KNOWLEDGE_EDIT_STALE' ? { revision: error.revision, revisionVersion: error.revisionVersion } : {}),
+          error: error.knowledgeEdit ? error.message : '无法创建名称校正任务，原名称未更改' });
     }
   }
   const editStatusMatch = /^\/api\/listenings\/([0-9a-f-]{36})\/knowledge\/([0-9a-f-]{36})\/edits\/([0-9a-f-]{36})$/.exec(url.pathname);
@@ -707,7 +713,7 @@ const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET') {
         const snapshot = store.knowledgeEditSnapshot(id, itemId);
-        return sendJson(res, 200, { ...snapshot, editJob: store.knowledgeEditForSnapshot(id, itemId, snapshot.revision),
+        return sendJson(res, 200, { ...snapshot, editJob: store.knowledgeEditForSnapshot(id, itemId, snapshot.revision, snapshot),
           nameCorrectionJob: store.nameCorrectionForSnapshot(id, itemId, snapshot) });
       }
       const input = await readJson(req);
@@ -746,8 +752,10 @@ const server = http.createServer(async (req, res) => {
       notifyKnowledgeEdit(id);
       return sendJson(res, 200, result);
     } catch (error) {
+      logKnowledgeRevisionConflict(error, id, itemId, req.method === 'DELETE' ? 'delete' : 'manual_regenerate');
       return sendJson(res, error.knowledgeEdit ? error.status : error instanceof SyntaxError ? 400 : 502,
-        { code: 'KNOWLEDGE_EDIT_FAILED', saved: false,
+        { code: error.code === 'KNOWLEDGE_EDIT_STALE' ? error.code : 'KNOWLEDGE_EDIT_FAILED', saved: false,
+          ...(error.code === 'KNOWLEDGE_EDIT_STALE' ? { revision: error.revision, revisionVersion: error.revisionVersion } : {}),
           error: error.knowledgeEdit ? error.message : '知识修改失败，原内容未更改，请稍后重试' });
     } finally { if (locked) knowledgeEdits.delete(id); }
   }

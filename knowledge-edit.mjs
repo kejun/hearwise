@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { publicNameCorrectionJob, NAME_CORRECTION_OPERATION, knowledgeDisplayName } from './knowledge-name.mjs';
+import { knowledgeRevision, KNOWLEDGE_REVISION_VERSION, assertKnowledgeRevision, matchesKnowledgeRevision } from './knowledge-revision.mjs';
 
 const norm = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status, knowledgeEdit: true }); };
@@ -52,9 +53,11 @@ export const knowledgeEditMethods = {
     if (row && input && (row.operation !== 'manual_regenerate' || row.fingerprint !== editFingerprint(input))) fail(409, '同一保存任务不能提交不同的修改');
     return publicEditJob(row);
   },
-  knowledgeEditForSnapshot(listeningId, itemId, revision) {
-    return publicEditJob(this.db.prepare(`SELECT * FROM knowledge_edit_jobs WHERE listening_id=? AND item_id=?
-      AND operation='manual_regenerate' AND (state='running' OR (state='failed' AND revision=?)) ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId, revision));
+  knowledgeEditForSnapshot(listeningId, itemId, revision, snapshot) {
+    const row = this.db.prepare(`SELECT * FROM knowledge_edit_jobs WHERE listening_id=? AND item_id=?
+      AND operation='manual_regenerate' ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId);
+    if (!row || row.state === 'succeeded') return undefined;
+    return { ...publicEditJob(row), staleRevision: snapshot ? !matchesKnowledgeRevision(snapshot, row.revision) : row.revision !== revision };
   },
   createKnowledgeEditJob(listeningId, itemId, jobId, input) {
     const time = new Date().toISOString();
@@ -110,7 +113,7 @@ export const knowledgeEditMethods = {
       fail(409, '请等待原文翻译和知识整理结束；未完成的任务可先重试');
     const segments = this.db.prepare(`SELECT DISTINCT s.* FROM segments s JOIN knowledge_mentions m ON m.segment_id=s.id
       WHERE m.item_id=? AND s.listening_id=? ORDER BY s.sequence_no`).all(itemId, listeningId);
-    return { item, segments, revision: fingerprint({ item, segments }) };
+    return { item, segments, revision: knowledgeRevision({ item, segments }), revisionVersion: KNOWLEDGE_REVISION_VERSION };
   },
   prepareKnowledgeEdit(listeningId, itemId, input) {
     if (!input || typeof input !== 'object' || Array.isArray(input) ||
@@ -118,7 +121,7 @@ export const knowledgeEditMethods = {
     for (const key of ['name', 'source']) if (typeof input[key] !== 'string' || !input[key].trim() ||
         input[key].trim().length > 160 || /[\u0000-\u001f\u007f]/.test(input[key])) fail(400, '名称和原文错误词须为 1–160 个字符');
     const snapshot = this.knowledgeEditSnapshot(listeningId, itemId);
-    if (input.revision !== snapshot.revision) fail(409, '条目或原文已改变，请关闭后重新打开编辑');
+    assertKnowledgeRevision(snapshot, input.revision, '条目或原文已改变，请核对最新内容后再提交');
     const name = input.name.trim(), source = input.source.trim();
     if (this.knowledge(listeningId).some(item => item.id !== itemId && [item.canonical_name, knowledgeDisplayName(item), ...item.aliases].some(alias => norm(alias) === norm(name))))
       fail(409, '已存在同名条目，请使用可区分的名称');
@@ -185,8 +188,8 @@ export const knowledgeEditMethods = {
   },
   deleteKnowledgeItem(listeningId, itemId, revision) {
     return this.tx(() => {
-      const { item, revision: current } = this.knowledgeEditSnapshot(listeningId, itemId);
-      if (revision !== current) fail(409, '条目或原文已改变，请关闭后重新打开编辑');
+      const snapshot = this.knowledgeEditSnapshot(listeningId, itemId), { item } = snapshot;
+      assertKnowledgeRevision(snapshot, revision, '条目或原文已改变，请核对最新内容后再删除');
       for (const value of [item.canonical_name, ...item.aliases])
         this.db.prepare('INSERT OR REPLACE INTO knowledge_manual_items VALUES (?,?,?,?,1)').run(listeningId, itemId, item.type, norm(value));
       this.db.prepare('UPDATE knowledge_manual_items SET deleted=1 WHERE listening_id=? AND item_id=?').run(listeningId, itemId);

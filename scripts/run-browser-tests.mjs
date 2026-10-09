@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runProcess } from './lib/process.mjs';
 
-const checks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name'];
+const checks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision'];
 const selected = process.argv.slice(2);
 if (selected.some(name => !checks.includes(name))) throw new Error(`Unknown browser check; choose ${checks.join(', ')}`);
 const directory = process.env.BROWSER_EVIDENCE_DIR || 'browser-evidence';
@@ -19,7 +19,8 @@ for (const name of selected.length ? selected : checks) {
     timeoutMs: 180000, logFile: `${evidenceDirectory}/${name}.log`, onOutput: text => process.stdout.write(text),
     env: { ...process.env, SPEECH_SEEK_EVIDENCE_DIR: evidenceDirectory, KNOWLEDGE_EDIT_EVIDENCE_DIR: evidenceDirectory,
       GRAPH_EVIDENCE_DIR: evidenceDirectory, DATA_TRANSFER_EVIDENCE_DIR: evidenceDirectory, TRACE_EVIDENCE_DIR: evidenceDirectory,
-      TRANSCRIPT_EVIDENCE_DIR: evidenceDirectory, KNOWLEDGE_NAME_EVIDENCE_DIR: evidenceDirectory }
+      TRANSCRIPT_EVIDENCE_DIR: evidenceDirectory, KNOWLEDGE_NAME_EVIDENCE_DIR: evidenceDirectory,
+      KNOWLEDGE_REVISION_EVIDENCE_DIR: evidenceDirectory }
   });
   results.push({ name, log: `${evidenceDirectory}/${name}.log`, ...result });
   await writeFile(`${directory}/results.json`, JSON.stringify({ sha, dirty, evidenceDirectory,

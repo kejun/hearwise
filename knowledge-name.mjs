@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { findIdentitySpans } from './identity-grounding.mjs';
+import { compatibleKnowledgeRevisions, assertKnowledgeRevision, matchesKnowledgeRevision, knowledgeStale } from './knowledge-revision.mjs';
 
 export const NAME_CORRECTION_MODEL = 'qwen3.8-flash';
 export const NAME_CORRECTION_OPERATION = 'name_correction';
@@ -39,7 +40,10 @@ export function migrateKnowledgeNames(store) {
 
 export function publicNameCorrectionJob(row) {
   if (!row) return undefined;
-  const result = row.result_json ? JSON.parse(row.result_json) : null;
+  const stored = row.result_json ? JSON.parse(row.result_json) : null;
+  // Input aliases are receipt metadata, not a model result or public API field.
+  const result = row.state === 'succeeded' && stored ? Object.fromEntries(Object.entries(stored)
+    .filter(([key]) => key !== 'input_revisions')) : null;
   return { id: row.id, operation: row.operation, state: row.state, name: row.name, source: row.source,
     revision: row.revision, saved: row.state === 'running' ? null : row.state === 'succeeded' && result?.changed === true,
     changed: result?.changed === true, result, error: row.error };
@@ -47,11 +51,12 @@ export function publicNameCorrectionJob(row) {
 
 // Whole paragraphs are retained. The final JSON payload (not just the prose)
 // has a bounded size; evidence and context cannot silently change roles.
-function correctionContext(store, snapshot) {
+function correctionInput(store, snapshot, canonical = true) {
   const { item } = snapshot;
   const input = { operation: NAME_CORRECTION_OPERATION, item_id: item.id,
     name: knowledgeDisplayName(item), original_name: item.canonical_name,
-    type: item.type, display_label: item.display_label, aliases: item.aliases.slice(0, 8), segments: [] };
+    type: item.type, display_label: item.display_label,
+    aliases: (canonical ? [...item.aliases].sort() : item.aliases).slice(0, 8), segments: [] };
   // Very large legacy names/aliases must not bypass the text budget.
   if (JSON.stringify(input).length > 8000) input.aliases = [];
   if (JSON.stringify(input).length > 8000) fail(400, '条目名称信息过长，请先通过人工编辑核对');
@@ -63,7 +68,8 @@ function correctionContext(store, snapshot) {
     input.segments.push(row); return true;
   };
   const linked = [];
-  for (const segment of snapshot.segments) {
+  const segments = canonical ? [...snapshot.segments].sort((a, b) => a.sequence_no - b.sequence_no) : snapshot.segments;
+  for (const segment of segments) {
     if (linked.length === 6) break;
     if (add(segment, true)) linked.push(segment);
   }
@@ -75,9 +81,16 @@ function correctionContext(store, snapshot) {
       if (neighbor) add(neighbor, snapshot.segments.some(row => row.id === neighbor.id));
     }
   }
-  return { ...snapshot, input, contextHash: hash([NAME_CORRECTION_OPERATION, NAME_CORRECTION_PROMPT_VERSION,
-    NAME_CORRECTION_MODEL, false, snapshot.revision, input]) };
+  return input;
 }
+function correctionContext(store, snapshot) {
+  const input = correctionInput(store, snapshot), legacyInput = correctionInput(store, snapshot, false);
+  const inputRevisions = compatibleKnowledgeRevisions(snapshot);
+  const contextHashes = inputRevisions.map((revision, index) => hash([NAME_CORRECTION_OPERATION,
+    NAME_CORRECTION_PROMPT_VERSION, NAME_CORRECTION_MODEL, false, revision, index === 0 ? input : legacyInput]));
+  return { ...snapshot, input, inputRevisions, contextHash: contextHashes[0], contextHashes };
+}
+const placeholders = values => values.map(() => '?').join(',');
 
 export function validateNameCorrectionResult(result, input) {
   if (!result || typeof result !== 'object' || Array.isArray(result) ||
@@ -113,7 +126,8 @@ export function validateNameCorrectionResult(result, input) {
 
 function finishCorrection(store, listeningId, itemId, jobId, prepared, generated, cacheHit = false) {
   const current = correctionContext(store, store.knowledgeEditSnapshot(listeningId, itemId));
-  if (current.contextHash !== prepared.contextHash) fail(409, '条目或关联原文已改变，请重新打开核对');
+  if (current.contextHash !== prepared.contextHash)
+    throw knowledgeStale(current, prepared.revision, '条目或关联原文已改变，请核对最新内容后再校正');
   const result = validateNameCorrectionResult(generated, current.input);
   const changed = result.outcome === 'corrected' && result.name !== current.input.name;
   if (changed && store.knowledge(listeningId).some(item => item.id !== itemId &&
@@ -130,7 +144,8 @@ function finishCorrection(store, listeningId, itemId, jobId, prepared, generated
     store.db.prepare('UPDATE listenings SET updated_at=? WHERE id=?').run(time, listeningId);
   }
   const applied = correctionContext(store, store.knowledgeEditSnapshot(listeningId, itemId));
-  const output = { ...result, previous_name: current.input.name, changed, cache_hit: cacheHit };
+  const output = { ...result, previous_name: current.input.name, changed, cache_hit: cacheHit,
+    input_revisions: prepared.inputRevisions };
   if (store.db.prepare(`UPDATE knowledge_edit_jobs SET state='succeeded',result_json=?,applied_context_hash=?,updated_at=?
     WHERE id=? AND listening_id=? AND item_id=? AND operation='name_correction' AND state='running'`)
     .run(JSON.stringify(output), applied.contextHash, time, jobId, listeningId, itemId).changes !== 1) {
@@ -143,22 +158,27 @@ export const knowledgeNameMethods = {
   prepareNameCorrection(listeningId, itemId, input) {
     validateInput(input);
     const snapshot = this.knowledgeEditSnapshot(listeningId, itemId);
-    if (snapshot.revision !== input.revision) fail(409, '条目或原文已改变，请重新打开核对');
+    assertKnowledgeRevision(snapshot, input.revision, '条目或原文已改变，请核对最新内容后再校正');
     if (!knowledgeDisplayName(snapshot.item)?.trim() || knowledgeDisplayName(snapshot.item).length > 160)
       fail(400, '名称须为 1–160 个字符，请先通过人工编辑核对');
     return correctionContext(this, snapshot);
   },
   nameCorrectionForRevision(listeningId, itemId, revision) {
     return publicNameCorrectionJob(this.db.prepare(`SELECT * FROM knowledge_edit_jobs
-      WHERE listening_id=? AND item_id=? AND operation='name_correction' AND revision=? ORDER BY rowid DESC LIMIT 1`)
-      .get(listeningId, itemId, revision));
+      WHERE listening_id=? AND item_id=? AND operation='name_correction' AND (revision=? OR
+        EXISTS (SELECT 1 FROM json_each(result_json,'$.input_revisions') WHERE value=?)) ORDER BY rowid DESC LIMIT 1`)
+      .get(listeningId, itemId, revision, revision));
   },
   nameCorrectionForSnapshot(listeningId, itemId, snapshot) {
     const prepared = correctionContext(this, snapshot);
+    const row = this.db.prepare(`SELECT * FROM knowledge_edit_jobs WHERE listening_id=? AND item_id=?
+      AND operation='name_correction' ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId);
+    if (row?.state === 'running' || row?.state === 'failed') return { ...publicNameCorrectionJob(row),
+      staleRevision: !matchesKnowledgeRevision(snapshot, row.revision) || !prepared.contextHashes.includes(row.context_hash) };
+    const slots = placeholders(prepared.contextHashes);
     return publicNameCorrectionJob(this.db.prepare(`SELECT * FROM knowledge_edit_jobs WHERE listening_id=? AND item_id=?
-      AND operation='name_correction' AND (state='running' OR state='failed' AND revision=? OR
-        state='succeeded' AND (context_hash=? OR applied_context_hash=?)) ORDER BY rowid DESC LIMIT 1`)
-      .get(listeningId, itemId, snapshot.revision, prepared.contextHash, prepared.contextHash));
+      AND operation='name_correction' AND state='succeeded' AND (context_hash IN (${slots}) OR applied_context_hash IN (${slots}))
+      ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId, ...prepared.contextHashes, ...prepared.contextHashes));
   },
   acceptNameCorrection(listeningId, itemId, jobId, input, { hasKey = false, busy = false } = {}) {
     validateInput(input);
@@ -171,13 +191,18 @@ export const knowledgeNameMethods = {
       }
       const prepared = this.prepareNameCorrection(listeningId, itemId, input);
       const running = this.db.prepare("SELECT * FROM knowledge_edit_jobs WHERE listening_id=? AND state='running'").get(listeningId);
-      if (running?.operation === NAME_CORRECTION_OPERATION && running.item_id === itemId && running.context_hash === prepared.contextHash) {
+      if (running?.operation === NAME_CORRECTION_OPERATION && running.item_id === itemId && prepared.contextHashes.includes(running.context_hash)) {
+        const metadata = running.result_json ? JSON.parse(running.result_json) : {};
+        const inputRevisions = [...new Set([...(metadata.input_revisions || []), ...prepared.inputRevisions])];
+        this.db.prepare('UPDATE knowledge_edit_jobs SET result_json=? WHERE id=?')
+          .run(JSON.stringify({ ...metadata, input_revisions: inputRevisions }), running.id);
         return { job: publicNameCorrectionJob(running) };
       }
       if (busy || running) fail(409, '正在保存知识修改，请稍后再试');
+      const slots = placeholders(prepared.contextHashes);
       const cached = this.db.prepare(`SELECT * FROM knowledge_edit_jobs WHERE listening_id=? AND item_id=?
-        AND operation='name_correction' AND state='succeeded' AND (context_hash=? OR applied_context_hash=?)
-        ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId, prepared.contextHash, prepared.contextHash);
+        AND operation='name_correction' AND state='succeeded' AND (context_hash IN (${slots}) OR applied_context_hash IN (${slots}))
+        ORDER BY rowid DESC LIMIT 1`).get(listeningId, itemId, ...prepared.contextHashes, ...prepared.contextHashes);
       let local;
       if (cached) {
         const previous = JSON.parse(cached.result_json);
@@ -195,10 +220,11 @@ export const knowledgeNameMethods = {
       if (!local && !hasKey) fail(400, '请先在连接设置填写 API Key');
       const time = new Date().toISOString();
       this.db.prepare(`INSERT INTO knowledge_edit_jobs
-        (id,listening_id,item_id,fingerprint,revision,name,source,state,created_at,updated_at,operation,context_hash)
-        VALUES (?,?,?,?,?,?,?,'running',?,?,?,?)`)
+        (id,listening_id,item_id,fingerprint,revision,name,source,state,created_at,updated_at,operation,context_hash,result_json)
+        VALUES (?,?,?,?,?,?,?,'running',?,?,?,?,?)`)
         .run(jobId, listeningId, itemId, nameCorrectionFingerprint(input), input.revision, prepared.input.name,
-          prepared.item.canonical_name, time, time, NAME_CORRECTION_OPERATION, prepared.contextHash);
+          prepared.item.canonical_name, time, time, NAME_CORRECTION_OPERATION, prepared.contextHash,
+          JSON.stringify({ input_revisions: prepared.inputRevisions }));
       if (local) return { job: finishCorrection(this, listeningId, itemId, jobId, prepared, local, Boolean(cached)), created: true };
       return { job: this.knowledgeEditJob(listeningId, itemId, jobId), prepared };
     });
