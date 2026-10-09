@@ -322,7 +322,9 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 #knowledge-edit-delete { border: 1px solid transparent; border-radius: 8px; background: transparent; margin-left: auto; font: inherit; }
 #knowledge-edit-delete:hover:not(:disabled) { background: #fff0f0; }
 #knowledge-edit-delete:active:not(:disabled) { background: #ffe2e2; }
-#knowledge-edit-close:focus-visible, #knowledge-edit-delete:focus-visible, #transcript-speech-seek:focus-visible { outline: 2px solid var(--speech-accent); outline-offset: 3px; }
+#knowledge-edit-suggest { margin-top: 12px; border: 1px solid #d8ded4; border-radius: 8px; background: #f5f7f2; color: #315e4d; font: inherit; }
+#knowledge-edit-suggest:hover:not(:disabled) { background: #e9eee2; }
+#knowledge-edit-close:focus-visible, #knowledge-edit-delete:focus-visible, #knowledge-edit-suggest:focus-visible, #transcript-speech-seek:focus-visible { outline: 2px solid var(--speech-accent); outline-offset: 3px; }
 
 /* Cytoscape canvas owns all graph gestures; the rest remains native HTML. */
 .graph-help{margin:8px 0;color:#6d8071;font-size:11px;line-height:1.6}

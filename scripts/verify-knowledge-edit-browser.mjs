@@ -2,127 +2,104 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { graphFixture } from '../test-support/graph-fixture.mjs';
+import { speechFixture } from '../test-support/speech-fixture.mjs';
+import { seedNameReplacement } from '../test-support/name-replacement-fixture.mjs';
 
-const fixture = await graphFixture({ modelResponse: async body => {
-  const input = JSON.parse(body.messages.at(-1).content);
-  if (!input.name) return { items: [] };
-  await new Promise(resolve => setTimeout(resolve, input.name === 'Kodak' ? Number(process.env.KNOWLEDGE_EDIT_SLOW_MODEL_MS || 1500) : 250));
-  return { short_description: '对话介绍的相机制造公司', dialogue_summary: `${input.name} 推出了相机。`,
-    facts: [{ content: `${input.name} 推出了相机。`, segment_id: input.segments[0].id,
-      quote: input.name === 'Fail' ? 'unverified quote' : input.segments[0].text }] };
-} });
+const fixture = await speechFixture({ seed: store => seedNameReplacement(store, { graph: true }),
+  modelResponse: () => { throw new Error('Manual name replacement must not request a model'); } });
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || undefined,
     args: ['--no-sandbox', '--no-zygote', '--disable-gpu'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(() => localStorage.setItem('tongsheng:qianwen-key', 'local-test-only'));
+  // Deliberately no API Key, including for a graph that already has a relation.
   await page.goto(fixture.base);
   const open = async () => {
     await page.locator('#history-listening').click();
-    await page.getByRole('button', { name: '查看“柯达相机的故事”', exact: true }).click();
+    await page.getByRole('button', { name: '查看“名称纠正测试”', exact: true }).click();
     await page.locator('#knowledge-view-list').click();
   };
   await open();
-  const card = page.locator(`.knowledge-item[data-id="${fixture.seeded.first.nodes[0].id}"]`);
+  const item = fixture.seeded.item, card = page.locator(`.knowledge-item[data-id="${item.id}"]`);
   await card.locator('summary').click();
-  const editUrl = `${fixture.base}/api/listenings/${fixture.seeded.first.listeningId}/knowledge/${fixture.seeded.first.nodes[0].id}`;
-  // A real proxy/mismatched deployment can return HTML rather than the JSON API contract.
-  await page.route(editUrl, route => route.fulfill({ status: 404, contentType: 'text/html', body: '<html>private diagnostic</html>' }), { times: 1 });
-  await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
+  assert.equal(await card.locator('.knowledge-item-actions button').count(), 1);
+  const url = `${fixture.base}/api/listenings/${fixture.seeded.listeningId}/knowledge/${item.id}`;
+  const edit = async name => {
+    await card.getByRole('button', { name: `纠正 ${name} 的名称`, exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
+  };
+  await page.route(url, route => route.fulfill({ status: 404, contentType: 'text/html', body: '<html>private diagnostic</html>' }), { times: 1 });
+  await card.getByRole('button', { name: '纠正 Deebo 的名称', exact: true }).click();
   await page.locator('#knowledge-edit-status').filter({ hasText: '读取知识条目失败（HTTP 404）' }).waitFor();
   assert.equal(await page.locator('#knowledge-edit-save').isDisabled(), true);
   assert.doesNotMatch(await page.locator('#knowledge-edit-status').textContent(), /private|pattern/);
-  await page.locator('#knowledge-edit-close').click();
-  await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
-  await page.locator('#knowledge-edit-name').waitFor();
-  await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
+  await page.locator('#knowledge-edit-close').click(); await edit('Deebo');
   await page.locator('#knowledge-edit-name').fill('Proxy failed draft');
-  const callsBeforeProxy = fixture.stats.providerRequests.length;
-  await page.route(editUrl, route => route.fulfill({ status: 504, contentType: 'text/html', body: '<html>Gateway Timeout</html>' }), { times: 1 });
+  await page.route(`${url}/name-replacements`, route => route.fulfill({ status: 504, contentType: 'text/html', body: '<html>Gateway Timeout</html>' }), { times: 1 });
   await page.locator('#knowledge-edit-save').click();
-  await page.locator('#knowledge-edit-status').filter({ hasText: '保存知识修改失败（HTTP 504）' }).waitFor();
+  await page.locator('#knowledge-edit-status').filter({ hasText: '保存名称纠正失败（HTTP 504）' }).waitFor();
   assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Proxy failed draft');
   assert.equal(await page.locator('#knowledge-edit-save').isDisabled(), true);
-  assert.equal(fixture.stats.providerRequests.length, callsBeforeProxy);
-  await page.locator('#knowledge-edit-close').click();
-  await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
-  await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
-  await page.locator('#knowledge-edit-name').fill('Discarded draft');
-  await page.locator('#knowledge-edit-close').click();
-  assert.match(await card.textContent(), /Eastman Kodak/);
-  await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
-  await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
-  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Eastman Kodak');
-  await page.locator('#knowledge-edit-name').fill('Fail');
-  await page.locator('#knowledge-edit-save').click();
-  await page.locator('#knowledge-edit-status').filter({ hasText: '原内容未更改' }).waitFor();
-  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Fail');
-  assert.match(await card.textContent(), /Eastman Kodak/);
-  await page.locator('#knowledge-edit-name').fill('Kodak');
+  await page.locator('#knowledge-edit-close').click(); await edit('Deebo');
+  await page.locator('#knowledge-edit-name').fill('Discarded draft'); await page.locator('#knowledge-edit-close').click();
+  await edit('Deebo'); assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Deebo');
+  assert.equal(await page.locator('#knowledge-edit-source').getAttribute('readonly'), '');
+  await page.locator('#knowledge-edit-suggest').click();
+  await page.locator('#knowledge-edit-status').filter({ hasText: '可直接填写正确名称并保存' }).waitFor();
+  assert.equal(fixture.stats.providerRequests.length, 0);
+  await page.locator('#knowledge-edit-name').fill('Camera'); await page.locator('#knowledge-edit-save').click();
+  await page.locator('#knowledge-edit-status').filter({ hasText: '已存在同名条目' }).waitFor();
+  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Camera');
+  assert.match(await card.textContent(), /Deebo/);
+  await page.locator('#knowledge-edit-name').fill('Tibo');
   for (const width of [1280, 390, 320]) {
     await page.setViewportSize({ width, height: 850 });
     assert.equal(await page.evaluate(() => {
-      const el = document.querySelector('#knowledge-editor');
-      return el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().left >= 0 && el.getBoundingClientRect().right <= innerWidth;
+      const el = document.querySelector('#knowledge-editor'), box = el.getBoundingClientRect();
+      return el.scrollWidth <= el.clientWidth && box.left >= 0 && box.right <= innerWidth;
     }), true);
     if (process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR) {
       await mkdir(process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR, { recursive: true });
       await page.screenshot({ path: path.join(process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR, `knowledge-edit-${width}.png`) });
     }
   }
-  await page.locator('#knowledge-edit-save').click();
-  await page.locator('#knowledge-edit-status').filter({ hasText: '正在后台重新生成' }).waitFor();
-  // Refresh while the model is still running, then resume the same persisted job.
-  const callsDuringSave = fixture.stats.providerRequests.length;
-  await page.reload(); await open();
-  await card.locator('summary').click();
-  await card.getByRole('button', { name: '修改或删除 Eastman Kodak', exact: true }).click();
-  await page.locator('#knowledge-edit-status').filter({ hasText: '正在后台重新生成' }).waitFor();
-  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Kodak');
-  assert.equal(await page.locator('#knowledge-edit-close').isEnabled(), true);
-  await page.locator('#knowledge-editor').waitFor({ state: 'hidden', timeout: 45000 });
-  assert.equal(fixture.stats.providerRequests.length, callsDuringSave);
-  await card.locator('summary').filter({ hasText: 'Kodak' }).waitFor();
-  await page.reload(); await open();
-  await card.locator('summary').filter({ hasText: 'Kodak' }).waitFor();
-  await card.locator('summary').click();
-  await card.getByRole('button', { name: '修改或删除 Kodak', exact: true }).click();
-  await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
-  await page.locator('#knowledge-edit-name').fill('Eastman Kodak');
-  const callsBeforeLostResponse = fixture.stats.providerRequests.length;
-  // The server accepts, then the gateway loses the response. Recover by reading the job.
-  await page.route(editUrl, async route => {
-    const result = await route.fetch(); assert.equal(result.status(), 202);
-    await route.fulfill({ status: 502, contentType: 'text/html', body: '<html>upstream connection lost</html>' });
+  await page.locator('#knowledge-edit-save').click(); await page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
+  assert.equal(fixture.stats.providerRequests.length, 0);
+  await page.reload(); await open(); await card.locator('summary').filter({ hasText: 'Tibo' }).waitFor();
+  const saved = await page.request.get(url).then(response => response.json());
+  assert.equal(saved.item.canonical_name, 'Tibo'); assert.equal(saved.item.facts[0].id, fixture.seeded.factId);
+  assert.match(saved.segments[0].original_text, /^Tibo released/);
+  assert.match(saved.segments[0].original_text, /Deeboverse/);
+  assert.equal(saved.item.mentions[0].surface_text, saved.segments[0].original_text);
+  const graphUrl = `${fixture.base}/api/listenings/${fixture.seeded.listeningId}/graph`;
+  let graph = await page.request.get(graphUrl).then(response => response.json());
+  assert.equal(graph.relations.length, 1); assert.equal(graph.assertions[0].status, 'active');
+  await card.locator('summary').click(); await edit('Tibo'); await page.locator('#knowledge-edit-name').fill('Tibo Corrected');
+  let writes = 0;
+  page.on('request', request => { if (request.url() === `${url}/name-replacements` && request.method() === 'POST') writes++; });
+  await page.route(`${url}/name-replacements`, async route => {
+    const result = await route.fetch(); assert.equal(result.status(), 200);
+    await route.fulfill({ status: 502, contentType: 'text/html', body: '<html>response lost</html>' });
   }, { times: 1 });
-  await page.locator('#knowledge-edit-save').click();
-  await page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
-  assert.equal(fixture.stats.providerRequests.length, callsBeforeLostResponse + 1);
-  await page.reload(); await open();
-  await card.locator('summary').filter({ hasText: 'Eastman Kodak' }).waitFor();
-  await page.locator('#knowledge-view-graph').click();
-  await page.locator('.graph-results > summary').click();
-  await page.locator(`[data-result-node-id="${fixture.seeded.first.nodes[0].id}"]`).click();
-  await page.locator('#graph-edit-node').click();
-  await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
-  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Eastman Kodak');
-  await page.locator('#knowledge-edit-delete').click();
-  await page.locator('#knowledge-delete-cancel').click();
+  await page.locator('#knowledge-edit-save').click(); await page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
+  assert.equal(writes, 1); assert.equal(fixture.stats.providerRequests.length, 0);
+  await page.reload(); await open(); await card.locator('summary').filter({ hasText: 'Tibo Corrected' }).waitFor();
+  await page.locator('#knowledge-view-graph').click(); await page.locator('.graph-results > summary').click();
+  await page.locator(`[data-result-node-id="${item.id}"]`).click();
+  assert.equal(await page.locator('#graph-correct-name').count(), 0);
+  assert.equal(await page.locator('#graph-edit-node').textContent(), '纠正名称');
+  await page.locator('#graph-edit-node').click(); await page.waitForFunction(() => !document.querySelector('#knowledge-edit-name').disabled);
+  assert.equal(await page.locator('#knowledge-edit-name').inputValue(), 'Tibo Corrected');
+  await page.locator('#knowledge-edit-delete').click(); await page.locator('#knowledge-delete-cancel').click();
   assert.equal(await page.locator('#knowledge-delete-confirm').isHidden(), true);
-  await page.locator('#knowledge-edit-delete').click();
-  await page.locator('#knowledge-delete-submit').click();
+  await page.locator('#knowledge-edit-delete').click(); await page.locator('#knowledge-delete-submit').click();
   await page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
-  await page.waitForFunction(id => !document.querySelector(`[data-result-node-id="${id}"]`), fixture.seeded.first.nodes[0].id);
-  await page.reload(); await open();
-  assert.equal(await card.count(), 0);
-  const graph = await page.request.get(`${fixture.base}/api/listenings/${fixture.seeded.first.listeningId}/graph`);
-  assert.equal((await graph.json()).nodes.length, fixture.seeded.first.nodes.length - 1);
+  await page.reload(); await open(); assert.equal(await card.count(), 0);
+  graph = await page.request.get(graphUrl).then(response => response.json());
+  assert.ok(graph.deletedItemIds.includes(item.id)); assert.equal(fixture.stats.providerRequests.length, 0);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ ok: true, checks: ['cancel preserves content', 'failed regeneration retains draft', 'atomic save',
-    'HTML read failure', 'HTML write failure retains draft', 'lost committed response does not repeat paid request',
-    'refresh resumes running job', 'model delay ' + (process.env.KNOWLEDGE_EDIT_SLOW_MODEL_MS || 1500) + 'ms',
-    'desktop/390/320 layout', 'reload persistence', 'graph edit entry', 'delete confirmation', 'no resurrection', 'no page errors'] }));
+  console.log(JSON.stringify({ ok: true, checks: ['one entry in list and graph', 'Deebo→Tibo without Key or model',
+    'collision/cancel/proxy failure preserve input', 'literal linked-source/fact/quote replacement', 'existing graph stays active',
+    'lost response recovers receipt without another write', 'desktop/390/320 layout', 'reload persistence', 'delete confirmation', 'no page errors'] }));
 } finally { await browser?.close(); await fixture.close(); }

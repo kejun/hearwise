@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from './storage.mjs';
 import { logKnowledgeRevisionConflict } from './knowledge-revision.mjs';
-import { extractKnowledge, repairKnowledge, splitFocusSegments, regenerateKnowledge, correctKnowledgeName } from './knowledge.mjs';
+import { extractKnowledge, repairKnowledge, splitFocusSegments, regenerateKnowledge, correctKnowledgeName, suggestKnowledgeName } from './knowledge.mjs';
 import { createTranslationScheduler } from './translation-queue.mjs';
 import { createKnowledgeScheduler } from './knowledge-queue.mjs';
 import { createKnowledgeWorkflow } from './knowledge-workflow.mjs';
@@ -474,7 +474,7 @@ async function runKnowledgeEditJob(id, itemId, jobId, prepared, key) {
   } finally { knowledgeEdits.delete(id); }
 }
 function notifyNameCorrection(id) {
-  // A display-only change must not authorize, resume or pump background work.
+  // Name changes must not authorize, resume or pump background model work.
   broadcast(id, { type: 'knowledge-name-corrected', listeningId: id });
   const graphRevision = store.graphMetadata(id)?.graphRevision;
   if (graphRevision != null) {
@@ -664,6 +664,32 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/listenings') {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     return sendJson(res, 200, store.list(page));
+  }
+  const nameActionMatch = /^\/api\/listenings\/([0-9a-f-]{36})\/knowledge\/([0-9a-f-]{36})\/(name-replacements|name-suggestions)$/.exec(url.pathname);
+  if (nameActionMatch && req.method === 'POST') {
+    const [, id, itemId, action] = nameActionMatch;
+    try {
+      const input = await readJson(req);
+      if (action === 'name-replacements') {
+        const result = store.replaceKnowledgeName(id, itemId, req.headers['idempotency-key'], input, { busy: knowledgeEdits.has(id) });
+        if (result.changed) notifyNameCorrection(id);
+        return sendJson(res, 200, result);
+      }
+      const prepared = store.prepareNameCorrection(id, itemId, input);
+      const key = typeof input.key === 'string' && input.key.trim() ? input.key.trim() : keys.get(id);
+      if (!key) return sendJson(res, 400, { code: 'KNOWLEDGE_EDIT_FAILED', saved: false, error: '自动建议需要 API Key；可直接填写正确名称并保存' });
+      const suggestion = await taskRuntime.run('knowledge.execute', { listening_id: id, job_id: randomUUID(), kind: 'name_suggestion' }, context =>
+        provider.run({ key, priority: 'knowledge', signal: context.signal }, () => suggestKnowledgeName(key, prepared, mtEndpoint, context)));
+      // A suggestion never mutates the database or resumes paid background work.
+      store.prepareNameCorrection(id, itemId, { revision: prepared.revision });
+      return sendJson(res, 200, { suggestion, revision: prepared.revision });
+    } catch (error) {
+      logKnowledgeRevisionConflict(error, id, itemId, action);
+      return sendJson(res, error.knowledgeEdit ? error.status : error instanceof SyntaxError ? 400 : 502,
+        { code: error.code === 'KNOWLEDGE_EDIT_STALE' ? error.code : 'KNOWLEDGE_EDIT_FAILED', saved: false,
+          ...(error.code === 'KNOWLEDGE_EDIT_STALE' ? { revision: error.revision, revisionVersion: error.revisionVersion } : {}),
+          error: error.knowledgeEdit ? error.message : action === 'name-suggestions' ? '获取名称建议失败，可直接填写正确名称；原内容未更改' : '名称纠正失败，原内容未更改' });
+    }
   }
   const nameCorrectionMatch = /^\/api\/listenings\/([0-9a-f-]{36})\/knowledge\/([0-9a-f-]{36})\/name-corrections$/.exec(url.pathname);
   if (nameCorrectionMatch && ['GET', 'POST'].includes(req.method)) {

@@ -25,6 +25,7 @@ function card(prepared) {
     evidence: [{ segment_id: prepared.correctedSegments[0].id, quote: prepared.correctedSegments[0].original_text }] };
 }
 function downgrade(h) {
+  for (const row of h.store.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'relation_%'").all()) h.store.db.exec(`DROP TRIGGER ${row.name}`);
   h.store.db.exec('DROP INDEX name_correction_context; DROP INDEX name_correction_applied;');
   for (const column of ['operation', 'context_hash', 'applied_context_hash', 'result_json', 'request_reserved'])
     h.store.db.exec(`ALTER TABLE knowledge_edit_jobs DROP COLUMN ${column}`);

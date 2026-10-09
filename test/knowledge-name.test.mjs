@@ -155,6 +155,8 @@ test('v11 upgrade preserves legacy receipt fingerprints; restart fences the cons
   h.store.createKnowledgeEditJob(h.listeningId, h.item.id, manualId, manualInput);
   h.store.failKnowledgeEditJob(manualId, '旧失败');
   const old = rows(h.store, 'knowledge_edit_jobs')[0];
+  // Remove current triggers that reference v12 columns before constructing v11.
+  for (const row of h.store.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'relation_%'").all()) h.store.db.exec(`DROP TRIGGER ${row.name}`);
   h.store.db.exec('DROP INDEX name_correction_context; DROP INDEX name_correction_applied;');
   for (const column of ['operation', 'context_hash', 'applied_context_hash', 'result_json', 'request_reserved'])
     h.store.db.exec(`ALTER TABLE knowledge_edit_jobs DROP COLUMN ${column}`);

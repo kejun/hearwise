@@ -1,5 +1,4 @@
 import { createKnowledgeEditor } from './knowledge-editor.js';
-import { createNameCorrector } from './knowledge-name-correction.js';
 import { knowledgeName } from './knowledge-name.js';
 import { initTranscriptVisibility } from './transcript-visibility.js';
 import { createCaptionFrontier } from './caption-frontier.js';
@@ -147,12 +146,7 @@ els.knowledgeTrack.addEventListener('click', event => {
 syncKnowledgeTrack();
 let knowledgeView = readKnowledgeView(localStorage);
 const knowledgeEditor = createKnowledgeEditor({ getId: () => listeningId, getKey: () => saved.key,
-  onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
   onSaved: refreshEditedKnowledge
-});
-const nameCorrector = createNameCorrector({ getId: () => listeningId, getKey: () => saved.key,
-  onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
-  onSaved: refreshCorrectedKnowledge
 });
 async function refreshCorrectedKnowledge(id) {
   if (id !== listeningId) return;
@@ -171,7 +165,6 @@ const knowledgeGraph = createKnowledgeGraph({
   onRequireKey: () => { openSettings(); activateTab(0); els.apiKey.focus(); },
   onStarted: id => { if (id === listeningId) { fetchDetail().catch(() => {}); startPolling(); } },
   onEdit: item => knowledgeEditor.open(item),
-  onCorrectName: item => nameCorrector.correct(item),
   loadSegment: loadKnowledgeEvidence,
   locateSegment: locateKnowledgeEvidence,
   onNodes: items => { if (detail?.listening.id === listeningId) { detail.knowledge = items; renderKnowledge(); } },
@@ -1097,13 +1090,10 @@ function renderKnowledge() {
       });
       evidence.append(link);
     }
-    const edit = el('button', 'knowledge-edit-button', '修改 / 删除'); edit.type = 'button';
-    edit.setAttribute('aria-label', `修改或删除 ${knowledgeName(item)}`);
+    const edit = el('button', 'knowledge-edit-button', '纠正名称'); edit.type = 'button';
+    edit.setAttribute('aria-label', `纠正 ${knowledgeName(item)} 的名称`);
     edit.addEventListener('click', () => { void knowledgeEditor.open(item); });
-    const correctName = el('button', 'knowledge-edit-button', '校正名称'); correctName.type = 'button';
-    correctName.setAttribute('aria-label', `校正 ${knowledgeName(item)} 的名称`);
-    correctName.addEventListener('click', () => { void nameCorrector.correct(item); });
-    const actions = el('div', 'knowledge-item-actions'); actions.append(correctName, edit);
+    const actions = el('div', 'knowledge-item-actions'); actions.append(edit);
     card.append(evidence, actions); els.knowledgeList.append(card);
   }
   syncKnowledgeToggleAll();
@@ -1286,7 +1276,6 @@ function showListening() {
   updatePinnedCaption();
 }
 async function showHistory() {
-  nameCorrector.close();
   knowledgeEditor.close();
   closeRecordEditor();
   if (phase !== 'idle') return;
@@ -1389,7 +1378,6 @@ els.recordLoadingBack.addEventListener('click', () => {
   showHistory().catch(error => { els.historyError.textContent = error.message; els.historyError.hidden = false; });
 });
 function resetListening() {
-  nameCorrector.close();
   knowledgeEditor.close();
   openingHistory?.controller.abort();
   openingHistory = null;
