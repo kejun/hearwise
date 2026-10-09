@@ -546,7 +546,7 @@ const server = http.createServer(async (req, res) => {
     const busy = restoreRuntimeBusy();
     if (busy) return sendJson(res, 409, { code: 'RESTORE_BUSY', error: busy });
 
-    const oldListeningIds = store.db.prepare('SELECT id FROM listenings').all().map(row => row.id);
+    const oldListeningIds = input.mode === 'replace' ? store.db.prepare('SELECT id FROM listenings').all().map(row => row.id) : [];
     const backup = path.join(backupRoot, `before-import-${backupStamp()}-${randomUUID().slice(0, 8)}.sqlite`);
     try {
       const options = { prepared: true, revision: pending.info.revision };

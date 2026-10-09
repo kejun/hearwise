@@ -227,6 +227,22 @@ test('10 + 5 disjoint records append to 15; replace restores 5; same titles are 
   assert.equal(h.current.list().total, 5);
 });
 
+test('large duplicate previews keep exact counts with bounded titles and no full ID arrays', t => {
+  const h = transferFixture(t);
+  for (let i = 0; i < 60; i++) seed(h.current, 't'.repeat(1000));
+  exportDatabase(h.current, h.importFile);
+  const append = previewImport(h.current, h.importFile, 'append');
+  assert.equal(append.currentCount, 60); assert.equal(append.listeningCount, 60);
+  assert.equal(append.addedCount, 0); assert.equal(append.skippedCount, 60);
+  assert.equal(append.skipped.length, 50);
+  assert.ok(append.skipped.every(row => row.title === 't'.repeat(200) + '…'));
+  assert.equal('addedIds' in append, false);
+  const replace = previewImport(h.current, h.importFile, 'replace', { prepared: true });
+  assert.equal(replace.listeningCount, 60); assert.deepEqual(replace.skipped, []);
+  assert.equal('addedIds' in replace, false);
+  assert.deepEqual(appendDatabase(h.current, h.importFile, h.backup, { revision: replace.revision }).addedIds, []);
+});
+
 test('child primary key collisions roll back all inserts and restore graph triggers', t => {
   const h = transferFixture(t);
   const local = seed(h.current, 'Local'); const incoming = seed(h.source, 'Incoming');

@@ -631,6 +631,11 @@ function showImportReview(result) {
   els.dataImportSkippedList.replaceChildren(...result.skipped.map(row => {
     const li = document.createElement('li'); li.textContent = row.title || '未命名收听'; return li;
   }));
+  if (result.mode === 'append' && result.skippedCount > result.skipped.length) {
+    const li = document.createElement('li');
+    li.textContent = `仅展示前 ${result.skipped.length} 条，另有 ${result.skippedCount - result.skipped.length} 条跳过；总数已计入预览。`;
+    els.dataImportSkippedList.append(li);
+  }
   els.dataImportReview.hidden = false;
   els.dataImportConfirm.disabled = result.mode === 'append' && !result.addedCount;
   setDataTransferStatus(result.mode === 'append' && !result.addedCount

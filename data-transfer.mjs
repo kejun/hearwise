@@ -136,8 +136,8 @@ export function restoreDatabase(store, source, backupDestination, { prepared = f
   const safety = restoreSafety(store);
   if (!safety.ok) throw new DataTransferError(safety.error, { status: 409, code: 'RESTORE_BUSY' });
 
-  inspectDatabase(source);
-  const importedInfo = prepared ? inspectDatabase(source) : migrateImportedDatabase(source);
+  const inspected = inspectDatabase(source);
+  const importedInfo = prepared ? inspected : migrateImportedDatabase(source);
   const backupInfo = exportDatabase(store, backupDestination);
 
   const db = store.db;
@@ -318,8 +318,7 @@ function crossListeningError(table) {
   return new DataTransferError(`备份中的 ${table} 存在跨收听引用，无法追加`, { code: 'IMPORT_CROSS_LISTENING_REFERENCE' });
 }
 
-function validateAppendReferences(db, addedIds) {
-  const added = new Set(addedIds);
+function validateAppendReferences(db) {
   const references = new Map();
   for (const table of Object.keys(IMPORT_TABLES)) {
     const rows = ownedRows(table);
@@ -340,7 +339,6 @@ function validateAppendReferences(db, addedIds) {
     // reject any known embedded reference resolving to another listening.
     if (!jsonColumns[table]) continue;
     for (const row of db.prepare(`SELECT * FROM (${rows}) WHERE __owner NOT IN (SELECT id FROM main.listenings)`).iterate()) {
-      if (!added.has(row.__owner)) continue;
       const checkReference = (target, id) => {
         if (typeof id !== 'string') return;
         if (!references.has(target)) references.set(target, db.prepare(`SELECT __owner FROM (${ownedRows(target)}) WHERE id=?
@@ -378,19 +376,23 @@ function validateAppendReferences(db, addedIds) {
 }
 
 function buildImportPlan(store, info, mode) {
-  const current = store.db.prepare('SELECT id FROM listenings ORDER BY id').all();
-  const existing = new Set(current.map(row => row.id));
-  const incoming = store.db.prepare('SELECT id,title FROM imported.listenings ORDER BY created_at,id').all();
-  const added = incoming.filter(row => !existing.has(row.id));
-  const skipped = incoming.filter(row => existing.has(row.id));
-  return { ...info, mode, currentCount: current.length, addedCount: added.length, skippedCount: skipped.length,
-    skipped: skipped.map(row => ({ id: row.id, title: row.title })), addedIds: added.map(row => row.id), revision: importRevision(store) };
+  const db = store.db;
+  const currentCount = Number(db.prepare('SELECT COUNT(*) n FROM main.listenings').get().n);
+  const skippedCount = Number(db.prepare('SELECT COUNT(*) n FROM imported.listenings i JOIN main.listenings m ON m.id=i.id').get().n);
+  // Keep counts exact without materializing every record. IDs needed for writes
+  // stay in SQLite; only a bounded sample of skipped titles reaches the UI.
+  const skipped = mode === 'append' ? db.prepare(`SELECT i.id,
+    CASE WHEN length(i.title)>200 THEN substr(i.title,1,200)||'…' ELSE i.title END title
+    FROM imported.listenings i JOIN main.listenings m ON m.id=i.id
+    ORDER BY i.created_at,i.id LIMIT 50`).all() : [];
+  return { ...info, mode, currentCount, addedCount: info.listeningCount - skippedCount, skippedCount,
+    skipped, revision: importRevision(store) };
 }
 
 export function previewImport(store, source, mode, { prepared = false } = {}) {
   importMode(mode);
-  inspectDatabase(source);
-  const info = prepared ? inspectDatabase(source) : migrateImportedDatabase(source);
+  const inspected = inspectDatabase(source);
+  const info = prepared ? inspected : migrateImportedDatabase(source);
   const db = store.db;
   db.prepare('ATTACH DATABASE ? AS imported').run(source);
   let transaction = false;
@@ -398,7 +400,7 @@ export function previewImport(store, source, mode, { prepared = false } = {}) {
     db.exec('BEGIN IMMEDIATE'); transaction = true;
     validateImportSchema(db);
     const plan = buildImportPlan(store, info, mode);
-    if (mode === 'append') validateAppendReferences(db, plan.addedIds);
+    if (mode === 'append') validateAppendReferences(db);
     return plan;
   } finally {
     try { if (transaction) db.exec('ROLLBACK'); }
@@ -412,7 +414,7 @@ export function appendDatabase(store, source, backupDestination, { revision } = 
   assertImportRevision(store, revision);
   const plan = previewImport(store, source, 'append', { prepared: true });
   assertImportRevision(store, revision);
-  if (!plan.addedCount) return { ...plan, changed: false, backupInfo: null };
+  if (!plan.addedCount) return { ...plan, changed: false, backupInfo: null, addedIds: [] };
   const backupInfo = exportDatabase(store, backupDestination);
   const db = store.db;
   db.prepare('ATTACH DATABASE ? AS imported').run(source);
@@ -436,12 +438,13 @@ export function appendDatabase(store, source, backupDestination, { revision } = 
         WHERE t.__owner IN (SELECT id FROM temp.import_added)`);
     }
     for (const trigger of triggers) db.exec(trigger.sql);
+    const addedIds = db.prepare('SELECT id FROM temp.import_added').all().map(row => row.id);
     db.exec('DROP TABLE temp.import_added');
     if (db.prepare('PRAGMA main.foreign_key_check').all().length || !integrityOk(db)) {
       throw new DataTransferError('追加数据关联完整性检查未通过', { code: 'FOREIGN_KEY_CHECK_FAILED' });
     }
     db.exec('COMMIT'); transaction = false;
-    return { ...plan, changed: true, backupInfo };
+    return { ...plan, changed: true, backupInfo, addedIds };
   } catch (error) {
     if (transaction) db.exec('ROLLBACK');
     if (error instanceof DataTransferError) throw error;
