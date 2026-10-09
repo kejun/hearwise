@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from '../storage.mjs';
 import { parseKnowledge } from '../knowledge.mjs';
+import { deadline, stopChild, closeServer } from '../test-support/lifecycle.mjs';
 
 const settings = { source: 'en', targetLang: 'Chinese', audioSource: 'microphone' };
 const waitFor = (predicate, timeout = 3000) => new Promise((resolve, reject) => {
@@ -18,6 +19,21 @@ const waitFor = (predicate, timeout = 3000) => new Promise((resolve, reject) => 
   }, 15);
 });
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+
+async function serverAddress(child) {
+  let onData, onError, onExit;
+  try {
+    return await deadline(() => new Promise((resolve, reject) => {
+      onData = data => { const base = String(data).match(/http:\/\/127\.0\.0\.1:\d+/)?.[0]; if (base) resolve(base); };
+      onError = reject;
+      onExit = (code, signal) => reject(new Error(`Test server exited before startup: code=${code} signal=${signal}`));
+      child.stdout.on('data', onData); child.once('error', onError); child.once('exit', onExit);
+      if (child.exitCode != null || child.signalCode != null) onExit(child.exitCode, child.signalCode);
+    }), 3000, 'Test server startup');
+  } finally {
+    child.stdout.removeListener('data', onData); child.removeListener('error', onError); child.removeListener('exit', onExit);
+  }
+}
 
 test('最终句幂等、继续收听顺序与重启恢复', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'asr-store-'));
@@ -193,22 +209,20 @@ test('WebSocket 最终句持久化、翻译抽取、停止后重试和继续收�
       }
     });
   });
-  const port = 36000 + Math.floor(Math.random() * 1000);
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve('.'), env: { ...process.env, PORT: String(port),
+  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve('.'), env: { ...process.env, PORT: '0',
     LISTENING_DB: path.join(dir, 'history.sqlite'), ASR_ENDPOINT: `ws://127.0.0.1:${asrServer.address().port}`,
     MT_ENDPOINT: `http://127.0.0.1:${modelPort}/chat/completions` }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] '+d));
   child.stdout.on('data', d => process.stderr.write('[server] '+d));
   t.after(async () => {
-    child.kill(); await new Promise(resolve => child.once('exit', resolve));
-    await new Promise(resolve => asrServer.close(resolve));
-    await new Promise(resolve => modelServer.close(resolve));
+    const results = await Promise.allSettled([stopChild(child), closeServer(asrServer, 'ASR'), closeServer(modelServer, 'model HTTP')]);
     rmSync(dir, { recursive: true, force: true });
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Listening fixture cleanup failed');
   });
-  const base = `http://127.0.0.1:${port}`;
-  await waitFor(async () => { try { return (await fetch(base)).ok; } catch { return false; } });
+  const base = await serverAddress(child);
   async function startRun(listeningId = null) {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const ws = new WebSocket(`${base.replace('http:', 'ws:')}/ws`);
     const events = [];
     ws.on('message', raw => events.push(JSON.parse(raw.toString())));
     await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
@@ -297,21 +311,19 @@ test('同语言收听不调用翻译模型，原文直通为最终译文', async
       if (message.header?.action === 'finish-task') ws.send(JSON.stringify({ header: { event: 'task-finished', task_id: taskId } }));
     });
   });
-  const port = 37000 + Math.floor(Math.random() * 1000);
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve('.'), env: { ...process.env, PORT: String(port),
+  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve('.'), env: { ...process.env, PORT: '0',
     LISTENING_DB: path.join(dir, 'history.sqlite'), ASR_ENDPOINT: `ws://127.0.0.1:${asrServer.address().port}`,
     MT_ENDPOINT: `http://127.0.0.1:${modelPort}/chat/completions` }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] ' + d));
   child.stdout.on('data', d => process.stderr.write('[server] ' + d));
   t.after(async () => {
-    child.kill(); await new Promise(resolve => child.once('exit', resolve));
-    await new Promise(resolve => asrServer.close(resolve));
-    await new Promise(resolve => modelServer.close(resolve));
+    const results = await Promise.allSettled([stopChild(child), closeServer(asrServer, 'ASR'), closeServer(modelServer, 'model HTTP')]);
     rmSync(dir, { recursive: true, force: true });
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Listening fixture cleanup failed');
   });
-  const base = `http://127.0.0.1:${port}`;
-  await waitFor(async () => { try { return (await fetch(base)).ok; } catch { return false; } });
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  const base = await serverAddress(child);
+  const ws = new WebSocket(`${base.replace('http:', 'ws:')}/ws`);
   const events = [];
   ws.on('message', raw => events.push(JSON.parse(raw.toString())));
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
