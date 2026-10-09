@@ -19,8 +19,12 @@ export async function readKnowledgeEditorResponse(response, method = 'GET') {
   }
   if (!response.ok) {
     const message = typeof result?.error === 'string' && result.error.trim() ? result.error : '服务未能完成请求';
-    const confirmedUnchanged = result?.code === 'KNOWLEDGE_EDIT_FAILED' && result.saved === false;
-    throw new KnowledgeEditorError(`${phase}失败（${status}）：${message}`, method !== 'GET' && response.status >= 500 && !confirmedUnchanged);
+    const stale = response.status === 409 && result?.code === 'KNOWLEDGE_EDIT_STALE' && result.saved === false &&
+      typeof result.revision === 'string' && /^[a-f0-9]{64}$/.test(result.revision);
+    const confirmedUnchanged = (result?.code === 'KNOWLEDGE_EDIT_FAILED' || stale) && result.saved === false;
+    throw Object.assign(new KnowledgeEditorError(`${phase}失败（${status}）：${message}`,
+      method !== 'GET' && response.status >= 500 && !confirmedUnchanged),
+    stale ? { code: result.code, revision: result.revision } : {});
   }
   const valid = result && typeof result === 'object' && !Array.isArray(result) &&
     (method.startsWith('NAME') ? (method === 'NAME_LOOKUP' && result.job === null || validNameJob(result.job)) :
@@ -79,6 +83,8 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
     <input id="knowledge-edit-source" required maxlength="160" autocomplete="off">
     <label for="knowledge-edit-name">正确名称</label>
     <input id="knowledge-edit-name" required maxlength="160" autocomplete="off">
+    <details id="knowledge-edit-current" hidden><summary>核对最新条目与原文</summary>
+      <p id="knowledge-edit-current-name"></p><div id="knowledge-edit-current-source"></div></details>
     <p class="form-note">重新生成会将相关原文发送给千问。已有译文保持原样；改动原文后，相关图谱关系需要重新核对。</p>
     <p id="knowledge-edit-status" role="status" aria-live="polite"></p>
     <div class="knowledge-edit-actions">
@@ -95,6 +101,26 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
   const $ = id => dialog.querySelector(`#${id}`);
   let selected = null, busy = false, generation = 0, outcomeUnknown = false, polling = false;
   const status = $('knowledge-edit-status');
+  function showCurrent(snapshot) {
+    $('knowledge-edit-current').hidden = false; $('knowledge-edit-current').open = true;
+    $('knowledge-edit-current-name').textContent = `最新名称：${knowledgeName(snapshot.item)}`;
+    const container = $('knowledge-edit-current-source'); container.replaceChildren();
+    for (const segment of snapshot.segments) {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = segment.original_text + (segment.translation_text ? `\n译文：${segment.translation_text}` : '');
+      container.append(paragraph);
+    }
+  }
+  async function refreshStale(current, gen) {
+    const snapshot = await readKnowledgeEditorResponse(await fetch(current.url, { signal: AbortSignal.timeout(10000) }));
+    if (gen !== generation || current.listeningId !== getId()) return;
+    current.revision = snapshot.revision;
+    $('knowledge-delete-confirm').hidden = true;
+    showCurrent(snapshot);
+    outcomeUnknown = snapshot.editJob?.state === 'running' || snapshot.nameCorrectionJob?.state === 'running';
+    status.textContent = outcomeUnknown ? '另一个保存任务正在处理，输入已保留；请重新打开查询结果。' :
+      '条目或原文已改变，本次未保存或删除。已读取最新内容，输入已保留；请核对后再次点击保存，或重新确认删除。';
+  }
   function setBusy(value) {
     busy = value;
     for (const control of dialog.querySelectorAll('input,button')) control.disabled = value;
@@ -164,6 +190,15 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
       await onSaved(current.listeningId);
     } catch (error) {
       if (gen !== generation) return;
+      if (error.code === 'KNOWLEDGE_EDIT_STALE') {
+        try { await refreshStale(current, gen); }
+        catch {
+          if (gen !== generation) return;
+          outcomeUnknown = true;
+          status.textContent = '条目已改变，本次未保存或删除。输入已保留，但读取最新内容失败；请关闭后重新打开核对。';
+        }
+        return;
+      }
       outcomeUnknown = !(error instanceof KnowledgeEditorError) || error.outcomeUnknown;
       status.textContent = requestFailure(error, true) + (outcomeUnknown ? ' 输入已保留；保存结果尚未确认，请关闭后重新打开核对，避免重复提交。' : ' 输入已保留。');
     } finally { if (gen === generation) { polling = false; setBusy(false); } }
@@ -176,7 +211,7 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
       if (busy) return;
       const gen = ++generation, listeningId = getId();
       const url = `/api/listenings/${listeningId}/knowledge/${item.id}`;
-      selected = null; outcomeUnknown = false; $('knowledge-delete-confirm').hidden = true;
+      selected = null; outcomeUnknown = false; $('knowledge-delete-confirm').hidden = true; $('knowledge-edit-current').hidden = true;
       $('knowledge-edit-name').value = knowledgeName(item); $('knowledge-edit-source').value = item.canonical_name;
       status.textContent = '正在读取最新内容…'; dialog.showModal(); setBusy(true);
       try {
@@ -186,6 +221,12 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
         selected = { listeningId, url, revision: result.revision };
         if (result.editJob) {
           if (!validJob(result.editJob)) throw new KnowledgeEditorError('保存任务信息不完整，请稍后重新打开。', true);
+          if (result.editJob.state === 'failed' && result.editJob.staleRevision) {
+            $('knowledge-edit-name').value = knowledgeName(result.item); $('knowledge-edit-source').value = result.item.canonical_name;
+            showCurrent(result);
+            status.textContent = `上次保存未完成：${result.editJob.error} 此后条目或原文已改变，已显示最新内容；旧任务未重试。`;
+            return;
+          }
           $('knowledge-edit-name').value = result.editJob.name; $('knowledge-edit-source').value = result.editJob.source;
           if (await waitForJob(selected, result.editJob.id, result.editJob, gen)) {
             if (gen !== generation) return;

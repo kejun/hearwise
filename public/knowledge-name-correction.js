@@ -40,7 +40,8 @@ export function createNameCorrector({ getId, getKey, onSaved, onRequireKey }) {
     while (current(selection, gen)) {
       if (!validNameJob(job) || job.id !== acceptedId) throw Object.assign(new Error('校正任务响应不匹配'), { outcomeUnknown: true });
       if (job.state === 'succeeded') { await finish(job, selection, gen); return; }
-      if (job.state === 'failed') throw Object.assign(new Error(job.error), { outcomeUnknown: false });
+      if (job.state === 'failed') throw Object.assign(new Error(job.error + (job.staleRevision
+        ? ' 此后条目或原文已改变，重试前将重新核对最新内容。' : '')), { outcomeUnknown: false });
       if (Date.now() >= deadline) throw Object.assign(new Error('暂时无法确认校正结果'), { outcomeUnknown: true });
       status.textContent = '正在校正名称，可关闭窗口后重新打开查看。';
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -97,7 +98,17 @@ export function createNameCorrector({ getId, getKey, onSaved, onRequireKey }) {
         await poll(snapshot.nameCorrectionJob, selection, gen); return;
       }
       await submit(selection, gen);
-    } catch (error) { showFailure(error, selection, gen); }
+    } catch (error) {
+      if (error.code === 'KNOWLEDGE_EDIT_STALE') {
+        try {
+          const latest = await readKnowledgeEditorResponse(await fetch(selection.url, { signal: AbortSignal.timeout(10000) }));
+          if (!current(selection, gen)) return;
+          selection.item = latest.item; selection.revision = latest.revision;
+          showFailure(Object.assign(new Error(`条目或原文已改变，已读取最新名称“${knowledgeName(latest.item)}”；请确认后点击重试校正。`),
+            { outcomeUnknown: false }), selection, gen);
+        } catch { showFailure(Object.assign(new Error('条目已改变，本次未校正，但读取最新内容失败'), { outcomeUnknown: true }), selection, gen); }
+      } else showFailure(error, selection, gen);
+    }
     finally { if (current(selection, gen)) { busy = false; dialog.setAttribute('aria-busy', 'false'); } }
   }
   retry.onclick = () => { if (selected && !busy) void open(selected.item, true); };

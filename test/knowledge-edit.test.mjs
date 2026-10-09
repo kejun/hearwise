@@ -122,7 +122,7 @@ test('durable edit receipts commit atomically, reject changed retries and recove
   assert.equal(h.store.knowledgeEditJob(h.listeningId, h.item.id, second).saved, false);
   assert.match(h.store.knowledgeEditJob(h.listeningId, h.item.id, second).error, /重启/);
   assert.equal(h.store.knowledgeEditForSnapshot(h.listeningId, h.item.id, savedRevision).id, second);
-  assert.equal(h.store.knowledgeEditForSnapshot(h.listeningId, h.item.id, 'different-revision'), undefined);
+  assert.equal(h.store.knowledgeEditForSnapshot(h.listeningId, h.item.id, 'different-revision').staleRevision, true);
   assert.equal(h.store.knowledge(h.listeningId)[0].canonical_name, 'OpenAI');
 });
 

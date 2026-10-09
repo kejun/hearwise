@@ -51,6 +51,22 @@ test('valid editor contracts and transport failures retain their meaning', async
   await assert.rejects(readKnowledgeEditorResponse({ status: 200, text: async () => { throw error; } }), caught => caught === error);
 });
 
+test('only a typed confirmed stale conflict enables read-only recovery', async () => {
+  const revision = 'a'.repeat(64);
+  for (const method of ['PATCH', 'DELETE', 'NAME']) {
+    await assert.rejects(readKnowledgeEditorResponse(Response.json({ code: 'KNOWLEDGE_EDIT_STALE', saved: false,
+      error: '内容已改变', revision }, { status: 409 }), method), error => {
+      assert.equal(error.code, 'KNOWLEDGE_EDIT_STALE'); assert.equal(error.revision, revision);
+      assert.equal(error.outcomeUnknown, false); return true;
+    });
+  }
+  for (const input of [{ code: 'KNOWLEDGE_EDIT_FAILED', saved: false, revision },
+    { code: 'KNOWLEDGE_EDIT_STALE', saved: false, revision: '<private>' }, { code: 'KNOWLEDGE_EDIT_STALE', saved: true, revision }]) {
+    await assert.rejects(readKnowledgeEditorResponse(Response.json({ ...input, error: '冲突' }, { status: 409 }), 'PATCH'),
+      error => error.code === undefined);
+  }
+});
+
 test('async receipts require a consistent terminal outcome before reporting success', async () => {
   const job = { id: '11111111-1111-4111-8111-111111111111', name: 'OpenAI', source: 'Open Eye', state: 'running', saved: null };
   assert.deepEqual(await readKnowledgeEditorResponse(Response.json({ job }, { status: 202 }), 'PATCH'), { job });

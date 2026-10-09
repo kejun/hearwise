@@ -276,6 +276,7 @@ details.knowledge-item.knowledge-flash{animation:knowledge-flash 1.9s ease-out}
 .knowledge-editor h2 { margin: 0 0 12px; font-size: 20px; }
 .knowledge-editor label { display: block; margin: 16px 0 6px; font-weight: 600; }
 .knowledge-editor input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px; border: 1px solid #bbb; border-radius: 8px; font: inherit; }
+#knowledge-edit-current p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .knowledge-edit-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .knowledge-editor button, .knowledge-edit-button, .graph-edit-node { min-height: 44px; padding: 10px 14px; cursor: pointer; }
 .knowledge-editor button:disabled { opacity: .5; cursor: wait; }
