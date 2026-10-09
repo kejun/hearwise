@@ -8,7 +8,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from './storage.mjs';
-import { extractKnowledge, repairKnowledge, splitFocusSegments, regenerateKnowledge } from './knowledge.mjs';
+import { extractKnowledge, repairKnowledge, splitFocusSegments, regenerateKnowledge, correctKnowledgeName } from './knowledge.mjs';
 import { createTranslationScheduler } from './translation-queue.mjs';
 import { createKnowledgeScheduler } from './knowledge-queue.mjs';
 import { createKnowledgeWorkflow } from './knowledge-workflow.mjs';
@@ -68,6 +68,7 @@ const speech = createSpeechService({ store, taskRuntime, incrementalClauses: pro
 for (const file of ['knowledge-editor.js', 'transcript-visibility.js', 'caption-frontier.js', 'speech-protocol.js', 'speech-controller.js', 'speech-player.js', 'speech-buffer.js', 'speech-output-processor.js', 'speech-media-session.js', 'knowledge-graph.js', 'knowledge-graph-layout.js', 'knowledge-graph-renderer.js', 'vendor/cytoscape.js']) {
   types[`/${file}`] = 'text/javascript; charset=utf-8';
 }
+for (const file of ['knowledge-name.js', 'knowledge-name-correction.js']) types[`/${file}`] = 'text/javascript; charset=utf-8';
 let translating = 0;
 let interimTranslating = 0;
 const activeTranslations = new Map();
@@ -470,6 +471,45 @@ async function runKnowledgeEditJob(id, itemId, jobId, prepared, key) {
       reason: timeout ? 'timeout' : error.knowledgeEdit ? 'conflict' : 'generation_failed', http_status: error.status || null }));
   } finally { knowledgeEdits.delete(id); }
 }
+function notifyNameCorrection(id) {
+  // A display-only change must not authorize, resume or pump background work.
+  broadcast(id, { type: 'knowledge-name-corrected', listeningId: id });
+  const graphRevision = store.graphMetadata(id)?.graphRevision;
+  if (graphRevision != null) {
+    graphRevisions.set(id, graphRevision);
+    broadcast(id, { type: 'graph-invalidated', listeningId: id, graphRevision });
+  }
+}
+async function runNameCorrectionJob(id, itemId, jobId, prepared, key) {
+  const started = Date.now();
+  let requests = 0;
+  try {
+    if (!store.reserveNameCorrection(jobId)) throw Object.assign(new Error('校正任务已处理，请重新打开核对'), { knowledgeEdit: true });
+    const job = await taskRuntime.run('knowledge.execute', { listening_id: id, job_id: jobId, kind: 'name_correction' }, async context => {
+      const result = await provider.run({ key, priority: 'knowledge', signal: context.signal }, () => {
+        requests++;
+        context.event('checkpoint_reserved', { kind: 'name_correction', request_count: requests });
+        return correctKnowledgeName(key, prepared, mtEndpoint, context);
+      });
+      context.signal.throwIfAborted();
+      const saved = store.saveNameCorrection(id, itemId, jobId, prepared, result);
+      context.event('checkpoint_committed', { kind: 'name_correction', request_count: requests,
+        cache_hit: 0, outcome: saved.result.outcome });
+      return { ...saved, outcome: saved.result.outcome };
+    });
+    if (job.changed) notifyNameCorrection(id);
+    console.info('knowledge_name_correction', JSON.stringify({ job_id: jobId, operation: 'name_correction',
+      request_count: requests, cache_hit: false, outcome: job.result.outcome, elapsed_ms: Date.now() - started }));
+  } catch (error) {
+    const timeout = ['TimeoutError', 'AbortError'].includes(error?.name);
+    const message = error.knowledgeEdit ? error.message : timeout ? '名称校正超过 30 秒，原名称未更改；可明确重试。' :
+      error?.status ? `模型服务请求失败（HTTP ${error.status}），原名称未更改；可明确重试。` :
+        '名称校正失败或结果无效，原名称未更改；可明确重试。';
+    store.failKnowledgeEditJob(jobId, message);
+    console.warn('knowledge_name_correction', JSON.stringify({ job_id: jobId, operation: 'name_correction', request_count: requests,
+      cache_hit: false, outcome: 'failed', elapsed_ms: Date.now() - started, http_status: error.status || null }));
+  } finally { knowledgeEdits.delete(id); }
+}
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   if (['POST', 'PATCH', 'DELETE'].includes(req.method) && !sameOrigin(req)) return sendJson(res, 403, { error: '仅允许同源请求' });
@@ -622,6 +662,39 @@ const server = http.createServer(async (req, res) => {
     const page = Math.max(1, Math.min(100000, Math.floor(Number(url.searchParams.get('page')) || 1)));
     return sendJson(res, 200, store.list(page));
   }
+  const nameCorrectionMatch = /^\/api\/listenings\/([0-9a-f-]{36})\/knowledge\/([0-9a-f-]{36})\/name-corrections$/.exec(url.pathname);
+  if (nameCorrectionMatch && ['GET', 'POST'].includes(req.method)) {
+    const [, id, itemId] = nameCorrectionMatch;
+    try {
+      if (req.method === 'GET') {
+        const revision = url.searchParams.get('revision');
+        if (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision))
+          return sendJson(res, 400, { error: '校正输入版本无效' });
+        return sendJson(res, 200, { job: store.nameCorrectionForRevision(id, itemId, revision) || null });
+      }
+      const input = await readJson(req), jobId = req.headers['idempotency-key'];
+      if (typeof jobId !== 'string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(jobId))
+        return sendJson(res, 400, { code: 'KNOWLEDGE_EDIT_FAILED', saved: false, error: '校正任务编号无效' });
+      const key = typeof input?.key === 'string' && input.key.trim() ? input.key.trim() : keys.get(id);
+      const accepted = store.acceptNameCorrection(id, itemId, jobId, input, { hasKey: Boolean(key), busy: knowledgeEdits.has(id) });
+      if (accepted.prepared) {
+        knowledgeEdits.add(id);
+        void runNameCorrectionJob(id, itemId, accepted.job.id, accepted.prepared, key);
+      } else if (accepted.created && accepted.job.state === 'succeeded') {
+        // Trace local/cache checks too; no provider call or shared authorization.
+        void taskRuntime.run('knowledge.execute', { listening_id: id, job_id: accepted.job.id, kind: 'name_correction' }, context => {
+          context.event('checkpoint_committed', { kind: 'name_correction', request_count: 0,
+            cache_hit: Number(accepted.job.result.cache_hit), outcome: accepted.job.result.outcome });
+          return { outcome: accepted.job.result.outcome };
+        }).catch(() => {});
+        if (accepted.job.changed) notifyNameCorrection(id);
+      }
+      return sendJson(res, 202, { job: accepted.job });
+    } catch (error) {
+      return sendJson(res, error.knowledgeEdit ? error.status : error instanceof SyntaxError ? 400 : 502,
+        { code: 'KNOWLEDGE_EDIT_FAILED', saved: false, error: error.knowledgeEdit ? error.message : '无法创建名称校正任务，原名称未更改' });
+    }
+  }
   const editStatusMatch = /^\/api\/listenings\/([0-9a-f-]{36})\/knowledge\/([0-9a-f-]{36})\/edits\/([0-9a-f-]{36})$/.exec(url.pathname);
   if (editStatusMatch && req.method === 'GET') {
     const job = store.knowledgeEditJob(...editStatusMatch.slice(1));
@@ -634,7 +707,8 @@ const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET') {
         const snapshot = store.knowledgeEditSnapshot(id, itemId);
-        return sendJson(res, 200, { ...snapshot, editJob: store.knowledgeEditForSnapshot(id, itemId, snapshot.revision) });
+        return sendJson(res, 200, { ...snapshot, editJob: store.knowledgeEditForSnapshot(id, itemId, snapshot.revision),
+          nameCorrectionJob: store.nameCorrectionForSnapshot(id, itemId, snapshot) });
       }
       const input = await readJson(req);
       const asynchronous = req.method === 'PATCH' && req.headers.prefer === 'respond-async';

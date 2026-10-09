@@ -1,3 +1,5 @@
+import { knowledgeName } from './knowledge-name.js';
+
 class KnowledgeEditorError extends Error {
   constructor(message, outcomeUnknown = false) { super(message); this.outcomeUnknown = outcomeUnknown; }
 }
@@ -5,7 +7,7 @@ class KnowledgeEditorError extends Error {
 // Proxy error pages, empty responses and an outdated server are not word-matching failures.
 // Never display response bodies: they may contain HTML, transcript text or credentials.
 export async function readKnowledgeEditorResponse(response, method = 'GET') {
-  const phase = method === 'GET' ? '读取知识条目' : method === 'JOB' ? '查询保存结果' : method === 'DELETE' ? '删除知识条目' : '保存知识修改';
+  const phase = method.startsWith('NAME') ? '校正知识名称' : method === 'GET' ? '读取知识条目' : method === 'JOB' ? '查询保存结果' : method === 'DELETE' ? '删除知识条目' : '保存知识修改';
   const status = `HTTP ${response.status}`;
   let result;
   try { result = JSON.parse(await response.text()); }
@@ -21,7 +23,8 @@ export async function readKnowledgeEditorResponse(response, method = 'GET') {
     throw new KnowledgeEditorError(`${phase}失败（${status}）：${message}`, method !== 'GET' && response.status >= 500 && !confirmedUnchanged);
   }
   const valid = result && typeof result === 'object' && !Array.isArray(result) &&
-    (method === 'JOB' || method === 'PATCH' && response.status === 202 ? validJob(result.job) :
+    (method.startsWith('NAME') ? (method === 'NAME_LOOKUP' && result.job === null || validNameJob(result.job)) :
+      method === 'JOB' || method === 'PATCH' && response.status === 202 ? validJob(result.job) :
       method === 'GET' ? typeof result.revision === 'string' && result.revision.length > 0 &&
       typeof result.item?.id === 'string' && typeof result.item?.canonical_name === 'string' && Array.isArray(result.segments) :
       method === 'DELETE' ? result.ok === true : typeof result.item?.id === 'string' && typeof result.item?.canonical_name === 'string');
@@ -30,13 +33,23 @@ export async function readKnowledgeEditorResponse(response, method = 'GET') {
 }
 
 function validJob(job) {
-  return job && typeof job.id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(job.id) &&
+  return job && job.operation !== 'name_correction' && typeof job.id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(job.id) &&
     typeof job.name === 'string' && typeof job.source === 'string' &&
     (job.state === 'running' && job.saved === null || job.state === 'succeeded' && job.saved === true ||
       job.state === 'failed' && job.saved === false && typeof job.error === 'string' && job.error.length > 0);
 }
 
-function newEditId() {
+export function validNameJob(job) {
+  return job && job.operation === 'name_correction' && typeof job.id === 'string' &&
+    /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(job.id) && typeof job.revision === 'string' &&
+    (job.state === 'running' && job.saved === null ||
+      job.state === 'failed' && job.saved === false && typeof job.error === 'string' && job.error.length > 0 ||
+      job.state === 'succeeded' && typeof job.saved === 'boolean' && typeof job.changed === 'boolean' &&
+      job.saved === job.changed && job.result?.changed === job.changed && ['corrected', 'unchanged', 'insufficient_evidence'].includes(job.result.outcome) &&
+      typeof job.result.name === 'string' && typeof job.result.previous_name === 'string' && typeof job.result.reason === 'string');
+}
+
+export function newEditId() {
   // getRandomValues also works when viewing history over a local HTTP address.
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
@@ -164,7 +177,7 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
       const gen = ++generation, listeningId = getId();
       const url = `/api/listenings/${listeningId}/knowledge/${item.id}`;
       selected = null; outcomeUnknown = false; $('knowledge-delete-confirm').hidden = true;
-      $('knowledge-edit-name').value = item.canonical_name; $('knowledge-edit-source').value = item.canonical_name;
+      $('knowledge-edit-name').value = knowledgeName(item); $('knowledge-edit-source').value = item.canonical_name;
       status.textContent = '正在读取最新内容…'; dialog.showModal(); setBusy(true);
       try {
         const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
@@ -180,7 +193,7 @@ export function createKnowledgeEditor({ getId, getKey, onSaved, onRequireKey }) 
           }
           return;
         }
-        $('knowledge-edit-name').value = result.item.canonical_name; $('knowledge-edit-source').value = result.item.canonical_name;
+        $('knowledge-edit-name').value = knowledgeName(result.item); $('knowledge-edit-source').value = result.item.canonical_name;
         status.textContent = `关联 ${result.segments.length} 段原文；只替换其中完整匹配的错误词。`;
         setBusy(false); $('knowledge-edit-name').focus(); $('knowledge-edit-name').select();
       } catch (error) {

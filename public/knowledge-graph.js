@@ -1,4 +1,5 @@
 import { createGraphRenderer } from './knowledge-graph-renderer.js';
+import { knowledgeName } from './knowledge-name.js';
 
 // The graph is a presentation of persisted knowledge, never a source of new facts.
 export const KNOWLEDGE_VIEW_KEY = 'tongsheng:knowledge-view';
@@ -48,7 +49,7 @@ export function filterGraph(nodes, relations, { query = '', type = '', localId =
   }
   const needle = query.trim().toLocaleLowerCase();
   const filtered = nodes.filter(n => (!type || knowledgeType(n) === type) && (!local || local.has(n.id)) &&
-    (!needle || [n.canonical_name, n.short_description, n.dialogue_summary, ...(n.aliases || [])].join(' ').toLocaleLowerCase().includes(needle)));
+    (!needle || [knowledgeName(n), n.canonical_name, n.short_description, n.dialogue_summary, ...(n.aliases || [])].join(' ').toLocaleLowerCase().includes(needle)));
   const shown = new Set(filtered.map(n => n.id));
   return { nodes: filtered, relations: valid.filter(r => shown.has(r.subject_item_id) && shown.has(r.object_item_id)), total: nodes.length };
 }
@@ -214,7 +215,7 @@ export function graphCostText() {
   return '将相关原文、译文和条目发送给千问，产生模型费用。可随时取消，已发出的请求仍可能计费。';
 }
 
-export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, onEdit, runNumber = () => '?' }) {
+export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, onEdit, onCorrectName, runNumber = () => '?' }) {
   const doc = root.ownerDocument;
   function element(tag, className = '', text) {
     const node = doc.createElement(tag); node.className = className;
@@ -438,10 +439,10 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
   function appendRelation(relation, container, expanded = false) {
     const subject = nodes.find(n => n.id === relation.subject_item_id), object = nodes.find(n => n.id === relation.object_item_id);
     const section = element('details', 'graph-relation-detail'); section.open = expanded;
-    section.append(element('summary', '', `${visibleAssertions(relation).length ? '' : '历史表述 · '}${subject?.canonical_name || '知识'} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${relationLabel(relation)} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${object?.canonical_name || '知识'}`));
+    section.append(element('summary', '', `${visibleAssertions(relation).length ? '' : '历史表述 · '}${knowledgeName(subject)} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${relationLabel(relation)} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${knowledgeName(object)}`));
     const otherId = selected?.id === relation.subject_item_id ? relation.object_item_id : relation.subject_item_id;
     const other = nodes.find(n => n.id === otherId);
-    if (other) section.append(button(`查看知识：${other.canonical_name}`, '', event => openDetails('node', otherId, nodeElements.get(otherId) || viewport)));
+    if (other) section.append(button(`查看知识：${knowledgeName(other)}`, '', event => openDetails('node', otherId, nodeElements.get(otherId) || viewport)));
     for (const assertion of relation.assertions || []) {
       const article = element('article', 'graph-assertion');
       article.append(element('p', 'graph-statement', assertion.statement));
@@ -462,7 +463,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
     // Background updates do not replace controls beneath the reader's focus.
     if (!force && panel.contains(doc.activeElement)) { notice.textContent = '详情有更新，重新选择此节点可查看；当前阅读位置已保留'; return; }
     panelFingerprint = fingerprint; detailGeneration++; abortEvidence(); panelBody.replaceChildren();
-    panelTitle.textContent = selected.kind === 'node' ? item.canonical_name : relationLabel(item);
+    panelTitle.textContent = selected.kind === 'node' ? knowledgeName(item) : relationLabel(item);
     if (selected.kind === 'node') {
       panelBody.append(element('p', 'knowledge-type', knowledgeType(item)));
       if (item.certainty === 'needs_review') panelBody.append(element('p', 'graph-qualifiers', '知识身份待确认'));
@@ -471,6 +472,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       for (const fact of item.facts || []) panelBody.append(element('p', 'knowledge-dialogue', `本次提到：${fact.content}`));
       if (item.background_note) panelBody.append(element('p', 'knowledge-background', `背景补充（模型生成，不作为关系依据）：${item.background_note}`));
       if (onEdit) panelBody.append(button('修改 / 删除', 'graph-edit-node', () => onEdit(item)));
+      if (onCorrectName) panelBody.append(button('校正名称', 'graph-correct-name', () => onCorrectName(item)));
       panelBody.append(element('h4', '', '相关知识'));
       if (!related.length) panelBody.append(element('p', '', '暂未发现有明确依据的关系；该知识仍作为独立节点保留。'));
       for (const relation of related) appendRelation(relation, panelBody);
@@ -506,9 +508,9 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
         entry = element('li'); const b = button('', '', event => openDetails('node', node.id, event.currentTarget), 'graph-result-button');
         b.dataset.resultNodeId = node.id; entry.append(b); resultList.append(entry); resultElements.set(node.id, entry); nodeElements.set(node.id, b);
       }
-      entry.hidden = !shown.has(node.id); entry.firstChild.textContent = `${node.canonical_name} · ${knowledgeType(node)}`;
+      entry.hidden = !shown.has(node.id); entry.firstChild.textContent = `${knowledgeName(node)} · ${knowledgeType(node)}`;
       entry.firstChild.setAttribute('aria-pressed', String(selected?.kind === 'node' && selected.id === node.id));
-      entry.firstChild.setAttribute('aria-label', `查看${knowledgeType(node)}：${node.canonical_name}`);
+      entry.firstChild.setAttribute('aria-label', `查看${knowledgeType(node)}：${knowledgeName(node)}`);
     }
     const visibleEdges = new Set(filtered.relations.map(r => r.id));
     for (const [id, entry] of edgeElements) if (!visibleEdges.has(id)) { entry.remove(); edgeElements.delete(id); }
@@ -519,7 +521,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
         b.dataset.relationId = relation.id; entry.append(b); relationList.append(entry); edgeElements.set(relation.id, entry);
       }
       const subject = nodes.find(n => n.id === relation.subject_item_id), object = nodes.find(n => n.id === relation.object_item_id);
-      const label = `${subject?.canonical_name} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${relationLabel(relation)} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${object?.canonical_name}`;
+      const label = `${knowledgeName(subject)} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${relationLabel(relation)} ${SYMMETRIC.has(relation.predicate) ? '↔' : '→'} ${knowledgeName(object)}`;
       entry.firstChild.textContent = label; entry.firstChild.setAttribute('aria-label', `查看关系依据：${label}`);
       entry.firstChild.setAttribute('aria-pressed', String(selected?.kind === 'relation' && selected.id === relation.id));
     }

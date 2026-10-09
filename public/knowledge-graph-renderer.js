@@ -1,5 +1,6 @@
 import cytoscape from './vendor/cytoscape.js';
 import { arrangeGraph } from './knowledge-graph-layout.js';
+import { knowledgeName } from './knowledge-name.js';
 
 // Rendering only: all nodes, directions and qualified labels come from persisted
 // graph data. Canvas interaction has an equivalent semantic list in the explorer.
@@ -68,7 +69,7 @@ export function createGraphRenderer({ container, onSelect, onBackground, onViewp
           cy.edges().filter(e => !edgeIds.has(e.id())).remove();
           cy.nodes().filter(n => !ids.has(n.id())).remove();
           for (const node of nodes) {
-            const label = String(node.canonical_name || '未命名知识');
+            const label = knowledgeName(node);
             const short = [...label].length > 20 ? [...label].slice(0, 19).join('') + '…' : label;
             const data = { id: node.id, label, typeLabel: node.typeLabel, displayLabel: `${short}\n${node.typeLabel}`, color: NODE_COLORS[node.typeLabel] || NODE_COLORS.其他 };
             const current = cy.getElementById(node.id);

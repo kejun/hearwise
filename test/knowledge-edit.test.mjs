@@ -130,7 +130,7 @@ test('v10 migration adds edit jobs while preserving existing cards and transcrip
   const h = fixture(t), before = h.store.detail(h.listeningId);
   h.store.db.exec('DROP TABLE knowledge_edit_jobs; PRAGMA user_version=10');
   h.reopen();
-  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 11);
+  assert.equal(h.store.db.prepare('PRAGMA user_version').get().user_version, 12);
   assert.deepEqual(h.store.detail(h.listeningId), before);
   assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM knowledge_edit_jobs').get().n, 0);
 });

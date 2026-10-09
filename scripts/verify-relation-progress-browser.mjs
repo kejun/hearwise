@@ -37,7 +37,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/style.css"><title>关系整理进度验证</title><body style="padding:20px;background:#f6f7f1"><main style="max-width:960px;margin:auto"><h1 style="font-size:20px;color:#315f4d">本次收听 · 知识图谱</h1><p>浏览器测试示例，使用本地模拟状态</p><div id="graph" class="knowledge-graph"></div></main><script type="module">import { createKnowledgeGraph } from '/knowledge-graph.js'; window.key=''; window.started=[]; window.required=0; window.graph=createKnowledgeGraph({root:document.querySelector('#graph'), getKey:()=>window.key,onRequireKey:()=>window.required++,onStarted:id=>window.started.push(id),loadSegment:async()=>({}),locateSegment:()=>{}}); graph.select('a'); graph.setActive(true);</script></body></html>`);
   }
-  if (['/style.css', '/knowledge-graph.js', '/knowledge-graph-layout.js', '/knowledge-graph-renderer.js', '/vendor/cytoscape.js'].includes(req.url)) {
+  if (['/style.css', '/knowledge-name.js', '/knowledge-graph.js', '/knowledge-graph-layout.js', '/knowledge-graph-renderer.js', '/vendor/cytoscape.js'].includes(req.url)) {
     res.writeHead(200, { 'content-type': req.url.endsWith('css') ? 'text/css' : 'text/javascript' });
     return res.end(await readFile(new URL(`../public${req.url}`, import.meta.url)));
   }

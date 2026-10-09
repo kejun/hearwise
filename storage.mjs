@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { migrateRelations, relationMethods } from './relation-storage.mjs';
 import { migrateKnowledgeEdits, migrateKnowledgeEditJobs, knowledgeEditMethods } from './knowledge-edit.mjs';
+import { migrateKnowledgeNames, knowledgeNameMethods, knowledgeDisplayName } from './knowledge-name.mjs';
 
 const now = () => new Date().toISOString();
 const normalized = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
@@ -27,7 +28,7 @@ export class ListeningStore {
   }
   migrate() {
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 11) throw new Error(`不支持的数据库版本：${version}`);
+    if (version > 12) throw new Error(`不支持的数据库版本：${version}`);
     if (version === 0) this.tx(() => {
       this.db.exec(`
         CREATE TABLE listenings (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -116,6 +117,7 @@ export class ListeningStore {
     if (version < 9) this.tx(() => migrateRelations(this));
     if (version < 10) this.tx(() => migrateKnowledgeEdits(this));
     if (version < 11) this.tx(() => migrateKnowledgeEditJobs(this));
+    if (version < 12) this.tx(() => migrateKnowledgeNames(this));
   }
   createRun(listeningId, settings, title) {
     return this.tx(() => {
@@ -321,7 +323,7 @@ export class ListeningStore {
     const mentions = this.db.prepare('SELECT m.* FROM knowledge_mentions m JOIN knowledge_items k ON k.id=m.item_id WHERE k.listening_id=?').all(id);
     const revisions = this.db.prepare('SELECT r.* FROM knowledge_revisions r JOIN knowledge_items k ON k.id=r.item_id WHERE k.listening_id=? ORDER BY r.created_at').all(id);
     const facts = this.db.prepare('SELECT f.* FROM knowledge_facts f JOIN knowledge_items k ON k.id=f.item_id WHERE k.listening_id=? ORDER BY f.created_at,f.rowid').all(id);
-    return items.map(item => ({ ...item, aliases: aliases.filter(a => a.item_id === item.id).map(a => a.alias),
+    return items.map(item => ({ ...item, display_name: knowledgeDisplayName(item), aliases: aliases.filter(a => a.item_id === item.id).map(a => a.alias),
       mentions: mentions.filter(m => m.item_id === item.id), revisions: revisions.filter(r => r.item_id === item.id),
       facts: facts.filter(f => f.item_id === item.id) }));
   }
@@ -767,4 +769,4 @@ export class ListeningStore {
   }
 }
 
-Object.assign(ListeningStore.prototype, relationMethods, knowledgeEditMethods);
+Object.assign(ListeningStore.prototype, relationMethods, knowledgeEditMethods, knowledgeNameMethods);
