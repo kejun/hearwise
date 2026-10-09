@@ -187,10 +187,21 @@ export function migrateRelations(store) {
   // paid complete/partial result or discard a recoverable pending attempt.
   normalizeRelationFingerprints(store);
   settleFilteredRelationResults(store);
+  db.exec('PRAGMA user_version=9');
+}
+
+export function installRelationTriggers(store) {
+  const db = store.db;
   // Replace deployed v6 triggers, not just triggers on fresh databases.
   for (const row of db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'relation_%'").all()) db.exec(`DROP TRIGGER ${row.name}`);
   const clock = "CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)";
   const dirty = where => `UPDATE relation_windows SET revision=revision+1,state='dirty',dirty_at=${clock},ready_at=0,last_error=NULL WHERE ${where};`;
+  // Local name replacement reanchors every affected quote in this transaction.
+  // Its running receipt is inserted and settled atomically, never left behind.
+  // All other writers retain the normal source/identity invalidation guards.
+  const ordinaryWrite = listening => `NOT EXISTS (SELECT 1 FROM knowledge_edit_jobs j WHERE j.listening_id=${listening}
+    AND j.state='running' AND j.operation='manual_regenerate'
+    AND json_extract(CASE WHEN json_valid(j.result_json) THEN j.result_json END,'$.kind')='name_replace')`;
   const nodeWindows = ref => `listening_id=${ref}.listening_id AND (state='waiting_nodes' OR EXISTS (
     SELECT 1 FROM segments s WHERE s.listening_id=${ref}.listening_id
     AND s.sequence_no BETWEEN relation_windows.from_sequence-3 AND relation_windows.to_sequence
@@ -200,7 +211,7 @@ export function migrateRelations(store) {
     const refs = event === 'UPDATE' ? ['OLD', 'NEW'] : [event === 'DELETE' ? 'OLD' : 'NEW'];
     const ref = refs[refs.length - 1];
     const identityChanged = event === 'UPDATE' ? ' AND (OLD.canonical_name IS NOT NEW.canonical_name OR OLD.type IS NOT NEW.type OR OLD.display_label IS NOT NEW.display_label OR OLD.certainty IS NOT NEW.certainty)' : '';
-    db.exec(`CREATE TRIGGER relation_node_${event.toLowerCase()} AFTER ${event} ON knowledge_items BEGIN
+    db.exec(`CREATE TRIGGER relation_node_${event.toLowerCase()} AFTER ${event} ON knowledge_items WHEN ${ordinaryWrite(`${ref}.listening_id`)} BEGIN
       UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=${ref}.listening_id;
       ${refs.map(r => dirty(`(${nodeWindows(r)})${identityChanged}`)).join('\n')}
     END;`);
@@ -213,7 +224,8 @@ export function migrateRelations(store) {
         : `(state='waiting_nodes' OR EXISTS (SELECT 1 FROM segments s WHERE s.listening_id=relation_windows.listening_id AND s.sequence_no BETWEEN relation_windows.from_sequence-3 AND relation_windows.to_sequence
             AND (instr(lower(s.original_text),lower(${ref}.alias))>0 OR EXISTS (SELECT 1 FROM knowledge_mentions m WHERE m.item_id=${ref}.item_id AND m.segment_id=s.id))))`;
       const fields = table === 'knowledge_mentions' ? ['item_id', 'segment_id', 'surface_text'] : ['item_id', 'alias', 'normalized_alias'];
-      const when = event === 'UPDATE' ? `WHEN ${fields.map(f => `OLD.${f} IS NOT NEW.${f}`).join(' OR ')}` : '';
+      const ref = refs[refs.length - 1];
+      const when = `WHEN ${ordinaryWrite(`(SELECT listening_id FROM knowledge_items WHERE id=${ref}.item_id)`)}${event === 'UPDATE' ? ` AND (${fields.map(f => `OLD.${f} IS NOT NEW.${f}`).join(' OR ')})` : ''}`;
       db.exec(`CREATE TRIGGER relation_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} ${when} BEGIN
         ${refs.map(ref => `UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=(SELECT listening_id FROM knowledge_items WHERE id=${ref}.item_id);
         ${dirty(`listening_id=(SELECT listening_id FROM knowledge_items WHERE id=${ref}.item_id) AND ${scope(ref)}`)}`).join('\n')}
@@ -229,9 +241,9 @@ export function migrateRelations(store) {
       ${dirty('listening_id=NEW.listening_id AND NEW.sequence_no BETWEEN from_sequence-3 AND to_sequence')}
     END;
     CREATE TRIGGER IF NOT EXISTS relation_segment_update AFTER UPDATE OF original_text,translation_text,translation_state ON segments
-      WHEN OLD.original_text IS NOT NEW.original_text OR
+      WHEN ${ordinaryWrite('NEW.listening_id')} AND (OLD.original_text IS NOT NEW.original_text OR
         (CASE WHEN OLD.translation_state='complete' THEN OLD.translation_text END) IS NOT
-        (CASE WHEN NEW.translation_state='complete' THEN NEW.translation_text END) BEGIN
+        (CASE WHEN NEW.translation_state='complete' THEN NEW.translation_text END)) BEGIN
       ${dirty('listening_id=NEW.listening_id AND NEW.sequence_no BETWEEN from_sequence-3 AND to_sequence')}
       UPDATE relation_windows SET source_change_revision=revision WHERE listening_id=NEW.listening_id AND NEW.sequence_no BETWEEN from_sequence-3 AND to_sequence AND OLD.original_text IS NOT NEW.original_text;
       UPDATE relation_supports SET state='stale' WHERE group_id IN (SELECT group_id FROM relation_supports WHERE segment_id=NEW.id) AND OLD.original_text IS NOT NEW.original_text;
@@ -255,7 +267,6 @@ export function migrateRelations(store) {
         AND NOT EXISTS (SELECT 1 FROM relation_supports p WHERE p.assertion_id=relation_assertions.id AND p.state='active' AND p.segment_id!=OLD.id);
       UPDATE listenings SET graph_revision=graph_revision+1 WHERE id=OLD.listening_id;
     END;
-    PRAGMA user_version=9;
   `);
 }
 
@@ -681,9 +692,12 @@ export const relationMethods = {
         const inserted = this.db.prepare('INSERT OR IGNORE INTO relations(id,listening_id,subject_item_id,object_item_id,predicate,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
           .run(relationId, job.listening_id, entry.subject_item_id, entry.object_item_id, entry.predicate, time, time).changes;
         const key = stableHash([norm(entry.statement), entry.polarity, entry.modality, entry.conditions && norm(entry.conditions), entry.time_scope && norm(entry.time_scope), entry.attribution && norm(entry.attribution), entry.correction_of]);
-        const assertionId = `assert_${stableHash([relationId, key])}`;
+        let assertionId = `assert_${stableHash([relationId, key])}`;
         const assertionInserted = this.db.prepare(`INSERT OR IGNORE INTO relation_assertions(id,relation_id,assertion_key,statement,polarity,modality,conditions,time_scope,attribution,status,correction_of,created_at,updated_at)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(assertionId, relationId, key, entry.statement, entry.polarity, entry.modality, entry.conditions, entry.time_scope, entry.attribution, entry.status, entry.correction_of, time, time).changes;
+        // Local wording corrections retain assertion IDs while updating their
+        // deduplication key. Reuse the stored ID instead of assuming its hash.
+        assertionId = this.db.prepare('SELECT id FROM relation_assertions WHERE relation_id=? AND assertion_key=?').get(relationId, key).id;
         let supportsInserted = 0;
         const groupId = `group_${stableHash([assertionId, [...new Set(entry.supports.map(p => JSON.stringify([p.segment_id, p.source_revision, p.start, p.end, p.role])))].sort()])}`;
         for (const support of entry.supports) {

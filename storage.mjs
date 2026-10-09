@@ -2,9 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { migrateRelations, relationMethods } from './relation-storage.mjs';
+import { migrateRelations, installRelationTriggers, relationMethods } from './relation-storage.mjs';
 import { migrateKnowledgeEdits, migrateKnowledgeEditJobs, knowledgeEditMethods } from './knowledge-edit.mjs';
 import { migrateKnowledgeNames, knowledgeNameMethods, knowledgeDisplayName } from './knowledge-name.mjs';
+import { knowledgeNameReplacementMethods } from './knowledge-name-replacement.mjs';
 
 const now = () => new Date().toISOString();
 const normalized = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
@@ -118,6 +119,7 @@ export class ListeningStore {
     if (version < 10) this.tx(() => migrateKnowledgeEdits(this));
     if (version < 11) this.tx(() => migrateKnowledgeEditJobs(this));
     if (version < 12) this.tx(() => migrateKnowledgeNames(this));
+    this.tx(() => installRelationTriggers(this));
   }
   createRun(listeningId, settings, title) {
     return this.tx(() => {
@@ -769,4 +771,4 @@ export class ListeningStore {
   }
 }
 
-Object.assign(ListeningStore.prototype, relationMethods, knowledgeEditMethods, knowledgeNameMethods);
+Object.assign(ListeningStore.prototype, relationMethods, knowledgeEditMethods, knowledgeNameMethods, knowledgeNameReplacementMethods);

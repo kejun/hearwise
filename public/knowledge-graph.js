@@ -215,7 +215,7 @@ export function graphCostText() {
   return '将相关原文、译文和条目发送给千问，产生模型费用。可随时取消，已发出的请求仍可能计费。';
 }
 
-export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, onEdit, onCorrectName, runNumber = () => '?' }) {
+export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = () => {}, loadSegment, locateSegment, onNodes = () => {}, onEdit, runNumber = () => '?' }) {
   const doc = root.ownerDocument;
   function element(tag, className = '', text) {
     const node = doc.createElement(tag); node.className = className;
@@ -471,8 +471,7 @@ export function createKnowledgeGraph({ root, getKey, onRequireKey, onStarted = (
       if (item.aliases?.length) panelBody.append(element('p', 'knowledge-aliases', `别名：${item.aliases.join('、')}`));
       for (const fact of item.facts || []) panelBody.append(element('p', 'knowledge-dialogue', `本次提到：${fact.content}`));
       if (item.background_note) panelBody.append(element('p', 'knowledge-background', `背景补充（模型生成，不作为关系依据）：${item.background_note}`));
-      if (onEdit) panelBody.append(button('修改 / 删除', 'graph-edit-node', () => onEdit(item)));
-      if (onCorrectName) panelBody.append(button('校正名称', 'graph-correct-name', () => onCorrectName(item)));
+      if (onEdit) panelBody.append(button('纠正名称', 'graph-edit-node', () => onEdit(item)));
       panelBody.append(element('h4', '', '相关知识'));
       if (!related.length) panelBody.append(element('p', '', '暂未发现有明确依据的关系；该知识仍作为独立节点保留。'));
       for (const relation of related) appendRelation(relation, panelBody);

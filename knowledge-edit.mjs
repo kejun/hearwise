@@ -5,12 +5,20 @@ import { knowledgeRevision, KNOWLEDGE_REVISION_VERSION, assertKnowledgeRevision,
 const norm = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status, knowledgeEdit: true }); };
 const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export function replaceKnowledgeTerm(text, source, target) {
+export function knowledgeTermMatches(text, source) {
+  if (!source) return [];
   const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Latin names must not alter substrings of other words. CJK names need no spaces.
   const left = /^[\p{Script=Latin}\d_]/u.test(source) ? '(?<![\\p{Script=Latin}\\d_])' : '';
   const right = /[\p{Script=Latin}\d_]$/u.test(source) ? '(?![\\p{Script=Latin}\\d_])' : '';
-  return text.replace(new RegExp(`${left}${escaped}${right}`, 'giu'), () => target);
+  return [...text.matchAll(new RegExp(`${left}${escaped}${right}`, 'giu'))]
+    .map(match => ({ start: match.index, end: match.index + match[0].length }));
+}
+export function replaceKnowledgeTerm(text, source, target) {
+  const pieces = []; let offset = 0;
+  for (const { start, end } of knowledgeTermMatches(text, source)) { pieces.push(text.slice(offset, start), target); offset = end; }
+  pieces.push(text.slice(offset));
+  return pieces.join('');
 }
 export function migrateKnowledgeEdits(store) {
   store.db.exec(`
