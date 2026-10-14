@@ -91,7 +91,7 @@ test('pre-final source correction stops audio explicitly; canonical final still 
 test('final overtakes delayed phrase MT: cancels own request, speaks full canonical once', { timeout: 15000 }, async t => {
   const held = Promise.withResolvers();
   let phrasePending = false;
-  const { f, asr, speech } = await setup(t, { modelResponse(body) {
+  const { f, asr, speech, run } = await setup(t, { modelResponse(body) {
     if (body.model === 'qwen-mt-flash' && body.messages[0].content === 'The weather is warm,') {
       phrasePending = true;
       return held.promise; // Keep this response pending until actual cancellation, not a fixed delay.
@@ -108,8 +108,14 @@ test('final overtakes delayed phrase MT: cancels own request, speaks full canoni
     await waitFor(() => f.stats.commits.length === 1);
     assert.equal(f.stats.mtAborted, 1); assert.deepEqual(f.stats.commits, [translate(final)]);
     assert.equal(speech.events.some(e => e.type === 'speech.error'), false);
-    await until(() => traceEvents(f.logs()).some(e => e.step_key === 'translation.phrase' && e.state === 'cancelled'));
-    assert.ok(traceEvents(f.logs()).some(e => e.step_key === 'translation.http' && e.state === 'cancelled'));
+    const cancelledPhrase = () => traceEvents(f.logs()).find(e => e.step_key === 'translation.phrase' && e.state === 'cancelled' &&
+      e.attributes.run_id === run.runId && e.attributes.kind === 'phrase');
+    await until(() => cancelledPhrase());
+    const phrase = cancelledPhrase();
+    const httpCancelled = () => traceEvents(f.logs()).some(e => e.step_key === 'translation.http' && e.state === 'cancelled' &&
+      e.trace_id === phrase.trace_id && e.parent_span_id === phrase.span_id);
+    await until(httpCancelled);
+    assert.ok(httpCancelled());
   } finally { held.resolve(); }
 });
 test('mute during phrase translation rejects late audio and cancels upstream', async t => {
