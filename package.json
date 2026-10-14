@@ -41,6 +41,9 @@
     "preverify:edit-protocol": "npm run build",
     "verify:edit-protocol": "node scripts/verify-edit-protocol.mjs",
     "verify:edit-protocol:report": "node scripts/verify-edit-protocol-report.mjs",
+    "preverify:import-protocol": "npm run build",
+    "verify:import-protocol": "node scripts/verify-import-protocol.mjs",
+    "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs",
     "preverify:security": "npm run build",
     "verify:security": "node scripts/verify-security-browser.mjs"
   },
