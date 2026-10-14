@@ -42,7 +42,10 @@
     "verify:scheduler": "node scripts/verify-scheduler-protocol.mjs",
     "verify:scheduler:report": "node scripts/verify-scheduler-report.mjs",
     "preverify:security": "npm run build",
-    "verify:security": "node scripts/verify-security-browser.mjs"
+    "verify:security": "node scripts/verify-security-browser.mjs",
+    "preverify:import-protocol": "npm run build",
+    "verify:import-protocol": "node scripts/verify-import-protocol.mjs",
+    "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
