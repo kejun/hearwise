@@ -258,10 +258,25 @@ test('consistent cached flags and unrelated same-count TAP cannot replace concre
     t.after(() => rm(directory, { recursive: true, force: true }));
     const original = await (kind === 'revision' ? fixture : nameFixture)(directory);
     const cases = kind === 'revision' ? [
-      ['flag-only-mutants', d => { d.mutations = d.mutations.map(() => ({ detected: true })); }]
+      ['flag-only-mutants', d => { d.mutations = d.mutations.map(() => ({ detected: true })); }],
+      ['mutant-source-hash', d => { d.mutations[0].sourceDigest = '0'.repeat(64); }],
+      ['mutant-roster', d => { d.mutations.reverse(); }],
+      ['mutant-witness', d => { d.mutations[0].witness.aliases = []; }],
+      ['mutant-actual', d => { d.mutations[0].actual = d.mutations[0].expected; }],
+      ['missing-domain-boundary', d => { d.outsideProofDomain.pop(); }]
     ] : [
       ['changed-import-after', d => { d.importedInvalid[0].after.start = 100; }],
-      ['not-a-counterexample', d => { d.mutations[0].witness.actual = structuredClone(d.mutations[0].witness.expected); }]
+      ['not-a-counterexample', d => { d.mutations[0].witness.actual = structuredClone(d.mutations[0].witness.expected); }],
+      ['mutant-patch', d => { d.mutations[0].patch.to = 'name.length'; }],
+      ['mutant-source-hash', d => { d.mutations[0].mutatedDigest = '0'.repeat(64); }],
+      ['mutant-runnable-hash', d => { d.mutations[0].runnableDigest = '0'.repeat(64); }],
+      ['mutant-witness-input', d => { d.mutations[0].witness.input.anchors[0].start++; }],
+      ['duplicate-import-case', d => { d.importedInvalid[1] = structuredClone(d.importedInvalid[0]); }],
+      ['wrong-import-boundary', d => { d.importedInvalid[0].before.start = 1; d.importedInvalid[0].after.start = 1; }],
+      ['wrong-api-boundary', d => { d.invalid[0].id = 'different-test'; }],
+      ['wrong-oracle-boundary', d => { d.invalidOracle[0].input.target = [88]; }],
+      ['wrong-collision', d => { d.collision.mappedCollision.end++; }],
+      ['missing-scope-boundary', d => { d.boundaries.pop(); }]
     ];
     for (const [name, mutate] of cases) await t.test(`${kind}:${name}`, async () => {
       const changed = structuredClone(original); rewriteDifferential(changed, mutate); await save(directory, changed);

@@ -11,13 +11,14 @@ import { knowledgeTermMatches, replaceKnowledgeTerm } from '../../knowledge-edit
 import { revisionSources, nameIntervalSources } from './lean-source-files.mjs';
 import { sourceVersion, digest, checkArtifacts } from './verification-evidence.mjs';
 import { tapMetrics, parseTapFooter } from './tap-summary.mjs';
+import { validateNegativeEvidence } from './lean-negative-evidence.mjs';
 
 const contracts = {
-  revision: { ...revision, sources: revisionSources, regression: 'legacy-regression', metrics: 'legacy',
+  revision: { ...revision, sources: revisionSources, regression: 'legacy-regression', metrics: 'legacy', tests: ['test/knowledge-revision.test.mjs'], testCount: 8,
     audit: 'AxiomAudit.lean', namespace: 'Revision', proofs: ['Revision.lean', 'Main.lean', 'AxiomAudit.lean'],
     assumptions: ['Plain data records and dense arrays; nullish values, booleans, UTF-16 strings and safe integers.',
       'Normalization and serialization are proved; SHA-256 collision freedom and frozen v11/v12 behavior are not theorems.'] },
-  'name-interval': { ...nameInterval, sources: nameIntervalSources, regression: 'implementation-regression', metrics: 'implementation',
+  'name-interval': { ...nameInterval, sources: nameIntervalSources, regression: 'implementation-regression', metrics: 'implementation', tests: ['test/knowledge-name-replacement.test.mjs', 'test/knowledge-name-replacement-import.test.mjs'], testCount: 9,
     audit: 'NameIntervalAxiomAudit.lean', namespace: 'NameInterval', proofs: ['NameInterval.lean', 'NameIntervalMain.lean', 'NameIntervalAxiomAudit.lean'],
     assumptions: ['Ordered, positive, nonoverlapping UTF-16 replacement spans; nonempty target and valid old anchors.',
       'Intersecting anchors expand to replacement endpoints; matching/case folding and SQLite are implementation evidence.'] }
@@ -186,7 +187,7 @@ export async function validateLeanEvidence(kind, directory, { release = true } =
     if (step.execution && files.has(`${step.name}.log`) && step.execution.tail !== text(`${step.name}.log`).slice(-12000)) add(`step_log_mismatch:${step.name}`);
   }
   let metrics;
-  await evidenceCheck('invalid_regression_tap', () => {
+  await evidenceCheck('invalid_regression_tap', async () => {
     const log = text(`${contract.regression}.log`), footer = parseTapFooter(log);
     metrics = tapMetrics(log);
     assert.ok(log.startsWith('TAP version 13\n') || log.startsWith('TAP version 13\r\n'));
@@ -197,14 +198,20 @@ export async function validateLeanEvidence(kind, directory, { release = true } =
     assert.equal(rows.filter(row => row[1]).length, footer?.fail);
     assert.equal(rows.filter(row => !row[1]).length, footer?.pass);
     assert.ok(rows.every((row, i) => Number(row[2]) === i + 1 && !/#\s*(?:SKIP|TODO)\b/i.test(row[3])));
+    const testSources = await Promise.all([...contract.tests].sort().map(file => readFile(file, 'utf8')));
+    const expectedNames = testSources.flatMap(source => [...source.matchAll(/^test\('([^']+)'/gm)].map(match => match[1]));
+    assert.equal(expectedNames.length, contract.testCount); assert.equal(metrics.tests, contract.testCount);
+    assert.deepEqual(rows.map(row => row[3].replace(/\r$/, '')), expectedNames);
+    assert.deepEqual([...log.matchAll(/^# Subtest: (.+)$/gm)].map(row => row[1].replace(/\r$/, '')), expectedNames);
     assert.deepEqual(metrics, report[contract.metrics]);
     assert.equal(metrics.tapComplete, true);
   });
   let differential;
-  await evidenceCheck('invalid_differential_evidence', () => {
+  await evidenceCheck('invalid_differential_evidence', async () => {
     differential = json(text('differential.json'));
     assert.deepEqual(differential, report.differential);
     assert.equal(differential.complete, true); assert.equal(differential.ok, true);
+    await validateNegativeEvidence(kind, differential);
     const logged = { ...differential, observations: undefined,
       mutations: differential.mutations.map(({ id, detected }) => ({ id, detected })) };
     if (kind === 'name-interval') logged.invalidOracle = differential.invalidOracle.map(({ id, rejected, execution }) => ({ id, rejected, code: execution.code }));
