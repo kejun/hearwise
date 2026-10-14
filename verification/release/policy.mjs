@@ -2,7 +2,7 @@
 export const policyVersion = 1;
 export const specificationVersion = 'hearwise-enhanced-verification-v1.0';
 export const groups = Array.from({ length: 15 }, (_, index) => `HW-${String(index + 1).padStart(2, '0')}`);
-export const technicalSuites = ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval', 'import-protocol', 'edit-protocol', 'process-crash', 'quality-offline', 'playback-protocol', 'scheduler'];
+export const technicalSuites = ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval', 'import-protocol', 'edit-protocol', 'process-crash', 'quality-offline', 'playback-protocol', 'scheduler', 'semantic-offline'];
 export const purposes = Object.freeze({
   'foundation-demo': ['relation-protocol', 'revision'],
   pr: technicalSuites,
@@ -28,12 +28,13 @@ export const budgets = Object.freeze({
   'process-crash': { fastMs: 480000, deepMs: 1200000, processMs: 60000, boundedMs: 240000 },
   'playback-protocol': { fastMs: 480000, deepMs: 1200000, processMs: 60000, boundedMs: 240000, deepPairAbaMs: 900000 },
   scheduler: { fastMs: 900000, deepMs: 1200000, processMs: 60000, regressionMs: 90000, diagnosticMs: 90000, tlcMs: 'verification/scheduler-protocol/config.json#checks' },
+  'semantic-offline': { paidCalls: 0, syntheticCases: 11, overallMs: 150000 },
   'quality-offline': { paidCalls: 0, syntheticTrials: 4 },
   revision: { overallMs: 360000 }, 'name-interval': { overallMs: 360000 }, pilot: { processMs: 15000 }
 });
 export const domainSuites = {
   'HW-01': ['browser'], 'HW-02': ['browser'], 'HW-03': ['knowledge-protocol', 'relation-protocol', 'scheduler'],
-  'HW-04': ['pilot', 'knowledge-protocol', 'relation-protocol'], 'HW-05': ['browser', 'knowledge-protocol', 'relation-protocol'],
+  'HW-04': ['pilot', 'knowledge-protocol', 'relation-protocol', 'semantic-offline'], 'HW-05': ['browser', 'knowledge-protocol', 'relation-protocol', 'semantic-offline'],
   'HW-06': ['revision', 'edit-protocol', 'browser'], 'HW-07': ['name-interval', 'revision', 'browser'],
   'HW-08': ['playback-protocol', 'browser'], 'HW-09': ['import-protocol', 'browser'], 'HW-10': ['knowledge-protocol', 'relation-protocol', 'process-crash', 'browser'],
   'HW-11': ['edit-protocol', 'scheduler', 'browser'], 'HW-12': ['browser'], 'HW-13': ['scheduler', 'browser'], 'HW-14': technicalSuites, 'HW-15': technicalSuites

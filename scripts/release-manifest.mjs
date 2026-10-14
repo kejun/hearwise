@@ -23,9 +23,11 @@ async function reports(directory, filename = 'report.json') {
 const evidence = [];
 for (const suite of technicalSuites) {
   if (suite === 'node' || suite === 'browser') { evidence.push({ suite, directory: suite === 'node' ? path.join(artifact('test'), 'test-evidence') : artifact('browser') }); continue; }
-  const directory = suite === 'quality-offline' ? path.join(artifact('test'), 'verification-evidence', 'asr-translation-quality') : suite === 'pilot' ? path.join(artifact('test'), 'verification-evidence') : artifact(suite);
+  const directory = suite === 'semantic-offline' ? path.join(artifact('test'), 'verification-evidence', 'semantic-quality') : suite === 'quality-offline' ? path.join(artifact('test'), 'verification-evidence', 'asr-translation-quality') : suite === 'pilot' ? path.join(artifact('test'), 'verification-evidence') : artifact(suite);
   const candidates = [];
-  for (const file of await reports(directory, suite === 'quality-offline' ? 'offline-summary.json' : 'report.json')) {
+  for (const file of await reports(directory, suite === 'semantic-offline' ? 'summary.json' : suite === 'quality-offline' ? 'offline-summary.json' : 'report.json')) {
+    // Every semantic attempt is mandatory, including malformed summaries.
+    if (suite === 'semantic-offline') { candidates.push(path.dirname(file)); continue; }
     let report; try { report = JSON.parse(await readFile(file, 'utf8')); } catch { continue; }
     if (suite !== 'pilot' || report.profile === 'pilot') candidates.push(path.dirname(file));
   }

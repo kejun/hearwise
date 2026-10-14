@@ -5,7 +5,7 @@ This implements HW-15-10/11/12 under the original enhanced-verification v1.0 spe
 ## Fixed purposes
 
 - `foundation-demo` requires actual current relation-protocol Quint/SQLite replay and revision Lean/JavaScript bridge reports. A successful demonstration explicitly has `fullProjectAcceptance: false` and is not PR/release approval.
-- `pr` requires all thirteen current technical suites: complete Node file discovery, pilot, all seventeen Chromium profiles, relation protocol, knowledge protocol, revision, name-interval, import protocol, edit protocol, process-crash recovery and offline quality infrastructure, playback protocol, and scheduler protocol. All existing CI jobs remain unconditional; the offline aggregation job additionally requires the import/edit/crash/playback/scheduler artifacts. No paid service is invoked.
+- `pr` requires all fourteen current technical suites: complete Node file discovery, pilot, all seventeen Chromium profiles, relation protocol, knowledge protocol, revision, name-interval, import protocol, edit protocol, process-crash recovery and offline quality infrastructure, playback protocol, scheduler protocol, and offline semantic review infrastructure. All existing CI jobs remain unconditional; the offline aggregation job additionally requires the import/edit/crash/playback/scheduler artifacts plus the semantic summary inside the existing Node artifact. No paid service is invoked.
 - `release` requires the same technical suites plus all fifteen original business domains and the separate real ASR/MT/knowledge/relation/TTS quality, performance, physical-device and upgrade/recovery obligations. On this baseline those whole-domain/external validators or frozen thresholds are not registered. They remain `not_run`; full release cannot pass. Unmerged local branches are not capabilities of this baseline.
 
 Purpose is explicit in every output. Switching to `foundation-demo` cannot produce a release-eligible result. Unknown suites, missing/duplicate reports, unsupported profiles and ambiguous artifact discovery fail closed. Every submitted attempt is checked: a failed or incomplete deep report cannot be hidden behind a fast pass.
@@ -30,6 +30,7 @@ The current reader is used only with this identical source closure. Historical o
 - Scheduler evidence reuses the strict TLC/temporal/ITF and real scheduler replay validator. It adds exact command/cwd/budget bindings, chronological execution intervals, immutable raw assets, all 175 regression tests (136 roots with nested subtests), and replay-log cross-checks. The 90s Apalache diagnostic retains its measured outcome; a backend error is not a bounded proof and does not replace mandatory finite/temporal checks.
 - Trace evidence reconstructs all real workflow/HTTP/WS business observations, two compiled production mutations, actual browser identities and six terminal labels; all eight HTML documents and the exported JSON are regenerated from raw inputs and compared byte-for-byte/content-for-content.
 - Offline ASR/MT evidence rechecks real loopback collection, provider ledger and every trial/log. A technical infrastructure pass always retains `qualityStatus: not_run`, `qualityEvaluated: false`, and both real-quality property rows as not run. It cannot satisfy any external quality obligation.
+- Semantic offline evidence directly reuses `inspectSemanticOffline` for all 11 real workflow captures, 56 raw assets, and eight deliberately incorrect synthetic outputs. The cached summary must exactly match the freshly reconstructed result. It remains `qualityStatus: not_run`, `qualityEvaluated: false`, `fullQualityAcceptance: false`, `releaseEligible: false` and zero live calls; HW-05-04 real-corpus/human-review acceptance stays not run.
 - Lean evidence independently reads proof/oracle/axiom logs, current source hashes, concrete corpus projections and SQLite witness. Exact current 8/9 regression names and counts are required. Negative patches/source hashes/fixed witnesses are reconstructed; illegal-import before/after rows and boundary rosters are checked rather than trusting `detected` or `unchanged` flags. SHA collision freedom is not proved.
 - Pilot independently checks the one real SQLite reservation/response/commit scenario. It is not general concurrency evidence.
 
@@ -58,6 +59,7 @@ npm run verify:process-crash -- --release
 npm run verify:playback-protocol -- --release
 npm run verify:scheduler -- --release
 npm run quality:asr-mt -- offline --release
+npm run quality:semantic -- offline --release
 npm run verify:revision -- --release
 npm run verify:name-interval -- --release
 npm run test:browser
