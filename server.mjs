@@ -373,14 +373,14 @@ function pumpTranslations() {
         const text = await translate(key, task.segment.original_text, task.target, 15000, context.signal, context);
         context.signal.throwIfAborted();
         if (task.done) task.done(null, text);
-        else updated = store.setTranslation(task.segment.id, text, false);
+        else updated = store.setTranslation(task.segment.id, text, false, task.segment.original_text);
         context.event(updated || task.done ? 'translation_committed' : 'discarded');
         console.info('translation_stage', JSON.stringify({ stage: 'model', kind: task.kind, elapsedMs: performance.now() - modelStartedAt }));
       } catch (error) {
         failed = true;
         if (context.signal.aborted) { task.done?.(error); return { outcome: 'discarded' }; }
         if (task.done) task.done(error);
-        else updated = store.setTranslation(task.segment.id, null, true);
+        else updated = store.setTranslation(task.segment.id, null, true, task.segment.original_text);
         logModelError('translation', error);
       } finally {
         if (updated) broadcast(task.listeningId, { type: 'translation-updated', runId: updated.run_id, segment: updated });
@@ -982,7 +982,7 @@ wss.on('connection', client => {
           payload: { task_group: 'audio', task: 'asr', function: 'recognition', model, parameters, input: {} } }));
       });
       ws.on('message', raw => {
-        if (ws !== upstream) return;
+        if (ws !== upstream || finished || client.readyState !== WebSocket.OPEN) return;
         let event; try { event = JSON.parse(raw.toString()); } catch { return; }
         const kind = event.header?.event;
         if (kind === 'task-started' && !started) {

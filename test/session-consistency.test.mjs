@@ -92,3 +92,47 @@ test('ASR final identity is run plus sentence ID; stop accepts its tail but reje
   assert.notEqual(recovered.segments[0].run_id, recovered.segments[2].run_id);
   assert.equal(recovered.segments[0].asr_sentence_id, recovered.segments[2].asr_sentence_id);
 });
+
+test('HTTP retry, failed concurrent attempt, source correction and late provider result preserve the persisted source version', { timeout: 15000 }, async t => {
+  const pending = [];
+  const fixture = await speechFixture({
+    seed(store) {
+      const h = seedNameReplacement(store);
+      store.db.prepare("UPDATE segments SET translation_text=NULL, translation_state='failed' WHERE id=?").run(h.segment.id);
+      return h;
+    },
+    modelResponse(body) {
+      if (body.model !== 'qwen-mt-flash') return { items: [] };
+      return new Promise(resolve => pending.push({ source: body.messages[0].content, resolve }));
+    }
+  });
+  t.after(async () => { for (const request of pending) request.resolve('cleanup'); await fixture.close(); });
+  const h = fixture.seeded, url = `${fixture.base}/api/listenings/${h.listeningId}`;
+  const json = async (endpoint, options) => {
+    const response = await fetch(endpoint, options);
+    const body = await response.json();
+    assert.ok(response.ok, JSON.stringify(body));
+    return body;
+  };
+  const post = (endpoint, body, extra = {}) => json(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', ...extra }, body: JSON.stringify(body) });
+  const row = async () => (await json(url)).segments.find(s => s.id === h.segment.id);
+  await post(`${url}/retry`, { key: 'fixture-only' }); await until(() => pending.length === 1);
+  await post(`${url}/retry`, { key: 'fixture-only' }); await until(() => pending.length === 2);
+  // Retry is a waiting-set dedupe, not in-flight dedupe. The second response fails first.
+  pending[1].resolve('');
+  await until(async () => (await row()).translation_state === 'failed' && fixture.logs().includes('model_error translation:other'));
+  const snapshot = await json(`${url}/knowledge/${h.item.id}`);
+  await post(`${url}/knowledge/${h.item.id}/name-replacements`, { name: 'Tibo', revision: snapshot.revision }, { 'Idempotency-Key': randomUUID() });
+  const corrected = await row(), revised = await json(`${url}/knowledge/${h.item.id}`);
+  assert.notEqual(revised.revision, snapshot.revision);
+  assert.notEqual(corrected.original_text, pending[0].source);
+  pending[0].resolve('OLD SOURCE RESPONSE');
+  await until(() => fixture.logs().includes('"stage":"model","kind":"background"'));
+  assert.deepEqual(await row(), corrected, 'the old successful HTTP response must be discarded');
+  await post(`${url}/retry`, { key: 'fixture-only' }); await until(() => pending.length === 3);
+  assert.equal(pending[2].source, corrected.original_text);
+  pending[2].resolve('新版本有效译文 😀');
+  await until(async () => (await row()).translation_state === 'complete');
+  assert.equal((await row()).translation_text, '新版本有效译文 😀');
+  assert.equal((await row()).original_text, corrected.original_text);
+});
