@@ -215,16 +215,20 @@ test('real API: one request for merged attempts, durable lost-response recovery,
       evidence: [{ segment_id: segment.id, source_kind: 'translation', quote: segment.translation }] };
   } });
   t.after(() => { release(); return f.close(); });
-  const { first } = f.seeded, item = first.nodes[0], id = randomUUID();
+  const { first } = f.seeded, item = first.nodes[0], candidateIds = [randomUUID(), randomUUID()];
   const url = `${f.base}/api/listenings/${first.listeningId}/knowledge/${item.id}`;
   const snapshot = await fetch(url).then(response => response.json());
   const input = { revision: snapshot.revision, key: 'secret-not-stored' };
   const submit = (jobId, body = input) => fetch(`${url}/name-corrections`, { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': jobId }, body: JSON.stringify(body) });
   assert.equal((await submit(randomUUID(), { ...input, key: '' })).status, 400);
-  const results = await Promise.all([submit(id), submit(randomUUID()), submit(id)]);
+  const results = await Promise.all([submit(candidateIds[0]), submit(candidateIds[1]), submit(candidateIds[0])]);
   assert.deepEqual(results.map(row => row.status), [202, 202, 202]);
-  for (const response of results) assert.equal((await response.json()).job.id, id);
+  const accepted = await Promise.all(results.map(response => response.json()));
+  // Concurrent network arrival order is not Promise.all input order. Both IDs are legitimate winners.
+  const id = accepted[0].job.id;
+  assert.ok(candidateIds.includes(id));
+  for (const response of accepted) assert.equal(response.job.id, id);
   assert.equal((await fetch(`${url}/name-corrections?revision=${input.revision}`).then(r => r.json())).job.id, id);
   assert.equal((await fetch(url).then(r => r.json())).nameCorrectionJob.id, id);
   assert.equal((await submit(id, { ...input, revision: 'f'.repeat(64) })).status, 409);

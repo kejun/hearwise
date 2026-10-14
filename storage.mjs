@@ -158,8 +158,14 @@ export class ListeningStore {
       return { segment: this.db.prepare('SELECT * FROM segments WHERE id=?').get(id), inserted: true };
     });
   }
-  setTranslation(id, text, error) {
-    this.db.prepare('UPDATE segments SET translation_text=?, translation_state=? WHERE id=? AND translation_state!=\'complete\'').run(text || null, error ? 'failed' : 'complete', id);
+  setTranslation(id, text, error, expectedSource) {
+    // Bind asynchronous results to the durable source snapshot that was sent.
+    // Local name replacement may be legal after another attempt has failed.
+    if (expectedSource !== undefined) {
+      const result = this.db.prepare("UPDATE segments SET translation_text=?, translation_state=? WHERE id=? AND original_text=? AND translation_state!='complete'")
+        .run(text || null, error ? 'failed' : 'complete', id, expectedSource);
+      if (!result.changes) return;
+    } else this.db.prepare('UPDATE segments SET translation_text=?, translation_state=? WHERE id=? AND translation_state!=\'complete\'').run(text || null, error ? 'failed' : 'complete', id);
     const segment = this.db.prepare('SELECT * FROM segments WHERE id=?').get(id);
     if (segment) this.db.prepare('UPDATE listenings SET updated_at=? WHERE id=?').run(now(), segment.listening_id);
     return segment;
