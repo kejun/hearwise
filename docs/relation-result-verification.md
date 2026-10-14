@@ -12,7 +12,7 @@ npm run test:browser -- relation-result
 node scripts/verify-relation-result-browser.mjs --node-only
 ```
 
-完整入口纳入默认浏览器 CI，每项进程和外层均有期限及清理。输出到独立 `browser-evidence/run-*/relation-result-*`，包含目标 SHA、dirty、环境/版本、逐项完整退出结果、TAP 测试数、日志、浏览器结果、桌面/窄屏截图及 SHA-256。必须 `complete=true` 且 `ok=true`，发布检查还要求干净且当前源码。缺浏览器不能用 Node 通过代替。受限环境若 Chromium 无法启动，保留失败/未运行，依赖远端真实 Chromium CI。
+完整入口纳入默认浏览器 CI。两个 Node 项各最多 40 秒、浏览器最多 100 秒，但顺序检查共同受 150 秒总预算限制；父运行器为 180 秒，保留 30 秒用于进程组终止、清理、哈希与最终报告。任一超时/中断/未执行完整的 TAP 立即停止后续检查，finally 清理临时运行目录。独立性质仅按其适用检查判定；浏览器失败不会把已经通过的来源性质改为失败，但整体门禁仍失败。输出到独立 `browser-evidence/run-*/relation-result-*`，包含目标 SHA、dirty、环境/版本、逐项完整退出结果、TAP 测试数、日志、浏览器结果、桌面/窄屏截图及 SHA-256。必须 `complete=true` 且 `ok=true`，发布检查还要求干净且当前源码。缺浏览器不能用 Node 通过代替。受限环境若 Chromium 无法启动，保留失败/未运行，依赖远端真实 Chromium CI。
 
 ## 性质和执行资产
 

@@ -92,6 +92,19 @@ test('unrelated failing checks preserve each independently verified property whi
     assert.equal(execution.code, 1); assert.equal(summary.ok, false);
     assert.deepEqual(summary.rows.map(row => row.status), expected, failed);
   }
+  const checks = ['source-integrity', 'http-results', 'browser'].map(name => ({ name, execution: executionFixture() }));
+  const complete = makeResults(['passed', 'passed', 'passed']);
+  for (const results of [complete.slice(0, 2), [...complete, complete[0]]]) {
+    const { summary } = summarizeRelationResults({ results, checks, target: context.source, required: relationResultProfile,
+      artifactsValid: results.map(() => true), sourceStable: true });
+    assert.equal(summary.ok, false, 'Missing/duplicate required properties remain fail closed');
+    assert.ok(summary.rows.some(row => row.reasons.includes('missing') || row.reasons.includes('duplicate')));
+  }
+  const stopped = summarizeRelationResults({ results: complete, checks: [checks[0], { name: 'http-results',
+    execution: executionFixture({ code: null, ok: false, timedOut: true }) }], target: context.source,
+    required: relationResultProfile, artifactsValid: [true, true, true], sourceStable: true });
+  assert.equal(stopped.execution.complete, false); assert.equal(stopped.summary.ok, false);
+  assert.deepEqual(stopped.summary.rows.map(row => row.status), ['passed', 'incomplete', 'incomplete']);
 });
 
 test('a timed-out child stops later work, cleans runtime resources and leaves time to write a terminal report', { timeout: 5000 }, async t => {
