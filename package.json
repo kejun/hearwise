@@ -56,7 +56,11 @@
     "quality:asr-mt": "node scripts/evaluate-asr-translation-quality.mjs",
     "verify:impact": "node scripts/verification-impact.mjs",
     "verify:release": "node scripts/release-gate.mjs",
-    "verify:release:manifest": "node scripts/release-manifest.mjs"
+    "verify:release:manifest": "node scripts/release-manifest.mjs",
+    "setup:playback-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:playback-protocol": "npm run build",
+    "verify:playback-protocol": "node scripts/verify-playback-protocol.mjs",
+    "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

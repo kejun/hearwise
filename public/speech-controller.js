@@ -4,10 +4,10 @@ import { createSpeechMediaSession } from './speech-media-session.js';
 export function createSpeechController({ onChange, createPlayer = callback => new SpeechPlayer(callback),
   media = createSpeechMediaSession(), document = globalThis.document,
   createSocket = () => new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/tts`) }) {
-  let epoch = 0, socket, player, enabled = false, context = {}, draining = false, mode = null, kind = null;
+  let epoch = 0, generation = {}, socket, player, enabled = false, context = {}, draining = false, mode = null, kind = null;
   let incremental = false;
   let firstHeard = false, lastMessage = '', total = 0;
-  let paused = false, interrupted = false, resuming = false, playbackRevision = 0;
+  let paused = false, interrupted = false, resuming = false, playbackRevision = {};
   let pauseMessage = '', transcriptPosition = 1, transcriptConfig = null, outputVolume = .8;
   const text = new Map(), metadata = new Map();
   let readingMeta = null, replayTarget = null;
@@ -22,7 +22,8 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
     : draining ? '正在读完最后几句' : '正在播报';
   function stop(message = '播报已关闭', reason = 'cancel', notify = true) {
     const previous = socket, previousEpoch = epoch, stoppedMode = mode, stoppedKind = kind;
-    ++epoch; ++playbackRevision; incremental = false; enabled = paused = interrupted = resuming = false; draining = false; mode = kind = null;
+    // Wire epochs can wrap; local callback ownership must never be reused.
+    epoch = epoch % 0xffffffff + 1; generation = {}; playbackRevision = {}; incremental = false; enabled = paused = interrupted = resuming = false; draining = false; mode = kind = null;
     transcriptConfig = null;
     player?.close(); player = null; // Local mute first; no server acknowledgement is required.
     media.close(); document?.removeEventListener('visibilitychange', recover);
@@ -32,24 +33,24 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
   }
   function pause(system = false) {
     if (!enabled) return;
-    ++playbackRevision; paused = true; interrupted = system; resuming = false;
+    playbackRevision = {}; paused = true; interrupted = system; resuming = false;
     pauseMessage = system ? '系统暂停了声音，可点击继续播报；播放位置保留 5 分钟。' : '播报已暂停，播放位置保留 5 分钟。';
     player?.pause(); media.setPaused(true); send({ type: 'speech.pause' }); report();
   }
   async function resume() {
     if (!enabled || !paused || resuming) return;
-    const gen = epoch, revision = ++playbackRevision;
+    const owner = generation, revision = playbackRevision = {};
     resuming = true; report();
     try {
       const ready = await player.resume();
-      if (gen !== epoch || revision !== playbackRevision) return;
+      if (owner !== generation || revision !== playbackRevision) return;
       resuming = false;
       if (!ready) { report(); return; }
       paused = interrupted = false;
       send({ type: 'speech.resume' }); media.setPaused(false);
       report(readingMeta ? playingMessage() : '正在继续播报…');
     } catch {
-      if (gen !== epoch || revision !== playbackRevision) return;
+      if (owner !== generation || revision !== playbackRevision) return;
       resuming = false; player.pause();
       pauseMessage = '声音暂时无法恢复，请回到页面点击继续播报。'; report();
     }
@@ -71,7 +72,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
     if (!preview && !replay && !transcript && (context.phase !== 'listening' || context.target !== 'Chinese' || !context.runId)) {
       report('请先开始中文译文收听'); return;
     }
-    const gen = epoch, run = { ...context, ...replay };
+    const gen = epoch, owner = generation, run = { ...context, ...replay };
     enabled = true; firstHeard = false; total = knownTotal;
     transcriptPosition = startPosition; transcriptConfig = transcript ? { ...config } : null; outputVolume = volume;
     paused = startPaused;
@@ -80,7 +81,7 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
     report(mode === 'live' ? '播报已开启，等下一句完整译文准备好后就会开始；首次出声需要一点时间。'
       : mode === 'transcript' ? `正在准备第 ${transcriptPosition} 句语音，请稍候…` : '正在准备语音，首次播放可能稍慢，请稍候…', { reading: '' });
     const output = player = createPlayer(event => {
-      if (gen !== epoch) return;
+      if (owner !== generation) return;
       if (event.type === 'progress') send({ type: 'speech.progress', consumedSamples: event.consumedSamples, playedUnit: event.playedUnit, underruns: event.underruns });
       if (event.type === 'started') { firstHeard = true; readingMeta = metadata.get(event.unit); if (readingMeta?.position) transcriptPosition = readingMeta.position; report(playingMessage(), { reading: text.get(event.unit) || '' }); }
       if (event.type === 'played') {
@@ -90,24 +91,24 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
       if (event.type === 'suspended') pause(true);
       if (event.type === 'error') fail('语音缓冲异常，请重新开启播报');
     });
-    media.activate({ mode, kind, context, play: () => { if (gen === epoch) void resume(); },
-      pause: () => { if (gen === epoch) pause(); }, stop: () => { if (gen === epoch) stop(); } });
+    media.activate({ mode, kind, context, play: () => { if (owner === generation) void resume(); },
+      pause: () => { if (owner === generation) pause(); }, stop: () => { if (owner === generation) stop(); } });
     if (paused) { output.pause(); media.setPaused(true); }
     document?.addEventListener('visibilitychange', recover);
     try {
       await output.unlock(volume);
-      if (gen !== epoch) return;
+      if (owner !== generation) return;
       const ws = socket = createSocket(); ws.binaryType = 'arraybuffer';
       let finished = false;
       ws.addEventListener('open', () => {
-        if (gen !== epoch) return;
+        if (owner !== generation) return;
         send({ type: preview ? 'speech.preview' : replay ? 'speech.replay' : transcript ? 'speech.transcript' : 'speech.start', config,
           listeningId: run.listeningId, runId: run.runId, segmentId: replay?.segmentId, kind: transcript, paused,
           ...(transcript ? { startPosition } : {}),
           ...(mode === 'live' ? { incremental: requestIncremental === true } : {}) });
       });
       ws.addEventListener('message', ({ data }) => {
-        if (gen !== epoch) return;
+        if (owner !== generation) return;
         try {
           if (data instanceof ArrayBuffer) { output.audio(data, gen); return; }
           const msg = JSON.parse(data);
@@ -129,13 +130,13 @@ export function createSpeechController({ onChange, createPlayer = callback => ne
           if (msg.type === 'speech.error') fail(msg.message);
           if (msg.type === 'speech.finished') {
             finished = true;
-            void Promise.resolve(output.settle?.()).then(() => { if (gen === epoch) stop(msg.message); });
+            void Promise.resolve(output.settle?.()).then(() => { if (owner === generation) stop(msg.message); });
           }
         } catch (error) { fail(error.message || '语音数据无效'); }
       });
-      ws.addEventListener('close', () => { if (gen === epoch && !finished) fail('语音连接已断开，请重新开启播报'); });
-      ws.addEventListener('error', () => { if (gen === epoch) fail('无法连接语音服务，请检查设置'); });
-    } catch (error) { if (gen === epoch) stop(error.message || '无法启动语音播放'); }
+      ws.addEventListener('close', () => { if (owner === generation && !finished) fail('语音连接已断开，请重新开启播报'); });
+      ws.addEventListener('error', () => { if (owner === generation) fail('无法连接语音服务，请检查设置'); });
+    } catch (error) { if (owner === generation) stop(error.message || '无法启动语音播放'); }
   }
   return { start, stop, pause, resume, get paused() { return paused; }, get enabled() { return enabled; }, get mode() { return mode; }, get kind() { return kind; },
     seek(position) {
