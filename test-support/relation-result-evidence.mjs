@@ -28,3 +28,13 @@ export async function checkRelationResultEvidence(directory, result) {
     return references.length === 0 || await checkArtifacts(directory, { artifacts: references });
   } catch { return false; }
 }
+
+export function relationTapSummary(tail) {
+  const counts = Object.fromEntries(['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo'].map(key => {
+    const match = tail.match(new RegExp(`# ${key} (\\d+)(?:\\r?\\n|$)`));
+    return [key, match ? Number(match[1]) : null];
+  }));
+  const testComplete = Object.values(counts).every(Number.isInteger) && counts.tests > 0 &&
+    counts.cancelled === 0 && counts.skipped === 0 && counts.todo === 0 && counts.pass + counts.fail === counts.tests;
+  return { testCount: counts.tests || 0, testComplete, ok: testComplete && counts.fail === 0 };
+}

@@ -4,7 +4,7 @@ import { runProcess } from './lib/process.mjs';
 import { metadata, sourceVersion, writeJson, summarize } from './lib/verification-evidence.mjs';
 import { relationResultProperties, relationResultProfile } from '../verification/relation-result-properties.mjs';
 
-import { writeRelationResultEvidence, checkRelationResultEvidence } from '../test-support/relation-result-evidence.mjs';
+import { writeRelationResultEvidence, checkRelationResultEvidence, relationTapSummary } from '../test-support/relation-result-evidence.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => !['--node-only', '--release'].includes(arg))) throw new Error('Usage: node scripts/verify-relation-result-browser.mjs [--node-only] [--release]');
@@ -28,9 +28,8 @@ for (const [name, files] of [
   const execution = await runProcess(process.execPath, ['--test', '--test-reporter=tap', '--test-timeout=30000', ...files], {
     env, timeoutMs: 40000, logFile: path.join(directory, `${name}.log`), onOutput: text => process.stdout.write(text)
   });
-  const count = Number(execution.tail.match(/# tests (\d+)/)?.[1] || 0);
-  execution.testCount = count;
-  if (!count || !/# fail 0(?:\r?\n|$)/.test(execution.tail) || !/# cancelled 0(?:\r?\n|$)/.test(execution.tail)) execution.ok = false;
+  const tap = relationTapSummary(execution.tail);
+  Object.assign(execution, { ...tap, ok: execution.ok && tap.ok });
   checks.push({ name, execution });
   if (execution.interrupted) break;
 }
@@ -50,7 +49,7 @@ report.results = relationResultProperties.map(property => {
     property.id === 'HW-05-03' ? ['source-integrity', 'http-results', ...(nodeOnly ? [] : ['browser'])] : nodeOnly ? [] : ['browser'];
   const applicable = checks.filter(check => requiredChecks.includes(check.name));
   const complete = applicable.length === requiredChecks.length && applicable.every(({ execution: e }) =>
-    !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code));
+    !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code) && e.testComplete !== false);
   const status = nodeOnly && browserRequired(property.id) ? 'not_run' : !complete ? 'incomplete' :
     applicable.every(({ execution: e }) => e.ok) && (!browserRequired(property.id) || browser?.complete) ? 'passed' : 'failed';
   return { ...context, ...(browser?.chromium ? { tools: { ...context.tools, chromium: browser.chromium } } : {}),
@@ -59,7 +58,7 @@ report.results = relationResultProperties.map(property => {
 });
 const execution = { code: checks.every(({ execution: e }) => e.ok) ? 0 : 1, signal: null,
   timedOut: checks.some(({ execution: e }) => e.timedOut), interrupted: checks.some(({ execution: e }) => e.interrupted),
-  complete: checks.every(({ execution: e }) => !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code)) };
+  complete: checks.every(({ execution: e }) => !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code) && e.testComplete !== false) };
 const target = sourceVersion();
 if (target.sha !== context.source.sha || target.dirty !== context.source.dirty) execution.complete = false;
 const summary = summarize({ results: report.results, target, required: relationResultProfile, execution,
