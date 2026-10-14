@@ -40,7 +40,9 @@
     "setup:scheduler": "node scripts/setup-relation-protocol.mjs",
     "preverify:scheduler": "npm run build",
     "verify:scheduler": "node scripts/verify-scheduler-protocol.mjs",
-    "verify:scheduler:report": "node scripts/verify-scheduler-report.mjs"
+    "verify:scheduler:report": "node scripts/verify-scheduler-report.mjs",
+    "preverify:security": "npm run build",
+    "verify:security": "node scripts/verify-security-browser.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
