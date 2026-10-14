@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, extraEnv = {} } = {}) {
+export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, onTtsCommit, extraEnv = {} } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
   const filename = path.join(directory, 'test.sqlite');
   let seeded;
@@ -84,15 +84,21 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
       if (event.type === 'session.update') { stats.sessions.push(event.session); ws.send(JSON.stringify({ type: 'session.updated' })); }
       if (event.type === 'input_text_buffer.append') text += event.text;
       if (event.type === 'input_text_buffer.commit') {
-        stats.commits.push(text); text = '';
+        const acceptedText = text; stats.commits.push(acceptedText); text = '';
         const response = { id: `response-${++stats.responses}`, status: 'completed' };
-        ws.send(JSON.stringify({ type: 'response.created', response }));
         const pcm = Buffer.alloc(audioSamples * 2);
         for (let i = 0; i < audioSamples; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 24000 * 440 * Math.PI * 2) * 2000), i * 2);
-        // Odd byte boundaries deliberately exercise the real transport's carry byte.
-        for (let offset = 0; offset < pcm.length; offset += 1001) ws.send(JSON.stringify({ type: 'response.audio.delta', response_id: response.id, delta: pcm.subarray(offset, offset + 1001).toString('base64') }));
-        ws.send(JSON.stringify({ type: 'response.audio.done', response_id: response.id }));
-        ws.send(JSON.stringify({ type: 'response.done', response }));
+        const sendDefault = () => {
+          if (ws.readyState !== 1) return false;
+          ws.send(JSON.stringify({ type: 'response.created', response }));
+          // Odd byte boundaries deliberately exercise the real transport's carry byte.
+          for (let offset = 0; offset < pcm.length; offset += 1001) ws.send(JSON.stringify({ type: 'response.audio.delta', response_id: response.id, delta: pcm.subarray(offset, offset + 1001).toString('base64') }));
+          ws.send(JSON.stringify({ type: 'response.audio.done', response_id: response.id }));
+          ws.send(JSON.stringify({ type: 'response.done', response }));
+          return true;
+        };
+        if (onTtsCommit) onTtsCommit({ ws, text: acceptedText, response, pcm, sendDefault });
+        else sendDefault();
       }
     });
   });
