@@ -2,20 +2,23 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { runProcess } from './lib/process.mjs';
 import { metadata, writeJson } from './lib/verification-evidence.mjs';
-import { sourceSnapshot, sameSourceSnapshot, validBuildSource, evidenceFiles, hashEvidenceFiles } from './lib/runner-evidence-contract.mjs';
-import { validateUserJourneyReleaseContract } from './lib/user-journey-release-evidence.mjs';
 import { journeyLimits, journeyExternalAcceptance } from '../test-support/user-journey-contract.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => !['--release', '--node-only'].includes(arg))) throw new Error('Usage: verify-user-journey-browser.mjs [--release] [--node-only]');
 const nodeOnly = args.includes('--node-only'), root = path.resolve(process.env.USER_JOURNEY_EVIDENCE_DIR || 'browser-evidence');
 await mkdir(root, { recursive: true }); const directory = await mkdtemp(path.join(root, 'user-journey-'));
+// This is the independent outer-log origin. SQLite can warn during module load
+// (including sourceSnapshot's dependency graph), so print before either import.
+console.log(`User journey browser evidence: ${directory}`);
+const { sourceSnapshot, sameSourceSnapshot, validBuildSource, evidenceFiles, hashEvidenceFiles } = await import('./lib/runner-evidence-contract.mjs');
+const { validateUserJourneyReleaseContract } = await import('./lib/user-journey-release-evidence.mjs');
 const startedAt = new Date().toISOString(), sourceStart = await sourceSnapshot();
 const report = { ...await metadata(), schemaVersion: 1, profile: 'user-journey', startedAt, finishedAt: null,
   sourceStart, sourceEnd: null, complete: false, ok: false, status: 'not_run', checks: [], artifacts: [], browserFile: 'browser.json',
   executionContext: { repositoryRoot: process.cwd(), evidenceDirectory: directory, nodeExecutable: process.execPath, overallTimeoutMs: journeyLimits.overallMs },
   externalAcceptance: journeyExternalAcceptance, fullProjectAcceptance: false };
-await writeJson(path.join(directory, 'report.json'), report); console.log(`User journey browser evidence: ${directory}`);
+await writeJson(path.join(directory, 'report.json'), report);
 const temporary = await mkdtemp(path.join(directory, 'temporary-runtime-'));
 try {
   if (!validBuildSource(sourceStart)) throw new Error('Journey runtime source differs from checkout; run npm run build');

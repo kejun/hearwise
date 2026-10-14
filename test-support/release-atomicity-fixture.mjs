@@ -42,10 +42,10 @@ async function collectBrowserEnvelope() {
   }
   return browser;
 }
-export async function atomicityReleaseFixture(directory, { nodeOnly = false, outerRun = 'run-contract' } = {}) {
+export async function atomicityReleaseFixture(directory, { nodeOnly = false, outerRun = 'run-contract', outerDirectory = path.join('browser-evidence', outerRun) } = {}) {
   await mkdir(directory, { recursive: true }); rawPromise ||= collectRaw(); const { raw, startedAt } = await rawPromise;
   if (!nodeOnly) browserPromise ||= collectBrowserEnvelope(); const browser = nodeOnly ? null : await browserPromise;
-  const source = await atomicitySource(), expectedDirectory = path.join(process.cwd(), nodeOnly ? 'verification-evidence/import-atomicity' : `browser-evidence/${outerRun}`, path.basename(directory));
+  const source = await atomicitySource(), expectedDirectory = path.resolve(process.cwd(), nodeOnly ? 'verification-evidence/import-atomicity' : outerDirectory, path.basename(directory));
   const report = { profile: 'import-atomicity', version: '1.0', nodeOnly, release: false, startedAt, finishedAt: new Date().toISOString(),
     sourceStart: source, sourceEnd: source, tools: { node: process.version, sqlite: process.versions.sqlite },
     cwd: process.cwd(), evidenceDirectory: expectedDirectory, environment: { platform: process.platform, arch: process.arch, release: os.release() }, checks: [], artifacts: [], cleanupOk: true, complete: true, ok: true };
@@ -62,5 +62,5 @@ export async function atomicityReleaseFixture(directory, { nodeOnly = false, out
   for (const file of files) report.artifacts.push({ path: file, sha256: hash(await readFile(path.join(directory, file))) });
   report.summary = { complete: true, ok: true, nodeOnly, fullImportAtomicityAcceptance: !nodeOnly, fullProjectAcceptance: false,
     rows: atomicityProperties.map((id, index) => ({ id, status: nodeOnly && index === 3 ? 'not_run' : 'passed', reasons: nodeOnly && index === 3 ? ['node_only_profile'] : [] })) };
-  await json(path.join(directory, 'report.json'), report); return { report, raw, browser, outerLog: `Import atomicity evidence: browser-evidence/${outerRun}/${path.basename(directory)}\n` };
+  await json(path.join(directory, 'report.json'), report); return { report, raw, browser, outerLog: `Import atomicity evidence: ${path.join(outerDirectory, path.basename(directory))}\n` };
 }

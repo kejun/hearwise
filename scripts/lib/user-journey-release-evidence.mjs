@@ -87,7 +87,9 @@ export async function validateUserJourneyBrowserReleaseEvidence(directory, { rel
       assert.match(outerRun || '', /^run-[A-Za-z0-9]+$/, 'journey_outer_run');
       assert.match(path.basename(directory), /^user-journey-[A-Za-z0-9]+$/, 'journey_nested_directory');
       assert.ok(outerOrigin?.repositoryRoot && outerOrigin.nodeExecutable, 'journey_outer_origin_missing');
-      origin = { ...outerOrigin, evidenceDirectory: path.join(outerOrigin.repositoryRoot, 'browser-evidence', outerRun, path.basename(directory)) };
+      const aggregateDirectory = outerOrigin.evidenceDirectory;
+      assert.ok(typeof aggregateDirectory === 'string' && aggregateDirectory.length > 0 && path.normalize(aggregateDirectory) === aggregateDirectory && path.basename(aggregateDirectory) === outerRun, 'journey_outer_directory');
+      origin = { ...outerOrigin, evidenceDirectory: path.resolve(outerOrigin.repositoryRoot, aggregateDirectory, path.basename(directory)) };
       const lines = (outerLog || '').split(/\r?\n/);
       assert.equal(lines[0], `User journey browser evidence: ${origin.evidenceDirectory}`, 'journey_outer_log_origin');
       assert.equal(lines.filter(line => line.startsWith('User journey browser evidence: ')).length, 1, 'journey_duplicate_outer_origin');

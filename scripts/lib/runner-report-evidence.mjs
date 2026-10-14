@@ -105,7 +105,7 @@ function validBrowserObservations(kind, browser) {
 }
 export async function validateNestedBrowserEvidence(kind, directory, { release = true, outerLog, outerRun, outerOrigin } = {}) {
   if (kind === 'user-journey') return validateUserJourneyBrowserReleaseEvidence(directory, { release, outerLog, outerRun, outerOrigin });
-  if (kind === 'import-atomicity') return validateAtomicityBrowserReleaseEvidence(directory, { release, outerLog, outerRun });
+  if (kind === 'import-atomicity') return validateAtomicityBrowserReleaseEvidence(directory, { release, outerLog, outerRun, outerOrigin });
   if (kind === 'name-protocol') return validateNameBrowserReleaseEvidence(directory, { release });
   if (kind === 'playback') return validatePlaybackBrowserReleaseEvidence(directory, { release });
   if (kind === 'trace-business') return validateTraceReleaseEvidence(directory, { release });
@@ -176,7 +176,7 @@ export async function validateBrowserEvidence(directory, { release = true } = {}
       for (const file of mandatory)
         if (!files.has(`${nestedDirectory}/${file}`)) throw new Error(`missing_bound_nested_file:${kind}:${file}`);
       for (const file of await evidenceFiles(path.join(directory, nestedDirectory))) if (!files.has(`${nestedDirectory}/${file}`)) throw new Error(`unbound_nested_file:${kind}:${file}`);
-      const verdict = await validateNestedBrowserEvidence(kind, path.join(directory, nestedDirectory), { release, outerRun: run, outerOrigin: { repositoryRoot: report.executionRepositoryRoot, nodeExecutable: report.nodeExecutable }, outerLog: files.get(`${run}/${kind}.log`)?.toString() }); result.nested.push(verdict);
+      const verdict = await validateNestedBrowserEvidence(kind, path.join(directory, nestedDirectory), { release, outerRun: run, outerOrigin: { repositoryRoot: report.executionRepositoryRoot, nodeExecutable: report.nodeExecutable, evidenceDirectory: report.evidenceDirectory }, outerLog: files.get(`${run}/${kind}.log`)?.toString() }); result.nested.push(verdict);
       if (!verdict.ok) throw new Error(`nested_profile_rejected:${kind}:${verdict.reasons.join(',')}`);
     }
   } catch (error) { result.reasons.push(error.message); statuses.push('incomplete'); }

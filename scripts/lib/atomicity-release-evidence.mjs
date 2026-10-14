@@ -70,10 +70,14 @@ export function validateAtomicityReleaseEvidence(directory, { release = true } =
   const run = path.basename(directory); if (!/^run-[A-Za-z0-9]+$/.test(run)) throw new Error('invalid_atomicity_run_directory');
   return inspect(directory, { release, nodeOnly: true, evidenceDirectory: path.join(process.cwd(), 'verification-evidence/import-atomicity', run) });
 }
-export function validateAtomicityBrowserReleaseEvidence(directory, { release = true, outerLog, outerRun } = {}) {
+export function validateAtomicityBrowserReleaseEvidence(directory, { release = true, outerLog, outerRun, outerOrigin } = {}) {
   assert.match(outerRun || '', /^run-[A-Za-z0-9]+$/); const run = path.basename(directory); assert.match(run, /^run-[A-Za-z0-9]+$/);
-  const expected = path.join('browser-evidence', outerRun, run), matches = [...(outerLog || '').matchAll(/^Import atomicity evidence: (.+)$/gm)];
+  assert.equal(outerOrigin?.repositoryRoot, process.cwd(), 'atomicity_outer_repository');
+  assert.equal(outerOrigin?.nodeExecutable, process.execPath, 'atomicity_outer_executable');
+  const aggregateDirectory = outerOrigin.evidenceDirectory;
+  assert.ok(typeof aggregateDirectory === 'string' && aggregateDirectory.length > 0 && path.normalize(aggregateDirectory) === aggregateDirectory && path.basename(aggregateDirectory) === outerRun, 'atomicity_outer_directory');
+  const expected = path.join(aggregateDirectory, run), matches = [...(outerLog || '').matchAll(/^Import atomicity evidence: (.+)$/gm)];
   assert.equal(matches.length, 1, 'atomicity_outer_origin_missing'); assert.equal(matches[0][1], expected, 'atomicity_outer_origin_mismatch');
   assert.equal(outerLog.split(/\r?\n/, 1)[0], `Import atomicity evidence: ${expected}`, 'atomicity_outer_origin_not_first');
-  return inspect(directory, { release, nodeOnly: false, evidenceDirectory: path.join(process.cwd(), expected) });
+  return inspect(directory, { release, nodeOnly: false, evidenceDirectory: path.resolve(process.cwd(), expected) });
 }

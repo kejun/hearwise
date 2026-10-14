@@ -12,6 +12,7 @@ import { validateUserJourneyEvidence, journeyRecord, assertJourneySupersededGrap
 import { validateUserJourneyReleaseContract, validateUserJourneyBrowserReleaseEvidence } from '../scripts/lib/user-journey-release-evidence.mjs';
 import { browserChecks, browserScreenshots, hashEvidenceFiles, evidenceFiles } from '../scripts/lib/runner-evidence-contract.mjs';
 import { digest, writeJson } from '../scripts/lib/verification-evidence.mjs';
+import { runProcess } from '../scripts/lib/process.mjs';
 
 const stage = (browser, name) => browser.widths[0].stages.find(value => value.name === name);
 const validate = (fixture, value = fixture.browser) => validateUserJourneyEvidence(value, { source: fixture.source.source, sourceDigests: fixture.source.digests, mutation: fixture.mutation });
@@ -227,7 +228,7 @@ test('journey release boundary rejects rebound SQLite bytes, missing artifacts, 
 test('nested journey origin is bound to the separately recorded aggregate log and executable', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'journey-outer-contract-')); t.after(() => rm(root, { recursive: true, force: true }));
   const directory = path.join(root, 'user-journey-contract'), f = await userJourneyEvidenceFixture(directory, { outerRun: 'run-contract' });
-  const outerOrigin = { repositoryRoot: process.cwd(), nodeExecutable: process.execPath };
+  const outerOrigin = { repositoryRoot: process.cwd(), nodeExecutable: process.execPath, evidenceDirectory: 'browser-evidence/run-contract' };
   const options = { release: false, outerRun: 'run-contract', outerLog: f.outerLog, outerOrigin };
   const good = await validateUserJourneyBrowserReleaseEvidence(directory, options); assert.equal(good.ok, true, good.reasons.join('\n'));
   for (const change of [ { outerLog: '' }, { outerLog: f.outerLog + f.outerLog }, { outerLog: 'prefix\n' + f.outerLog },
@@ -235,6 +236,39 @@ test('nested journey origin is bound to the separately recorded aggregate log an
     { outerOrigin: { ...outerOrigin, nodeExecutable: '/forged/node' } } ]) {
     assert.equal((await validateUserJourneyBrowserReleaseEvidence(directory, { ...options, ...change })).ok, false);
   }
+});
+
+test('nested journey accepts configured absolute and relative aggregate roots without trusting the child alone', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'journey-custom-root-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'user-journey-contract'), f = await userJourneyEvidenceFixture(directory);
+  for (const evidenceDirectory of ['/custom/artifacts/run-contract', 'custom-artifacts/run-contract']) {
+    const report = structuredClone(f.report), expected = path.resolve(process.cwd(), evidenceDirectory, path.basename(directory));
+    report.executionContext.evidenceDirectory = expected; report.checks[0].command[2] = expected;
+    await writeJson(path.join(directory, 'report.json'), report);
+    const options = { release: false, outerRun: 'run-contract', outerLog: `User journey browser evidence: ${expected}\n`,
+      outerOrigin: { repositoryRoot: process.cwd(), nodeExecutable: process.execPath, evidenceDirectory } };
+    const good = await validateUserJourneyBrowserReleaseEvidence(directory, options); assert.equal(good.ok, true, good.reasons.join('\n'));
+    for (const changed of [undefined, '', '/custom/artifacts/run-other', '/different/artifacts/run-contract', 'custom-artifacts/../run-contract']) {
+      assert.equal((await validateUserJourneyBrowserReleaseEvidence(directory, { ...options, outerOrigin: { ...options.outerOrigin, evidenceDirectory: changed } })).ok, false);
+    }
+  }
+});
+
+test('actual journey command prints its bound origin before any SQLite import warning', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'journey-origin-warning-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const hook = path.join(root, 'sqlite-warning.mjs'), logFile = path.join(root, 'outer.log');
+  // Exercise the real entrypoint and its entire import graph. Only emit a warning
+  // when the real builtin loads; never replace SQLite, the runner or its result.
+  await writeFile(hook, `import { registerHooks } from 'node:module';\nlet observed = false;\nregisterHooks({ load(url, context, nextLoad) {\n  if (url === 'node:sqlite' && !observed) { observed = true; process.emitWarning('Journey SQLite import-order regression', 'ExperimentalWarning'); }\n  return nextLoad(url, context);\n} });\n`);
+  const env = { ...process.env, USER_JOURNEY_EVIDENCE_DIR: root }; delete env.NODE_TEST_CONTEXT; delete env.NODE_NO_WARNINGS;
+  const execution = await runProcess(process.execPath, ['--import', hook, 'scripts/verify-user-journey-browser.mjs', '--node-only'], { env, logFile, timeoutMs: 15000 });
+  assert.equal(execution.code, 1); assert.equal(execution.signal, null); assert.equal(execution.timedOut, false);
+  const log = await readFile(logFile, 'utf8'), lines = log.split(/\r?\n/);
+  assert.match(lines[0], /^User journey browser evidence: /); assert.match(log, /ExperimentalWarning: Journey SQLite import-order regression/);
+  assert.equal(lines.filter(line => line.startsWith('User journey browser evidence: ')).length, 1);
+  const directory = lines[0].slice('User journey browser evidence: '.length), report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8'));
+  assert.equal(path.dirname(directory), root); assert.equal(report.executionContext.evidenceDirectory, directory);
+  assert.equal(report.ok, false); assert.equal(report.status, 'not_run'); assert.equal(report.complete, false); assert.deepEqual(report.checks, []);
 });
 
 test('independent audit counterexamples cannot sever DOM, fetch, identity, receipt, provider or time correlations', async t => {

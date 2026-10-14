@@ -18,7 +18,7 @@ import { sourceSnapshot, evidenceFiles, hashEvidenceFiles } from '../scripts/lib
 import { digest, metadata, writeJson } from '../scripts/lib/verification-evidence.mjs';
 
 const clone = value => JSON.parse(JSON.stringify(value));
-export async function userJourneyEvidenceFixture(directory, { outerRun } = {}) {
+export async function userJourneyEvidenceFixture(directory, { outerRun, outerDirectory = outerRun && path.join('browser-evidence', outerRun) } = {}) {
   await mkdir(directory, { recursive: true });
   const working = await mkdtemp(path.join(os.tmpdir(), 'journey-contract-db-'));
   const source = await sourceSnapshot(), mutation = await journeyMutation();
@@ -215,7 +215,7 @@ export async function userJourneyEvidenceFixture(directory, { outerRun } = {}) {
   const log = 'SYNTHETIC READER CONTRACT ONLY: Chromium was not launched.\n';
   await writeFile(path.join(directory, 'browser.log'), log); await writeJson(path.join(directory, 'browser.json'), browser);
   for (const file of journeyScreenshots) await writeFile(path.join(directory, file), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  const context = await metadata(), origin = { repositoryRoot: process.cwd(), evidenceDirectory: outerRun ? path.join(process.cwd(), 'browser-evidence', outerRun, path.basename(directory)) : path.resolve(directory), nodeExecutable: process.execPath, overallTimeoutMs: journeyLimits.overallMs };
+  const context = await metadata(), origin = { repositoryRoot: process.cwd(), evidenceDirectory: outerRun ? path.resolve(process.cwd(), outerDirectory, path.basename(directory)) : path.resolve(directory), nodeExecutable: process.execPath, overallTimeoutMs: journeyLimits.overallMs };
   const report = { ...context, profile: 'user-journey', schemaVersion: 1, sourceStart: source, sourceEnd: source, startedAt: browser.startedAt, finishedAt: tick(), complete: true, ok: true,
     status: 'passed', finalizationErrors: [], fullProjectAcceptance: false, propertyRows: userJourneyProfile.map(id => ({ id, status: 'passed', reasons: [] })),
     browserFile: 'browser.json', externalAcceptance: journeyExternalAcceptance, executionContext: origin,
