@@ -97,15 +97,33 @@ export async function atomicityScenario(config, observation = {}, createFixture 
     observation.complete = observation.ok = true;
   } catch (error) { primaryError = error; observation.error = { name: error.name, message: error.message }; throw error; }
   finally {
-    if (writer) { writer.exec('ROLLBACK'); writer.close(); }
-    observation.runtimes = await fixture.runtimes(); observation.events = await fixture.events(); observation.lifecycle = [...fixture.lifecycle]; observation.providerCalls = [...fixture.calls];
-    observation.logs = fixture.logs();
-    try { await fixture.close(); observation.cleanup = { ok: true }; }
-    catch (error) { observation.cleanup = { ok: false, message: error.message }; observation.complete = observation.ok = false; throw atomicityCleanupError(primaryError, error); }
+    const failures = [];
+    const attempt = async (stage, action) => {
+      try { await action(); } catch (error) { failures.push({ stage, error }); }
+    };
+    if (writer) {
+      await attempt('writer-rollback', () => writer.exec('ROLLBACK'));
+      await attempt('writer-close', () => writer.close());
+    }
+    await attempt('runtimes', async () => { observation.runtimes = await fixture.runtimes(); });
+    await attempt('events', async () => { observation.events = await fixture.events(); });
+    await attempt('lifecycle', () => { observation.lifecycle = [...fixture.lifecycle]; });
+    await attempt('providerCalls', () => { observation.providerCalls = [...fixture.calls]; });
+    await attempt('logs', () => { observation.logs = fixture.logs(); });
+    await attempt('fixture-close', () => fixture.close());
+    if (failures.length) {
+      observation.cleanup = { ok: false, message: failures.map(({ error }) => error.message).join('; '),
+        errors: failures.map(({ stage, error }) => ({ stage, name: error.name, message: error.message })) };
+      observation.complete = observation.ok = false;
+      throw atomicityCleanupError(primaryError, failures.map(({ error }) => error));
+    }
+    observation.cleanup = { ok: true };
   }
   return observation;
 }
 
 export function atomicityCleanupError(primaryError, cleanupError) {
-  return primaryError ? new AggregateError([primaryError, cleanupError], 'Import scenario and cleanup both failed', { cause: primaryError }) : cleanupError;
+  const errors = Array.isArray(cleanupError) ? cleanupError : [cleanupError];
+  if (primaryError) return new AggregateError([primaryError, ...errors], 'Import scenario and cleanup both failed', { cause: primaryError });
+  return errors.length === 1 ? errors[0] : new AggregateError(errors, 'Import scenario cleanup failed', { cause: errors[0] });
 }

@@ -45,6 +45,7 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
     if (!isDeepStrictEqual(raw.source, { sha: report.sourceStart.sha, dirty: report.sourceStart.dirty })) nodeValidation = { ok: false, reasons: ['runtime_source_mismatch'] }; } catch { /* fail closed */ }
   let controlsValid = false;
   const controlsReasons = [];
+  if (!artifacts.has('controls.json')) nodeArtifactReasons.push('controls_artifact_missing');
   try {
     const controls = JSON.parse(artifacts.get('controls.json'));
     controlsValid = !report.controlsError && Array.isArray(controls) && controls.every(row => row.rejected === true) && isDeepStrictEqual(controls, atomicityEvidenceControls(raw));

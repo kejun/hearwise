@@ -115,6 +115,11 @@ projections, source/build identity, artifacts and screenshots, but are not claim
 to pass the original-path local release reader.
 Release requires clean unchanged source. Missing, changed, cancelled, timed-out
 or incomplete evidence fails closed; browser results are independently scoped.
+Control-generation errors retain a Node-local diagnostic artifact: a complete
+failed Node oracle remains failed without invalidating complete browser evidence.
+Missing or unreadable control artifacts remain incomplete. Scenario finalization
+attempts each diagnostic and resource close even after another stage fails;
+combined errors preserve the original assertion and all cleanup causes.
 
 Cloud Chromium was verified unable to start because socket creation was denied.
 Local full-browser results therefore remain failed/unrun until supported CI

@@ -40,7 +40,11 @@ test('atomicity evidence rejects absent cases despite cached passed flags', asyn
     assert.deepEqual(states(failed).map(row => row.status), ['failed', 'failed', 'failed', 'passed']);
     assert.ok(states(failed)[0].reasons.includes(generationFailure.message));
     assert.deepEqual(states({ ...failed, complete: false }).map(row => row.status), ['incomplete', 'incomplete', 'incomplete', 'passed']);
-    assert.deepEqual(states({ ...failed, reasons: [writeFailure.controlsError.message] }).map(row => row.status), ['failed', 'failed', 'failed', 'passed']);
+    assert.deepEqual(states({ ...failed, artifactReasons: ['controls_artifact_missing'], reasons: [writeFailure.controlsError.message] }).map(row => row.status), ['incomplete', 'incomplete', 'incomplete', 'passed']);
+    const { readAtomicityReport } = await import('../scripts/lib/import-atomicity-report.mjs');
+    await writeFile(path.join(directory, 'report.json'), JSON.stringify({ nodeOnly: true, checks: [], artifacts: [] }));
+    const missingControl = await readAtomicityReport(directory, { nodeOnly: true });
+    assert.ok(missingControl.rows[0].reasons.includes('controls_artifact_missing'));
     assert.equal(atomicityMatrixComplete(undefined), false);
     assert.equal(atomicityMatrixComplete({ version: '1.0', scenarios: [] }), false);
 
@@ -62,6 +66,8 @@ test('atomicity execution rejects timeouts signals interruption and missing fini
   assert.equal(combined.cause, primary); assert.deepEqual(combined.errors, [primary, cleanup]);
   assert.equal(combined.errors[0].stack, primary.stack); assert.equal(combined.errors[1].stack, cleanup.stack);
   assert.equal(atomicityCleanupError(undefined, cleanup), cleanup);
+  const anotherCleanup = new Error('another cleanup failed'), cleanupOnly = atomicityCleanupError(undefined, [cleanup, anotherCleanup]);
+  assert.deepEqual(cleanupOnly.errors, [cleanup, anotherCleanup]); assert.equal(cleanupOnly.cause, cleanup);
   const { atomicityScenario } = await import('../test-support/import-atomicity-scenarios.mjs');
   const { importAtomicityFixture } = await import('../test-support/import-atomicity-fixture.mjs');
   for (const failureAt of ['close', 'runtimes', 'multiple-diagnostics']) {
