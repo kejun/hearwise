@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
-import { fixtures, hash, assertUpgradeProjection, semanticSchema } from './upgrade-fixture.mjs';
+import { fixtures, hash, assertUpgradeProjection, semanticSchema, committedPrefixSchema } from './upgrade-fixture.mjs';
 import { faultCases, faultId } from './upgrade-scenarios.mjs';
 export { hash };
 const provenance = JSON.parse(readFileSync(new URL('../test/fixtures/upgrade/target-provenance.json', import.meta.url)));
@@ -33,9 +33,12 @@ export function validateUpgradeCase(row) {
     assert.deepEqual(row.editResult, listening); assert.deepEqual(row.edited, expected); assert.deepEqual(row.reopened, expected);
     assert.deepEqual(row.queries.map(query => query.listening.id).sort(), fixture.rows.listenings.map(value => value.id).sort());
     for (const query of row.queries) {
+      assertPublicDetail(row.upgraded, query);
       assert.deepEqual(query.segments, row.upgraded.rows.segments.filter(segment => segment.listening_id === query.listening.id).sort((a, b) => a.sequence_no - b.sequence_no));
       assert.deepEqual(query.listening, row.upgraded.rows.listenings.find(value => value.id === query.listening.id));
     }
+    assert.deepEqual(row.graphs.map(graph => graph.listeningId).sort(), fixture.rows.listenings.map(value => value.id).sort());
+    for (const graph of row.graphs) assertPublicGraph(row.upgraded, graph);
   } else if (row.id.startsWith('restore/')) {
     historicalBefore(fixture, row.before); assert.deepEqual(row.backupAfter, row.before);
     assert.match(row.backupSha256, /^[a-f0-9]{64}$/); assert.equal(row.backupAfterSha256, row.backupSha256);
@@ -47,6 +50,8 @@ export function validateUpgradeCase(row) {
     const expected = structuredClone(restored), listening = expected.rows.listenings.find(value => value.id === row.usable.request.id); assert.ok(listening);
     assert.equal(row.usable.request.title, 'Recovered editable history'); assert.equal(row.usable.request.notes, 'Synthetic restore verified.');
     Object.assign(listening, { title: row.usable.request.title, notes: row.usable.request.notes });
+    assertPublicDetail({ ...expected, version: 12 }, row.detail.body);
+    assert.equal(row.graph.status, 200); assertPublicGraph({ ...expected, version: 12 }, row.graph.body);
     assert.deepEqual(row.usable.after, expected); assert.deepEqual(row.usable.patch.body, { listening });
     assert.deepEqual(row.providerCalls, []); assert.deepEqual(row.usable.providerCalls, []);
   } else {
@@ -75,9 +80,15 @@ export function validateUpgradeCase(row) {
       assert.ok(row.events.some(event => event.event === 'sqlite-error' && (event.errcode & 255) === (config.fault === 'readonly' ? 8 : 19)));
       assert.ok(row.events.some(event => event.event === 'rollback'));
     }
-    if (config.fault === 'early-commit') { assert.ok(!isDeepStrictEqual(row.afterFailure, row.before)); assert.equal(row.negativeDetected, true); assert.ok(row.events.some(event => event.event === 'mutant-early-commit')); }
+    if (config.fault === 'early-commit') {
+      const expected = committedPrefixSchema(fixture, [row.events.find(event => event.name === 'after-write').sql]);
+      assert.deepEqual(row.afterFailure, expected); assert.ok(!isDeepStrictEqual(row.afterFailure, row.before)); assert.equal(row.negativeDetected, true); assert.ok(row.events.some(event => event.event === 'mutant-early-commit')); }
     else if (config.boundary === 'after-commit') {
       const targetVersion = config.version < 5 ? config.version + 1 : config.version < 9 ? 9 : config.version + 1;
+      const statements = row.events.filter(event => event.name === 'after-write').map(event => event.sql);
+      if (config.version >= 5 && config.version < 9) statements.push('PRAGMA user_version=9');
+      const expected = committedPrefixSchema(fixture, statements);
+      assert.deepEqual(semanticSchema(row.afterFailure.schema), semanticSchema(expected.schema)); assert.equal(row.afterFailure.version, expected.version);
       assertUpgradeProjection(fixture, row.afterFailure, { stageOnly: true, targetVersion });
     } else assert.deepEqual(row.afterFailure, row.before);
     if (config.fault === 'constraint') {
@@ -163,4 +174,49 @@ export function validateInstallSchedule(raw, window) {
   let previous = window?.startedAt ?? -Infinity;
   for (const row of stages) { assert.ok(row.startedAt >= previous && row.finishedAt >= row.startedAt); previous = row.finishedAt; }
   if (window) assert.ok(previous <= window.finishedAt);
+}
+
+const ordered = rows => [...rows].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+function assertKnowledge(snapshot, actual, id) {
+  const rows = snapshot.rows, items = rows.knowledge_items.filter(item => item.listening_id === id);
+  const expected = items.map(item => ({ ...item, display_name: item.canonical_name,
+    aliases: ordered(rows.knowledge_aliases.filter(row => row.item_id === item.id).map(row => row.alias)),
+    mentions: ordered(rows.knowledge_mentions.filter(row => row.item_id === item.id)),
+    revisions: ordered(rows.knowledge_revisions.filter(row => row.item_id === item.id)),
+    facts: ordered(rows.knowledge_facts.filter(row => row.item_id === item.id)) }));
+  // All frozen historical inputs have no v12 display-name override.
+  assert.ok(items.every(item => item.name_override === null));
+  assert.deepEqual(ordered(actual.map(item => ({ ...item, aliases: ordered(item.aliases), mentions: ordered(item.mentions), revisions: ordered(item.revisions), facts: ordered(item.facts) }))), ordered(expected));
+}
+function assertGraphMetadata(snapshot, graph, id) {
+  const listening = snapshot.rows.listenings.find(row => row.id === id), jobs = snapshot.rows.relation_jobs.filter(row => row.listening_id === id);
+  assert.equal(graph.listeningId, id); assert.equal(graph.enabled, Boolean(listening.relation_enabled));
+  assert.equal(graph.graphRevision, listening.graph_revision); assert.equal(graph.graph_revision, listening.graph_revision);
+  assert.equal(graph.status.enabled, Boolean(listening.relation_enabled)); assert.equal(graph.status.requestCount, jobs.reduce((sum, row) => sum + row.request_count, 0));
+  assert.deepEqual(graph.status.limits, { maxWindowRequests: 3, requestTimeoutMs: 30000, maxConcurrent: 2 });
+  assert.equal(graph.status.progress.totalWindows, snapshot.rows.relation_windows.filter(row => row.listening_id === id).length);
+}
+function assertPublicDetail(snapshot, detail) {
+  const id = detail.listening.id, rows = snapshot.rows;
+  assert.deepEqual(detail.listening, rows.listenings.find(row => row.id === id));
+  assert.deepEqual(detail.runs, rows.listening_runs.filter(row => row.listening_id === id).sort((a, b) => a.run_no - b.run_no));
+  assert.deepEqual(detail.segments, rows.segments.filter(row => row.listening_id === id).sort((a, b) => a.sequence_no - b.sequence_no));
+  assert.equal(detail.segmentCount, detail.segments.length); assert.deepEqual(detail.latestSegment, detail.segments.at(-1));
+  assertKnowledge(snapshot, detail.knowledge, id); assertGraphMetadata(snapshot, detail.graph, id);
+  const jobs = rows.extraction_jobs.filter(row => row.listening_id === id); assert.deepEqual(detail.jobs.map(row => row.id).sort(), jobs.map(row => row.id).sort());
+  for (const job of detail.jobs) for (const key of ['id', 'listening_id', 'from_sequence', 'to_sequence', 'prompt_version', 'state', 'attempts', 'last_error', 'created_at', 'updated_at', 'retry_at', 'outcome'])
+    assert.deepEqual(job[key], jobs.find(row => row.id === job.id)[key]);
+}
+function assertPublicGraph(snapshot, graph) {
+  const rows = snapshot.rows, id = graph.listeningId; assertGraphMetadata(snapshot, graph, id); assertKnowledge(snapshot, graph.nodes, id);
+  const relations = rows.relations.filter(row => row.listening_id === id), ids = new Set(relations.map(row => row.id));
+  const assertions = rows.relation_assertions.filter(row => ids.has(row.relation_id)), aids = new Set(assertions.map(row => row.id));
+  const supports = rows.relation_supports.filter(row => aids.has(row.assertion_id));
+  const nestedAssertions = assertions.map(row => ({ ...row, supports: ordered(supports.filter(support => support.assertion_id === row.id)) }));
+  const normalizedAssertions = values => ordered(values.map(row => ({ ...row, supports: ordered(row.supports) })));
+  assert.deepEqual(ordered(graph.supports), ordered(supports)); assert.deepEqual(normalizedAssertions(graph.assertions), ordered(nestedAssertions));
+  assert.deepEqual(ordered(graph.relations.map(row => ({ ...row, assertions: normalizedAssertions(row.assertions) }))),
+    ordered(relations.map(row => ({ ...row, assertions: ordered(nestedAssertions.filter(assertion => assertion.relation_id === row.id)) }))));
+  assert.deepEqual(ordered(graph.revisions), ordered(rows.relation_revisions.filter(row => ids.has(row.relation_id))));
+  assert.deepEqual([...graph.deletedItemIds].sort(), [...new Set(rows.knowledge_manual_items.filter(row => row.listening_id === id && row.deleted === 1).map(row => row.item_id))].sort());
 }

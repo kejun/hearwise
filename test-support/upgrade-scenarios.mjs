@@ -94,6 +94,7 @@ export async function historicalRestore(version, inputFile = null, observation =
     observation.usable = await server.assertUsable();
     const id = fixture.identities.complete.listening, detail = await server.request(`/api/listenings/${id}`, { method: 'GET' });
     assert.equal(detail.status, 200); observation.detail = detail;
+    observation.graph = await server.request(`/api/listenings/${id}/graph`, { method: 'GET' }); assert.equal(observation.graph.status, 200);
     observation.providerCalls = [...server.calls]; assert.deepEqual(observation.providerCalls, []);
     observation.backupAfterSha256 = hash(await readFile(oldFile)); assert.equal(observation.backupAfterSha256, observation.backupSha256);
     observation.backupAfter = upgradeSnapshot(oldFile); assert.deepEqual(observation.backupAfter, observation.before);
@@ -111,6 +112,7 @@ export async function historicalUpgrade(version, observation = {}) {
     observation.before = materializeHistorical(fixture, filename);
     const startedAt = Date.now(); store = new ListeningStore(filename); const finishedAt = Date.now();
     const after = upgradeSnapshot(filename); Object.assign(observation, { startedAt, finishedAt, upgraded: after }); assertUpgradeProjection(fixture, after, { startedAt, finishedAt });
+    observation.graphs = JSON.parse(JSON.stringify(Object.values(fixture.identities).filter(Boolean).map(entry => store.graph(entry.listening))));
     observation.queries = JSON.parse(JSON.stringify(Object.values(fixture.identities).filter(Boolean).map(entry => store.detail(entry.listening))));
     for (const detail of observation.queries) {
       assert.deepEqual(JSON.parse(JSON.stringify(detail.segments)), after.rows.segments.filter(segment => segment.listening_id === detail.listening.id).sort((a, b) => a.sequence_no - b.sequence_no));

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { historicalUpgrade, migrationFault } from '../test-support/upgrade-scenarios.mjs';
+import { historicalUpgrade, migrationFault, historicalRestore } from '../test-support/upgrade-scenarios.mjs';
 import { semanticSchema } from '../test-support/upgrade-fixture.mjs';
 import { validateUpgradeCase, assertUpgradeWindow, passedExecution, expectedCases } from '../test-support/upgrade-evidence.mjs';
 
@@ -16,7 +16,7 @@ test('upgrade case evidence rejects schema loss and jointly corrupted post-edit 
   const window = { startedAt: actual.scenarioStartedAt, finishedAt: actual.scenarioFinishedAt }; assertUpgradeWindow(actual, window);
   assert.throws(() => assertUpgradeWindow({ ...actual, scenarioStartedAt: actual.scenarioStartedAt + 365 * 86400000, scenarioFinishedAt: actual.scenarioFinishedAt + 365 * 86400000 }, window));
   for (const mutate of [row => { row.upgraded.schema = []; }, row => { row.editResult.title = 'wrong'; },
-    row => { row.reopened.rows.extraction_parts[0].initial_requests = 0; }, row => { row.upgraded.rows.segments.pop(); },
+    row => { row.reopened.rows.extraction_parts[0].initial_requests = 0; }, row => { row.upgraded.rows.segments.pop(); }, row => { row.queries[0].knowledge = []; }, row => { row.queries[0].graph = {}; }, row => { row.graphs[0].nodes = []; },
     row => { row.edited.rows.segments[0].original_text = row.reopened.rows.segments[0].original_text = 'corrupt'; },
     row => { row.edited.rows.knowledge_revisions = []; row.reopened.rows.knowledge_revisions = []; }]) {
     const copy = structuredClone(actual); mutate(copy); assert.throws(() => validateUpgradeCase(copy));
@@ -25,7 +25,7 @@ test('upgrade case evidence rejects schema loss and jointly corrupted post-edit 
 test('upgrade crash evidence binds real SIGKILL and the complete SQLite boundary sequence', { timeout: 10000 }, async () => {
   const actual = await migrationFault({ version: 1, boundary: 'after-commit', fault: null }); validateUpgradeCase(actual);
   for (const mutate of [row => { row.exit.signal = 'SIGTERM'; }, row => { row.marker.writes = 0; }, row => { row.events = []; },
-    row => { row.afterFailure.version = 1; }]) { const copy = structuredClone(actual); mutate(copy); assert.throws(() => validateUpgradeCase(copy)); }
+    row => { row.afterFailure.version = 1; }, row => { row.afterFailure.schema = []; }]) { const copy = structuredClone(actual); mutate(copy); assert.throws(() => validateUpgradeCase(copy)); }
 });
 test('upgrade result rejects interrupted, missing, timed out and nonzero exits', () => {
   const pass = { code: 0, signal: null, timedOut: false, interrupted: false, ok: true }; assert.equal(passedExecution(pass), true);
@@ -58,4 +58,30 @@ test('installer schedule rejects reordered stages, shifted clocks and false dura
     value => { value.commands[0].startedAt += 365 * 86400000; value.commands[0].finishedAt += 365 * 86400000; }]) {
     const copy = structuredClone(raw); mutate(copy); assert.throws(() => validateInstallSchedule(copy, window));
   }
+});
+
+
+test('upgrade early-commit and HTTP readback controls reject arbitrary unequal or forged snapshots', { timeout: 15000 }, async () => {
+  const broken = await migrationFault({ version: 1, boundary: 'after-write', fault: 'early-commit' }); validateUpgradeCase(broken);
+  const invalid = structuredClone(broken); invalid.afterFailure = {}; assert.throws(() => validateUpgradeCase(invalid));
+  const restored = await historicalRestore(12); validateUpgradeCase(restored);
+  const forged = structuredClone(restored); forged.detail.body.segments[0].original_text = 'FORGED'; assert.throws(() => validateUpgradeCase(forged));
+  const dropped = structuredClone(restored); dropped.graph.body.supports = []; assert.throws(() => validateUpgradeCase(dropped));
+});
+
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { collectAtomicityControls } from '../scripts/lib/import-atomicity-controls.mjs';
+test('upgrade control generation failure stays data-local and saves its diagnostic', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'hearwise-upgrade-controls-failure-')), report = {};
+  try {
+    await writeFile(path.join(directory, 'observations.json'), '{}');
+    await collectAtomicityControls(directory, report, () => { throw new Error('synthetic control generation failure'); });
+    assert.equal(report.error, undefined); assert.equal(report.controlsError.message, 'synthetic control generation failure');
+    assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'controls.json'))), { error: report.controlsError });
+    const completed = { execution: { code: 0, signal: null, timedOut: false, interrupted: false, ok: true }, raw: { complete: true } };
+    assert.equal(upgradeCheckStatus({ ...completed, reasons: [report.controlsError.message] }), 'failed');
+    assert.equal(upgradeCheckStatus(completed), 'passed');
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

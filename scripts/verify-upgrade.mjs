@@ -5,6 +5,7 @@ import { runProcess } from './lib/process.mjs';
 import { writeJson } from './lib/verification-evidence.mjs';
 import { atomicitySource } from '../test-support/import-atomicity-evidence.mjs';
 import { hash, upgradeVersion, upgradeControls } from '../test-support/upgrade-evidence.mjs';
+import { collectAtomicityControls } from './lib/import-atomicity-controls.mjs';
 import { upgradeChecks, readUpgradeReport } from './lib/upgrade-report.mjs';
 const args = process.argv.slice(2); if (args.some(value => value !== '--release')) throw new Error('Usage: verify:upgrade [--release]');
 const root = process.env.UPGRADE_EVIDENCE_DIR || 'verification-evidence/upgrade'; await mkdir(root, { recursive: true });
@@ -24,10 +25,9 @@ try {
     report.checks.push({ ...check, startedAt, finishedAt: Date.now(), command: [process.execPath, ...check.command], cwd: process.cwd(), log: `${check.name}.log`, execution }); await writeJson(output, report);
     if (execution.interrupted || execution.timedOut || execution.signal) break;
   }
-  const raw = JSON.parse(await readFile(path.join(directory, 'observations.json'), 'utf8'));
-  await writeJson(path.join(directory, 'controls.json'), upgradeControls(raw));
 } catch (error) { report.error = { name: error.name, message: error.message }; }
-finally { await rm(temporary, { recursive: true, force: true }); report.cleanupOk = true; }
+finally { try { await rm(temporary, { recursive: true, force: true }); report.cleanupOk = true; } catch (error) { report.cleanupError = { name: error.name, message: error.message }; } }
+await collectAtomicityControls(directory, report, upgradeControls);
 try { report.environment.npm = JSON.parse(await readFile(path.join(directory, 'install.json'), 'utf8')).environment.npm; } catch {}
 report.sourceEnd = await atomicitySource(); report.finishedAt = new Date().toISOString();
 for (const name of ['data.log', 'install.log', 'observations.json', 'install.json', 'controls.json',

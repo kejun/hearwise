@@ -39,6 +39,14 @@ export function materializeHistorical(fixture, filename) {
   assert.equal(hash(JSON.stringify(fixture.schema)), fixture.schemaSha256, 'frozen historical schema digest');
   const db = new DatabaseSync(filename);
   try {
+    populateHistorical(db, fixture);
+  } finally { db.close(); }
+  const snapshot = upgradeSnapshot(filename);
+  assert.equal(snapshot.version, fixture.version);
+  for (const [table, rows] of Object.entries(fixture.rows)) assert.deepEqual(sortRows(table, snapshot.rows[table]), sortRows(table, rows));
+  return snapshot;
+}
+function populateHistorical(db, fixture) {
     // Insert before installing the original triggers. This reconstructs the
     // original snapshot, rather than triggering business writes a second time.
     db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE');
@@ -52,11 +60,21 @@ export function materializeHistorical(fixture, filename) {
     assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
     for (const [table, columns] of Object.entries(fixture.columns)) assert.deepEqual(plain(db.prepare(`PRAGMA table_info(${quote(table)})`).all()), columns);
+
+}
+export function committedPrefixSchema(fixture, statements) {
+  const db = new DatabaseSync(':memory:');
+  try {
+    populateHistorical(db, fixture); db.exec('BEGIN IMMEDIATE');
+    for (const sql of statements) db.exec(sql);
+    db.exec('COMMIT');
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    return plain({ rows: Object.fromEntries(tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}"`).all()
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))])),
+      schema: db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all(),
+      integrity: db.prepare('PRAGMA integrity_check').get().integrity_check, foreignKeyErrors: db.prepare('PRAGMA foreign_key_check').all(),
+      version: db.prepare('PRAGMA user_version').get().user_version });
   } finally { db.close(); }
-  const snapshot = upgradeSnapshot(filename);
-  assert.equal(snapshot.version, fixture.version);
-  for (const [table, rows] of Object.entries(fixture.rows)) assert.deepEqual(sortRows(table, snapshot.rows[table]), sortRows(table, rows));
-  return snapshot;
 }
 export function upgradeSnapshot(filename) {
   const snapshot = databaseSnapshot(filename), db = new DatabaseSync(filename, { readOnly: true });

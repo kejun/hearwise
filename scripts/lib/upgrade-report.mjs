@@ -40,6 +40,7 @@ export async function readUpgradeReport(directory, { release = false } = {}) {
       assert.ok(passedExecution(row.execution));
       if (expected.name === 'data') {
         assert.deepEqual(raw.source, { sha: current.sha, dirty: current.dirty }); validateUpgradeObservations(raw, row);
+        assert.equal(report.controlsError, undefined); assert.equal(report.controlsWriteError, undefined);
         const controls = JSON.parse(artifacts.get('controls.json')); assert.deepEqual(controls, upgradeControls(raw)); assert.ok(controls.every(row => row.rejected));
       } else {
         validateInstall(raw, current, report.environment, row);
