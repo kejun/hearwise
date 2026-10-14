@@ -61,7 +61,9 @@
     "setup:playback-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:playback-protocol": "npm run build",
     "verify:playback-protocol": "node scripts/verify-playback-protocol.mjs",
-    "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs"
+    "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs",
+    "prequality:semantic": "npm run build",
+    "quality:semantic": "node scripts/evaluate-semantic-quality.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
