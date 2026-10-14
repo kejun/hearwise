@@ -71,11 +71,9 @@ test('ASR final identity is run plus sentence ID; stop accepts its tail but reje
   const upstream = [...fixture.stats.asrClients][0];
   const tail = text => JSON.stringify({ header: { event: 'result-generated' }, payload: { output: {
     sentence: { sentence_id: text, text, sentence_end: true } } } });
-  upstream._socket.cork();
   upstream.send(tail('Valid stop tail.'));
   upstream.send(JSON.stringify({ header: { event: 'task-finished' } }));
   upstream.send(tail('INVALID AFTER FINISHED'));
-  upstream._socket.uncork();
   await new Promise(resolve => first.ws.once('close', resolve));
   const read = async id => (await fetch(`${fixture.base}/api/listenings/${id}`)).json();
   const detail = await read(first.listeningId);

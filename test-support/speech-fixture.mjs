@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, extraEnv = {} } = {}) {
+export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, extraEnv = {} } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
   const filename = path.join(directory, 'test.sqlite');
   let seeded;
@@ -68,7 +68,10 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
       if (binary) { if (autoSentences && Date.now() - last > 2000) { last = Date.now(); final(); } return; }
       const message = JSON.parse(raw.toString());
       if (message.header?.action === 'run-task') ws.send(JSON.stringify({ header: { event: 'task-started' } }));
-      if (message.header?.action === 'finish-task') ws.send(JSON.stringify({ header: { event: 'task-finished' } }));
+      if (message.header?.action === 'finish-task') {
+        if (onAsrFinish) onAsrFinish(ws, message);
+        else ws.send(JSON.stringify({ header: { event: 'task-finished' } }));
+      }
     });
   });
   tts.on('connection', (ws, req) => {
