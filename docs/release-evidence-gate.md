@@ -5,7 +5,7 @@ This implements HW-15-10/11/12 under the original enhanced-verification v1.0 spe
 ## Fixed purposes
 
 - `foundation-demo` requires actual current relation-protocol Quint/SQLite replay and revision Lean/JavaScript bridge reports. A successful demonstration explicitly has `fullProjectAcceptance: false` and is not PR/release approval.
-- `pr` requires all sixteen current technical suites: complete Node file discovery, pilot, all nineteen Chromium profiles, relation protocol, knowledge protocol, revision, name-interval, import protocol, edit protocol, process-crash recovery and offline quality infrastructure, playback protocol, scheduler protocol, offline semantic review infrastructure, import atomicity, and name protocol. All existing CI jobs remain unconditional; the offline aggregation job additionally requires the import/edit/crash/playback/scheduler/name artifacts plus the semantic summary and Node-only atomicity report inside the existing Node artifact. No paid service is invoked.
+- `pr` requires all seventeen current technical suites: complete Node file discovery, pilot, all nineteen Chromium profiles, relation protocol, knowledge protocol, revision, name-interval, import protocol, edit protocol, process-crash recovery and offline quality infrastructure, playback protocol, scheduler protocol, offline semantic review infrastructure, import atomicity, name protocol, and cancellation generations. All existing CI jobs remain unconditional; the offline aggregation job additionally requires the import/edit/crash/playback/scheduler/name artifacts plus the semantic summary and Node-only atomicity report inside the existing Node artifact. No paid service is invoked.
 - `release` requires the same technical suites plus all fifteen original business domains and the separate real ASR/MT/knowledge/relation/TTS quality, performance, physical-device and upgrade/recovery obligations. On this baseline those whole-domain/external validators or frozen thresholds are not registered. They remain `not_run`; full release cannot pass. Unmerged local branches are not capabilities of this baseline.
 
 Purpose is explicit in every output. Switching to `foundation-demo` cannot produce a release-eligible result. Unknown suites, missing/duplicate reports, unsupported profiles and ambiguous artifact discovery fail closed. Every submitted attempt is checked: a failed or incomplete deep report cannot be hidden behind a fast pass.
@@ -79,3 +79,12 @@ Manifest schema 1 contains `evidence: [{suite, directory}]`; paths resolve relat
 Real Chromium must run in CI. This task's local environment did not run Chromium. Current-source final evidence and independent review must be recorded separately from synthetic contract tests or reports belonging to earlier SHAs.
 
 This integration normally merges main 2cf27f70, including the merged KEJ-71 name protocol and its final receipt-recovery diagnostic collector. Sixteen technical suites and nineteen browser profiles describe that combined source. The isolated preparation checkout was not published; final acceptance requires fresh evidence on the exact combined commit. The complete nineteen-profile contract test measured 48.7 seconds (54.1 seconds including the whole test file), within its unchanged 80-second test and 90-second file limits. Name release evidence uses exclusive scheduling, with its original nested deadline retained. No full-domain or external acceptance obligation is removed.
+
+Generation evidence reuses its complete 52-stage domain reader, including exact
+native ITF identity, all 57 real replays, four negative boundaries and full TAP
+rosters. Its thin release adapter preserves the fixed 35/70-minute profiles and
+requires exact Node/SQLite runtime versions. M1 directly invokes the complete
+relation, knowledge and process release readers as well; a cached passing domain
+summary cannot substitute for its original durable frames. The aggregate waits
+for the independent same-source AC-P01–P12 job but revalidates domain artifacts
+itself rather than trusting that job's summary. Deep checks remain separate.

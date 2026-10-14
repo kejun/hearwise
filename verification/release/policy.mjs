@@ -2,7 +2,7 @@
 export const policyVersion = 1;
 export const specificationVersion = 'hearwise-enhanced-verification-v1.0';
 export const groups = Array.from({ length: 15 }, (_, index) => `HW-${String(index + 1).padStart(2, '0')}`);
-export const technicalSuites = ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval', 'import-protocol', 'edit-protocol', 'process-crash', 'quality-offline', 'playback-protocol', 'scheduler', 'semantic-offline', 'import-atomicity', 'name-protocol'];
+export const technicalSuites = ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval', 'import-protocol', 'edit-protocol', 'process-crash', 'quality-offline', 'playback-protocol', 'scheduler', 'semantic-offline', 'import-atomicity', 'name-protocol', 'generation-protocol'];
 export const purposes = Object.freeze({
   'foundation-demo': ['relation-protocol', 'revision'],
   pr: technicalSuites,
@@ -26,6 +26,7 @@ export const budgets = Object.freeze({
   'import-protocol': { fastMs: 720000, deepMs: 1200000, processMs: 60000, tlcMs: { single: 60000, two_tokens: 240000 }, boundedMs: 240000 },
   'edit-protocol': { overallMs: 480000, tlcMs: 60000, boundedMs: 120000, simulationMs: 30000, witnessMs: 30000, mutationMs: 120000 },
   'process-crash': { fastMs: 480000, deepMs: 1200000, processMs: 60000, boundedMs: 240000 },
+  'generation-protocol': { fastMs: 2100000, deepMs: 4200000, supervisorGraceMs: 15000, regressionMs: 180000, mutationMs: 120000, processMs: 60000 },
   'playback-protocol': { fastMs: 480000, deepMs: 1200000, processMs: 60000, boundedMs: 240000, deepPairAbaMs: 900000 },
   scheduler: { fastMs: 900000, deepMs: 1200000, processMs: 60000, regressionMs: 90000, diagnosticMs: 90000, tlcMs: 'verification/scheduler-protocol/config.json#checks' },
   'import-atomicity': { sharedMs: 150000, parentMs: 180000, childMs: 55000 },
@@ -36,9 +37,9 @@ export const budgets = Object.freeze({
 });
 export const domainSuites = {
   'HW-01': ['browser'], 'HW-02': ['browser'], 'HW-03': ['knowledge-protocol', 'relation-protocol', 'scheduler'],
-  'HW-04': ['pilot', 'knowledge-protocol', 'relation-protocol', 'semantic-offline'], 'HW-05': ['browser', 'knowledge-protocol', 'relation-protocol', 'semantic-offline'],
+  'HW-04': ['pilot', 'knowledge-protocol', 'relation-protocol', 'semantic-offline', 'generation-protocol'], 'HW-05': ['browser', 'knowledge-protocol', 'relation-protocol', 'semantic-offline'],
   'HW-06': ['revision', 'edit-protocol', 'browser'], 'HW-07': ['name-interval', 'revision', 'name-protocol', 'browser'],
-  'HW-08': ['playback-protocol', 'browser'], 'HW-09': ['import-protocol', 'import-atomicity', 'browser'], 'HW-10': ['knowledge-protocol', 'relation-protocol', 'process-crash', 'browser'],
+  'HW-08': ['playback-protocol', 'browser'], 'HW-09': ['import-protocol', 'import-atomicity', 'browser'], 'HW-10': ['knowledge-protocol', 'relation-protocol', 'process-crash', 'browser', 'generation-protocol'],
   'HW-11': ['edit-protocol', 'scheduler', 'name-protocol', 'browser'], 'HW-12': ['browser'], 'HW-13': ['scheduler', 'browser'], 'HW-14': technicalSuites, 'HW-15': technicalSuites
 };
 // First-match is deliberately not used. A shared file may affect several domains.
@@ -48,6 +49,7 @@ export const impactRules = [
   { id: 'server-storage', category: 'identity-persistence', match: /^(?:server\.mjs|storage\.mjs|src\/server\/)/, domains: groups },
   { id: 'runtime-security-performance', category: 'security-performance', match: /^(?:public\/.*\.(?:js|html)|[^/]+\.(?:mjs|js)|src\/)/, domains: ['HW-12', 'HW-13'] },
   { id: 'relation', category: 'rules-budget-protocol', match: /(?:^|\/)(?:relation[-.]|relations\.|identity-grounding)/, domains: ['HW-03', 'HW-04', 'HW-05', 'HW-10'] },
+  { id: 'generation', category: 'identity-cancellation-recovery', match: /(?:generation-|m1-evidence|verify-m1-report)/, domains: ['HW-04', 'HW-10', 'HW-15'] },
   { id: 'knowledge', category: 'rules-budget-identity', match: /(?:^|\/)(?:knowledge[-.]|knowledge\/)/, domains: ['HW-03', 'HW-04', 'HW-05', 'HW-06', 'HW-07', 'HW-10'] },
   { id: 'revision-proof', category: 'identity-text-coordinates', match: /(?:revision|NameInterval|name-interval|name-replacement|knowledge-edit|knowledge-name|AxiomAudit|verification\/lean)/, domains: ['HW-06', 'HW-07'] },
   { id: 'audio-session', category: 'protocol-identity-provider', match: /(?:asr|listening|session|interim-translation|caption|translation|translation-queue)/, domains: ['HW-01', 'HW-02', 'HW-03', 'HW-08'] },

@@ -4,7 +4,7 @@ import { sourceVersion } from './verification-evidence.mjs';
 import { digest } from './verification-evidence.mjs';
 import { validateFormalReleaseEvidence } from './formal-release-evidence.mjs';
 import { validateProcessReleaseEvidence } from './process-release-evidence.mjs';
-import { validateGenerationEvidence } from './generation-protocol-report.mjs';
+import { validateGenerationReleaseEvidence } from './generation-release-evidence.mjs';
 import { properties as relation } from '../../verification/relation-protocol/properties.mjs';
 import { properties as knowledge } from '../../verification/knowledge-protocol/properties.mjs';
 import { properties as recovery } from '../../verification/process-crash/properties.mjs';
@@ -14,7 +14,7 @@ const definitions = [
   { id: 'relation', issue: 'KEJ-63', properties: relation, validate: (directory, options) => validateFormalReleaseEvidence('relation-protocol', directory, options) },
   { id: 'knowledge', issue: 'KEJ-64', properties: knowledge, validate: (directory, options) => validateFormalReleaseEvidence('knowledge-protocol', directory, options) },
   { id: 'process', issue: 'KEJ-65', properties: recovery, validate: validateProcessReleaseEvidence },
-  { id: 'generation', issue: 'KEJ-66', properties: generation, validate: validateGenerationEvidence }
+  { id: 'generation', issue: 'KEJ-66', properties: generation, validate: validateGenerationReleaseEvidence }
 ];
 export const m1Coverage = Object.freeze(Array.from({ length: 12 }, (_, i) => {
   const acceptance = `AC-P${String(i + 1).padStart(2, '0')}`;
