@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Preserve unsuccessful candidate-depth measurements; never included as passing fast-profile evidence",
+  "sourceBase": "96fa9303523e4d431aa5447104a92d2084a5b1d9",
+  "workspaceDirty": true,
+  "date": "2026-10-14",
+  "artifacts": [
+    {
+      "file": "depth8-original-incomplete.log",
+      "sha256": "1e29c57cc81e181b63d53b783a39c63cd44a21b41a0a60e7c790eef5ee86b484",
+      "backend": "apalache",
+      "main": "two_current",
+      "maximumDepth": 8,
+      "timeoutMs": 120000,
+      "status": "incomplete",
+      "complete": false,
+      "execution": {
+        "code": null,
+        "signal": "SIGTERM",
+        "timedOut": true,
+        "interrupted": false
+      },
+      "safetyExpression": "Safety = safety",
+      "note": "Development cost probe, not release evidence. Both logs end in CHECK TIMEOUT. The temporary boolean wrapper was discarded; logical conditions and TLC domain were unchanged."
+    },
+    {
+      "file": "depth8-wrapper-incomplete.log",
+      "sha256": "4bb33831e7734beaff2828e4f0599161fc75ab10d142a03caa187ce14e3e7419",
+      "backend": "apalache",
+      "main": "two_current",
+      "maximumDepth": 8,
+      "timeoutMs": 120000,
+      "status": "incomplete",
+      "complete": false,
+      "execution": {
+        "code": null,
+        "signal": "SIGTERM",
+        "timedOut": true,
+        "interrupted": false
+      },
+      "safetyExpression": "Safety = if (safety) true else false",
+      "note": "Development cost probe, not release evidence. Both logs end in CHECK TIMEOUT. The temporary boolean wrapper was discarded; logical conditions and TLC domain were unchanged."
+    }
+  ]
+}
