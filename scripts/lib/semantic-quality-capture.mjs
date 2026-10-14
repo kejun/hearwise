@@ -53,10 +53,6 @@ export async function captureSemanticOffline({ directory, sample, response, sign
     assert.ok(sample.segments.every(text => typeof text === 'string' && text.length > 0 && text.length <= 6000));
     store = new ListeningStore(filename);
     run = store.createRun(null, { source: 'en', targetLang: 'English', audioSource: 'microphone' }, 'Synthetic semantic contract');
-    for (const [index,text] of sample.segments.entries()) {
-      const segment = store.addSegment(run.listeningId, run.runId, { id: `source-${index}`, text }).segment;
-      store.setTranslation(segment.id, text);
-    }
     server = http.createServer(async (request, reply) => {
       try {
         const chunks = []; let length = 0;
@@ -81,6 +77,13 @@ export async function captureSemanticOffline({ directory, sample, response, sign
     const endpoint = `http://127.0.0.1:${server.address().port}`;
     const knowledge = createKnowledgeWorkflow({ store, endpoint, now: () => clock, onError: () => errors.push('KNOWLEDGE_ERROR') });
     let dispatches = 0;
+    const batchSize = sample.ingestionBatchSize ?? sample.segments.length;
+    assert.ok(Number.isInteger(batchSize) && batchSize >= 1 && batchSize <= 6);
+    for (let start = 0; start < sample.segments.length; start += batchSize) {
+      for (let index = start; index < Math.min(start + batchSize, sample.segments.length); index++) {
+        const segment = store.addSegment(run.listeningId, run.runId, { id: `source-${index}`, text: sample.segments[index] }).segment;
+        store.setTranslation(segment.id, sample.segments[index]);
+      }
     while (store.extractionRange(run.listeningId).length) {
       const job = store.createExtractionJob(run.listeningId, store.extractionRange(run.listeningId));
       for (;;) {
@@ -93,7 +96,8 @@ export async function captureSemanticOffline({ directory, sample, response, sign
         if (result.kind === 'terminal') { assert.ok(['ok','empty'].includes(result.outcome)); break; }
       }
     }
-    store.finishRun(run.runId); store.enableRelations(run.listeningId);
+    }
+    store.finishRun(run.runId); store.enableRelations(run.listeningId, { now: clock });
     const relations = createRelationWorkflow({ store, endpoint, now: () => clock, requestTimeoutMs: 5000, onError: () => errors.push('RELATION_ERROR') });
     for (let index = 0; index < 24; index++) {
       combined.throwIfAborted(); clock = Math.max(clock, store.relationProcessing(run.listeningId).nextReadyAt || 0);
@@ -107,7 +111,12 @@ export async function captureSemanticOffline({ directory, sample, response, sign
     visible = { knowledge: store.knowledge(run.listeningId), graph: store.graph(run.listeningId) };
     assert.ok(['empty','complete'].includes(visible.graph.status.state));
     before = semanticDatabase(filename); store.close(); store = new ListeningStore(filename);
-    after = semanticDatabase(filename); assert.equal(contractDigest(before), contractDigest(after));
+    after = semanticDatabase(filename);
+    // Reopening intentionally restores the key-required marker; semantic rows
+    // and every other persisted field must remain unchanged.
+    const expectedAfter = structuredClone(before);
+    for (const row of expectedAfter.tables.listenings) row.relation_waiting_key = row.relation_enabled;
+    assert.deepEqual(after, expectedAfter);
     assert.deepEqual(store.knowledge(run.listeningId), visible.knowledge);
     assert.deepEqual(store.graph(run.listeningId), visible.graph);
     assert.deepEqual(after.integrity, ['ok']); assert.deepEqual(after.foreignKeys, []);
