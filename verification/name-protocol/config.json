@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "specification": "configurations.qnt",
+  "init": "Init",
+  "step": "Step",
+  "invariant": "Safety",
+  "configurations": [
+    {
+      "main": "independent",
+      "mode": "independent",
+      "attempts": 2,
+      "apalacheDepth": 6
+    },
+    {
+      "main": "reuse",
+      "mode": "reuse",
+      "attempts": 2,
+      "apalacheDepth": 6
+    }
+  ],
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "mains": [
+      "independent_witnesses",
+      "reuse_witnesses"
+    ],
+    "seed": "71",
+    "maxSamples": 1,
+    "counts": {
+      "independent_witnesses": 13,
+      "reuse_witnesses": 9
+    },
+    "expectedTestCount": 22
+  },
+  "mutants": [
+    {
+      "main": "mutant_fingerprint",
+      "mode": "reuse",
+      "backend": "apalache",
+      "expectedViolation": "exactReplay",
+      "maxSteps": 6
+    },
+    {
+      "main": "mutant_rollback",
+      "mode": "independent",
+      "backend": "apalache",
+      "expectedViolation": "associatedAtomic",
+      "maxSteps": 3
+    },
+    {
+      "main": "mutant_receipt",
+      "mode": "independent",
+      "backend": "apalache",
+      "expectedViolation": "receiptAtomic",
+      "maxSteps": 3
+    },
+    {
+      "main": "mutant_revision",
+      "mode": "independent",
+      "backend": "apalache",
+      "expectedViolation": "revisionRechecked",
+      "maxSteps": 4
+    },
+    {
+      "main": "mutant_anchor",
+      "mode": "independent",
+      "backend": "apalache",
+      "expectedViolation": "anchorsRechecked",
+      "maxSteps": 4
+    }
+  ],
+  "simulation": {
+    "seed": "2026101471",
+    "samples": 100,
+    "maximumSteps": 20,
+    "selectedTraces": 3
+  },
+  "limits": {
+    "overallMs": 480000,
+    "tlcMs": 60000,
+    "boundedMs": 120000,
+    "simulationMs": 30000,
+    "witnessMs": 30000,
+    "mutationMs": 120000
+  },
+  "toolchainSource": "verification/relation-protocol/toolchain.json",
+  "costStatus": "Depth6 frozen after complete candidate probes: independent 74.897s and reuse 65.438s, both under the predeclared 120s stage budget. Complete TLC domains unchanged. Failed/corrected prototype and negative-export limitations remain documented in docs/name-protocol-cost-probes/manifest.json.",
+  "scope": {
+    "attempts": 2,
+    "operationIds": 2,
+    "names": [
+      "Deebo",
+      "Tibo",
+      "Mira"
+    ],
+    "rawNameVariants": "Surrounding spaces are distinct fingerprint input with equal trimmed target.",
+    "backgroundChanges": 1,
+    "modes": {
+      "independent": "Each attempt uses its own ID and a new/current name.",
+      "reuse": "Second attempt explicitly reuses first ID with exact body, padded raw name or changed revision."
+    },
+    "transaction": "One atomic SQLite action; associated failure is inactive for no-op; receipt failure applies to every new operation; replay returns before either fault point.",
+    "liveness": "Safety plus reachable witnesses only; no fairness assumptions or eventual-delivery claim.",
+    "exclusions": [
+      "Unbounded attempts",
+      "Hash collision freedom",
+      "Power loss/process kill recovery",
+      "Paid provider behavior",
+      "Legacy revision/override combinations covered by KEJ-69/70",
+      "Browser acceptance from model-only results"
+    ]
+  }
+}
