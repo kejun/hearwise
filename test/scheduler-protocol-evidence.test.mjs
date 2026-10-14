@@ -193,7 +193,8 @@ test('regressions execute at the repository root while formal commands stay isol
 });
 
 test('CI regression and diagnostic evidence remain valid from a different checkout root', () => {
-  const repositoryRoot = '/home/runner/work/hearwise/hearwise';
+  const repositoryRoot = `${schedulerRepositoryRoot}-different-checkout`;
+  assert.notEqual(repositoryRoot, schedulerRepositoryRoot, 'The foreign-checkout fixture must actually differ on CI too');
   const entry = { id: 'implementation-regressions', kind: 'implementation-regression' };
   const argv = ['--test', '--test-reporter=tap', '--test-timeout=30000', ...schedulerRegressionFiles.map(file => path.join(repositoryRoot, file))];
   assert.equal(schedulerCommandBound(entry, argv, {}, 'fast', repositoryRoot, repositoryRoot), true);
@@ -208,7 +209,8 @@ test('CI regression and diagnostic evidence remain valid from a different checko
 });
 
 test('formal command paths bind the recorded checkout and retain isolated working directories', async () => {
-  const repositoryRoot = '/home/runner/work/hearwise/hearwise', cwd = '/tmp/evidence/run-one/work/typecheck-translation';
+  const repositoryRoot = `${schedulerRepositoryRoot}-different-checkout`, cwd = '/tmp/evidence/run-one/work/typecheck-translation';
+  assert.notEqual(repositoryRoot, schedulerRepositoryRoot, 'The foreign-checkout fixture must actually differ on CI too');
   const entry = { id: 'typecheck-translation', kind: 'typecheck', specification: 'translation.qnt' };
   const argv = [path.join(repositoryRoot, 'node_modules/@informalsystems/quint/dist/src/cli.js'), 'typecheck', path.join(repositoryRoot, 'verification/scheduler-protocol/translation.qnt')];
   assert.equal(schedulerCommandBound(entry, argv, {}, 'fast', cwd, repositoryRoot), true);
