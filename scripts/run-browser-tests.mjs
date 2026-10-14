@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runProcess } from './lib/process.mjs';
 
-const checks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'edit-consistency', 'import-protocol', 'trace-business', 'security'];
+const checks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'edit-consistency', 'import-protocol', 'import-atomicity', 'trace-business', 'security'];
 const selected = process.argv.slice(2);
 if (selected.some(name => !checks.includes(name))) throw new Error(`Unknown browser check; choose ${checks.join(', ')}`);
 const directory = process.env.BROWSER_EVIDENCE_DIR || 'browser-evidence';

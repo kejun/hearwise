@@ -26,7 +26,7 @@ export function databaseSnapshot(filename) {
   } finally { db.close(); }
 }
 
-export async function importProtocolFixture({ tokens = 1, serverFile = 'server.mjs', unfinished = false, mutation = 'none' } = {}) {
+export async function importProtocolFixture({ tokens = 1, serverFile = 'server.mjs', unfinished = false, mutation = 'none', preloads = [], rich = false } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-import-protocol-'));
   let provider, ws, server, closed = false;
   async function close() {
@@ -56,11 +56,14 @@ export async function importProtocolFixture({ tokens = 1, serverFile = 'server.m
     }
     const seeds = [], backups = [], calls = [], lifecycle = [], clockEvents = [];
     const seedStore = new ListeningStore(filename);
-    try { seeds[0] = seedNameReplacement(seedStore); } finally { seedStore.close(); }
+    try { seeds[0] = seedNameReplacement(seedStore, { graph: rich });
+      if (rich) seedStore.db.prepare('UPDATE listenings SET title=?, notes=?').run('本地历史：保留标题', '本地备注与图谱。');
+    } finally { seedStore.close(); }
     for (let token = 0; token < tokens; token++) {
       const source = new ListeningStore(path.join(directory, `source-${token}.sqlite`));
       try {
-        seeds[token + 1] = seedNameReplacement(source, { graph: unfinished });
+        seeds[token + 1] = seedNameReplacement(source, { graph: unfinished || rich });
+        if (rich) source.db.prepare('UPDATE listenings SET title=?, notes=?').run('导入历史：原译文', '完整备注与任务状态。');
         if (unfinished) {
           const seeded = seeds[token + 1];
           const revision = source.knowledgeEditSnapshot(seeded.listeningId, seeded.item.id).revision;
@@ -93,7 +96,7 @@ export async function importProtocolFixture({ tokens = 1, serverFile = 'server.m
     async function start() {
       await rm(path.join(controlDirectory, 'command.json'), { force: true });
       await rm(path.join(controlDirectory, 'ack.json'), { force: true });
-      server = await startServer({ args: ['--import', path.resolve('test-support/import-protocol-control.mjs'), serverFile],
+      server = await startServer({ args: ['--import', path.resolve('test-support/import-protocol-control.mjs'), ...preloads.flatMap(file => ['--import', path.resolve(file)]), serverFile],
         env: { LISTENING_DB: filename, HEARWISE_IMPORT_TEST_CONTROL: controlDirectory,
           ASR_ENDPOINT: `ws://${endpoint}`, MT_ENDPOINT: `http://${endpoint}`, TTS_ENDPOINT: `ws://${endpoint}`,
           FISH_TTS_ENDPOINT: `http://${endpoint}/tts`, EXTRACTION_WAIT_MS: '0' } });
@@ -140,11 +143,12 @@ export async function importProtocolFixture({ tokens = 1, serverFile = 'server.m
         finally { db.close(); }
       }
     }
-    async function restart() {
+    async function restart({ afterCrash = async () => {} } = {}) {
       const child = server.child, exited = once(child, 'exit');
       child.kill('SIGKILL');
       const [code, signal] = await deadline(() => exited, 3000, 'import server crash');
       assert.equal(signal, 'SIGKILL'); lifecycle.push({ action: 'crash', pid: child.pid, code, signal });
+      await afterCrash();
       await start();
     }
     await start();
