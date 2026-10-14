@@ -4,7 +4,7 @@ const primaryCases = ['append', 'replace'].flatMap(mode => ['stale-review', 'exp
 export const importBrowserCases = [...primaryCases, { mode: 'append', name: 'stale-refresh-expiry' }];
 const requiredSources = ['server.mjs', 'storage.mjs', 'data-transfer.mjs', 'public/app.js', 'package-lock.json',
   'scripts/verify-import-protocol-browser.mjs', 'test-support/import-protocol-browser-evidence.mjs',
-  'test-support/import-protocol-fixture.mjs', 'test-support/import-protocol-control.mjs'];
+  'test-support/import-protocol-fixture.mjs', 'test-support/import-protocol-control.mjs', 'test-support/import-protocol-browser-observer.mjs'];
 const validStamp = stamp => /^[a-f0-9]{40}$/.test(stamp?.sha) && typeof stamp?.dirty === 'boolean' &&
   requiredSources.every(file => /^[a-f0-9]{64}$/.test(stamp?.digests?.[file])) &&
   Object.values(stamp.digests).every(value => /^[a-f0-9]{64}$/.test(value));

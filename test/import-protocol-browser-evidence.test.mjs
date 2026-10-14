@@ -6,7 +6,7 @@ function evidence() {
   const source = { sha: 'a'.repeat(40), dirty: false, digests: Object.fromEntries([
     'server.mjs', 'storage.mjs', 'data-transfer.mjs', 'public/app.js', 'package-lock.json',
     'scripts/verify-import-protocol-browser.mjs', 'test-support/import-protocol-browser-evidence.mjs',
-    'test-support/import-protocol-fixture.mjs', 'test-support/import-protocol-control.mjs'
+    'test-support/import-protocol-fixture.mjs', 'test-support/import-protocol-control.mjs', 'test-support/import-protocol-browser-observer.mjs'
   ].map(file => [file, 'b'.repeat(64)])) };
   const work = { translations: [{ translation_state: 'failed' }],
     extraction: [{ state: 'failed', last_error: 'IMPORT_REQUIRES_RESUME' }],
@@ -93,4 +93,27 @@ test('a late page error fails browser coverage without revoking stopped-work cov
   const summary = summarizeImportBrowserEvidence(observations);
   assert.equal(result(summary, 'HW-09-04').status, 'passed');
   assert.equal(result(summary, 'HW-09-05').status, 'failed'); assert.equal(summary.ok, false);
+});
+
+
+test('browser fetch observer never gates, substitutes or consumes the actual application response', async () => {
+  const { observeImportFetch } = await import('../test-support/import-protocol-browser-observer.mjs');
+  const { runInNewContext } = await import('node:vm');
+  const clone = Promise.withResolvers(), entered = Promise.withResolvers();
+  const original = { status: 200, clone() { return { json() { entered.resolve(); return clone.promise; } }; } };
+  const calls = [], window = { fetch: async function (...args) { calls.push({ receiver: this, args }); return original; } };
+  const context = { window, location: { href: 'http://fixture/' }, URL, Request };
+  runInNewContext(`(${observeImportFetch.toString()})()`, context);
+  const options = { method: 'POST', body: 'unchanged upload body' };
+  const returned = await window.fetch('/api/data/import/validate?mode=append', options);
+  assert.equal(returned, original); assert.equal(calls[0].receiver, window);
+  assert.deepEqual(calls[0].args, ['/api/data/import/validate?mode=append', options]);
+  await entered.promise;
+  assert.equal(window.__importProtocolResponses[0].done, false, 'application receives its Response before observation completes');
+  clone.resolve({ token: 'synthetic', mode: 'append' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(window.__importProtocolResponses[0].done, true);
+  assert.equal(window.__importProtocolResponses[0].body.token, 'synthetic');
+  assert.equal(await window.fetch('/api/listenings'), original);
+  assert.equal(window.__importProtocolResponses.length, 1, 'other endpoints are not cloned');
 });
