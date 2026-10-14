@@ -1,0 +1,130 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { validateNodeEvidence, validateBrowserEvidence, validateNestedBrowserEvidence } from '../scripts/lib/runner-report-evidence.mjs';
+import { browserChecks, browserScreenshots, findNodeTests, sourceSnapshot, executionEnvironment, evidenceFiles, hashEvidenceFiles } from '../scripts/lib/runner-evidence-contract.mjs';
+import { digest, metadata } from '../scripts/lib/verification-evidence.mjs';
+import { tapSummary } from '../scripts/lib/tap-summary.mjs';
+import { sessionProfile } from '../verification/session-properties.mjs';
+import { relationResultProfile } from '../verification/relation-result-properties.mjs';
+import { summarizeSessionResults } from '../test-support/session-evidence.mjs';
+import { summarizeRelationResults, writeRelationResultEvidence } from '../test-support/relation-result-evidence.mjs';
+import { resultScenarios } from '../test-support/relation-result-fixture.mjs';
+
+// Synthetic report shapes exercise this offline reader only, never claim a browser
+// ran or that copied TAP rows provide real production implementation evidence.
+const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
+const tap = count => 'TAP version 13\n' + Array.from({ length: count }, (_, i) => `ok ${i + 1} - synthetic contract row\n`).join('') +
+  `1..${count}\n# tests ${count}\n# suites 0\n# pass ${count}\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1\n`;
+const execution = log => ({ code: 0, signal: null, timedOut: false, interrupted: false, ok: true, durationMs: 1, tail: log.slice(-12000) });
+const json = (file, value) => writeFile(file, JSON.stringify(value));
+async function temporary(t) { const directory = await mkdtemp(path.join(os.tmpdir(), 'release-runner-contract-')); t.after(() => rm(directory, { recursive: true, force: true })); return directory; }
+async function aggregate(rows) {
+  const snapshot = await sourceSnapshot();
+  return { schemaVersion: 2, ...snapshot.source, sourceStart: snapshot, sourceEnd: snapshot, ...executionEnvironment(), complete: true, ok: true, results: rows };
+}
+async function nodeFixture(directory) {
+  const files = await findNodeTests(), log = tap(1), rows = [];
+  for (const file of files) {
+    const name = file.replaceAll(/[\\/]/g, '_') + '.log'; await writeFile(path.join(directory, name), log);
+    rows.push({ file, log: `/different-ci-root/test-evidence/${name}`, argv: ['--test', '--test-reporter=tap', '--test-timeout=30000', file], logSha256: digest(log), ...execution(log) });
+  }
+  const report = { ...await aggregate(rows), selected: files.length, passed: files.length };
+  await json(path.join(directory, 'results.json'), report); return report;
+}
+function browserObservations(kind) {
+  if (kind === 'relation-result') return { complete: true, chromium: 'synthetic-contract', widths: [1280, 390].map(width => ({ width, errors: [], results: resultScenarios.map(s =>
+    ({ scenario: s.name, state: s.state, nodes: s.nodes, edges: s.edges, providerRequests: s.requests, supports: [] })) })) };
+  return { complete: true, chromium: 'synthetic-contract', widths: [1280, 390].map(width => ({ width, permissionRejected: true, keyboardRecovery: true,
+    stopTail: true, duplicateFinalIdentity: true, conflictingFinalPreserved: true, oldSocketIgnored: true, microphoneReleased: true, reconnectRuns: 2,
+    first: { segments: ['Rain 😀.', 'Stop tail 😀.', 'Reconnected run.'].map((original_text, i) => ({ original_text, run_id: i === 2 ? 'next-run' : 'first-run' })), runs: [{ state: 'complete' }, { state: 'interrupted' }] },
+    next: { segments: ['New listening.', 'Stop tail 😀.'].map(original_text => ({ original_text })) } })),
+  sourceVersion: { before: 'old-version', after: 'new-version', oldRequest: 'old source', newRequest: 'new source',
+    persisted: { original_text: 'new source', translation_text: '新版本有效译文 😀', translation_state: 'complete' }, visibleText: true } };
+}
+async function nestedFixture(kind, directory) {
+  await mkdir(directory, { recursive: true });
+  const browser = browserObservations(kind), counts = kind === 'session' ? { 'identity-and-source': 6, 'caption-frontier': 53 } : { 'source-integrity': 100, 'http-results': 1 };
+  const checks = [];
+  for (const [name, count] of [...Object.entries(counts), ['browser', null]]) {
+    const log = count ? tap(count) : 'synthetic browser contract\n'; await writeFile(path.join(directory, `${name}.log`), log);
+    checks.push({ name, execution: { ...execution(log), ...(count ? tapSummary(log) : {}) } });
+  }
+  await json(path.join(directory, 'browser.json'), browser);
+  for (const file of browserScreenshots[kind]) await writeFile(path.join(directory, file), png);
+  const observations = { browser, checks };
+  let artifacts;
+  if (kind === 'relation-result') artifacts = await writeRelationResultEvidence(directory, observations);
+  else {
+    await json(path.join(directory, 'observations.json'), observations);
+    await writeFile(path.join(directory, 'worker.log'), (await Promise.all(checks.map(async ({ name }) => `CHECK ${name}\n${await readFile(path.join(directory, `${name}.log`), 'utf8')}`))).join('\n'));
+    artifacts = await hashEvidenceFiles(directory, ['observations.json', 'worker.log']);
+  }
+  const context = await metadata(), required = kind === 'session' ? sessionProfile : relationResultProfile, time = new Date().toISOString();
+  const results = required.map(id => ({ ...context, property: { id, version: 1 }, status: 'passed', complete: true, startedAt: time, finishedAt: time,
+    scope: { description: 'Synthetic contract fixture only', scenario: 'unit-test', samples: 1, seed: null }, artifacts }));
+  const summarize = kind === 'session' ? summarizeSessionResults : summarizeRelationResults;
+  const summary = summarize({ results, target: context.source, checks, required, nodeOnly: false, sourceStable: true, release: false, artifactsValid: results.map(() => true) });
+  await json(path.join(directory, 'report.json'), { ...context, profile: kind, complete: true, ok: true, results, ...summary });
+  return observations;
+}
+async function browserFixture(directory) {
+  const run = 'run-contract'; await mkdir(path.join(directory, run));
+  const rows = [];
+  for (const name of browserChecks) {
+    const log = `synthetic ${name} contract\n`; await writeFile(path.join(directory, run, `${name}.log`), log);
+    rows.push({ name, log: `/different-ci-root/browser-evidence/${run}/${name}.log`, argv: [`scripts/verify-${name}-browser.mjs`], ...execution(log) });
+    if (['session', 'relation-result'].includes(name)) { await nestedFixture(name, path.join(directory, run, `${name}-contract`)); continue; }
+    const assets = name === 'speech' ? directory : path.join(directory, run, name); await mkdir(assets, { recursive: true });
+    for (const file of browserScreenshots[name]) await writeFile(path.join(assets, file), png);
+  }
+  const report = { ...await aggregate(rows), evidenceDirectory: `/different-ci-root/browser-evidence/${run}`, artifacts: await hashEvidenceFiles(directory, await evidenceFiles(directory)) };
+  await json(path.join(directory, 'results.json'), report); return report;
+}
+
+test('Node release reader requires every current test file and full raw logs, not a selected green summary', async t => {
+  const directory = await temporary(t), baseline = await nodeFixture(directory);
+  assert.equal((await validateNodeEvidence(directory, { release: false })).ok, true);
+  for (const mutate of [r => { r.results.pop(); }, r => { r.results[1] = r.results[0]; }, r => { r.results[0].argv = ['test/unrelated.test.mjs']; },
+    r => { r.results[0].timedOut = true; }, r => { r.results[0].signal = 'SIGTERM'; }, r => { r.tools.sqlite = 'wrong-tool'; },
+    r => { r.sourceEnd.digests['public/app.js'] = '0'.repeat(64); }, r => { r.sha = '0'.repeat(40); }]) {
+    const changed = structuredClone(baseline); mutate(changed); await json(path.join(directory, 'results.json'), changed);
+    assert.equal((await validateNodeEvidence(directory, { release: false })).ok, false);
+  }
+  const row = baseline.results[0], name = path.basename(row.log);
+  for (const log of [tap(1).replace('# pass 1', '# pass 0').replace('# skipped 0', '# skipped 1'), 'no final TAP footer\n']) {
+    const changed = structuredClone(baseline); changed.results[0].logSha256 = digest(log); changed.results[0].tail = log;
+    await writeFile(path.join(directory, name), log); await json(path.join(directory, 'results.json'), changed);
+    assert.equal((await validateNodeEvidence(directory, { release: false })).ok, false);
+  }
+});
+test('browser aggregate binds all twelve suites, screenshots, child log tails and nested complete reports', async t => {
+  const directory = await temporary(t), baseline = await browserFixture(directory);
+  const good = await validateBrowserEvidence(directory, { release: false }); assert.equal(good.ok, true, JSON.stringify(good));
+  for (const mutate of [r => { r.results.pop(); }, r => { r.results[0].argv = ['scripts/unrelated.mjs']; }, r => { r.results[0].tail = 'wrong log'; },
+    r => { r.artifacts = r.artifacts.filter(a => !a.path.endsWith('session-contract/browser.json')); }, r => { r.artifacts[0].sha256 = '0'.repeat(64); },
+    r => { r.results[0].timedOut = true; }, r => { r.sourceStart.digests['dist/server/index.js'] = '0'.repeat(64); }]) {
+    const changed = structuredClone(baseline); mutate(changed); await json(path.join(directory, 'results.json'), changed);
+    assert.equal((await validateBrowserEvidence(directory, { release: false })).ok, false);
+  }
+  await json(path.join(directory, 'results.json'), baseline);
+  await rm(path.join(directory, 'speech.png'));
+  assert.equal((await validateBrowserEvidence(directory, { release: false })).ok, false);
+});
+test('nested profiles reject cached-green reports with rehashed missing TAP or contradictory browser observations', async t => {
+  for (const kind of ['session', 'relation-result']) {
+    const directory = path.join(await temporary(t), kind), baseline = await nestedFixture(kind, directory);
+    assert.equal((await validateNestedBrowserEvidence(kind, directory, { release: false })).ok, true);
+    const first = baseline.checks[0].name; await writeFile(path.join(directory, `${first}.log`), tap(1));
+    assert.equal((await validateNestedBrowserEvidence(kind, directory, { release: false })).ok, false);
+    await nestedFixture(kind, directory);
+    const value = structuredClone(baseline); value.browser.widths[0][kind === 'session' ? 'microphoneReleased' : 'errors'] = kind === 'session' ? false : ['page error'];
+    await json(path.join(directory, 'browser.json'), value.browser); await json(path.join(directory, 'observations.json'), value);
+    const report = JSON.parse(await readFile(path.join(directory, 'report.json')));
+    for (const row of report.results) row.artifacts = await hashEvidenceFiles(directory, ['observations.json', 'worker.log']);
+    await json(path.join(directory, 'report.json'), report);
+    assert.equal((await validateNestedBrowserEvidence(kind, directory, { release: false })).ok, false);
+  }
+});

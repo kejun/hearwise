@@ -24,7 +24,7 @@ await Promise.all(Array.from({ length: Math.min(4, files.length) }, async () => 
     const file = files[next++], log = path.join(directory, file.replaceAll(/[\\/]/g, '_') + '.log');
     console.log(`START ${file}`);
     const result = await runProcess(process.execPath, ['--test', '--test-reporter=tap', '--test-timeout=30000', file], { env: childEnv, logFile: log, timeoutMs: 90000 });
-    results.push({ file, log, logSha256: digest(await readFile(log)), ...result });
+    results.push({ file, log, argv: ['--test', '--test-reporter=tap', '--test-timeout=30000', file], logSha256: digest(await readFile(log)), ...result });
     console.log(`${result.ok ? 'PASS' : 'FAIL'} ${file} (${result.durationMs}ms)${result.timedOut ? ' — file watchdog expired' : ''}`);
     if (!result.ok) console.error(result.tail);
     await writeFile(path.join(directory, 'results.json'), JSON.stringify({ schemaVersion: 2, sha, dirty, sourceStart, ...metadata, complete: false, ok: false, results }, null, 2));
