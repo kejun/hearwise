@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
-import { once } from 'node:events';
+import { once, EventEmitter } from 'node:events';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,9 @@ import { speechFixture } from '../test-support/speech-fixture.mjs';
 import { traceEvents, until } from '../test-support/full-trace-fixture.mjs';
 import { traceReport } from '../test-support/trace-business-fixture.mjs';
 import { deadline } from '../test-support/lifecycle.mjs';
+import { ListeningStore } from '../storage.mjs';
+import { createSpeechService } from '../speech-service.mjs';
+import { createTaskRuntime } from '../dist/server/index.js';
 
 async function fixture(t, source) {
   const directory = await mkdtemp(path.join(tmpdir(), 'trace-notification-'));
@@ -73,4 +76,40 @@ console.info = (...args) => { if (args[0] === 'speech_event') {
   await until(() => traceEvents(f.logs()).some(event => event.step_key === 'speech.session' && event.state === 'succeeded'));
   const report = traceReport(f.logs());
   assert.ok(report.spans.filter(span => span.step === 'speech.unit' || span.step === 'speech.session').every(span => span.state === 'succeeded'));
+});
+
+test('speech disposal notification cannot retain the pending translation head or an open client', { timeout: 5000 }, async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'trace-dispose-'));
+  let store, runtime, client;
+  t.after(async () => {
+    try { client?.close(); await deadline(() => runtime?.dispose(), 2000, 'Dispose callback runtime cleanup'); }
+    finally { store?.close(); await rm(directory, { recursive: true, force: true }); }
+  });
+  // Existing service transport interface, as in speech.test.mjs; this case does
+  // not pretend to exercise a real network connection.
+  class Client extends EventEmitter {
+    readyState = 1; bufferedAmount = 0; events = [];
+    send(data) { if (!Buffer.isBuffer(data)) this.events.push(JSON.parse(data)); }
+    message(data) { this.emit('message', Buffer.from(JSON.stringify(data)), false); }
+    close() { this.readyState = 3; this.emit('close'); }
+  }
+  store = new ListeningStore(path.join(directory, 'business.sqlite')); runtime = createTaskRuntime();
+  const run = store.createRun(null, { source: 'en', targetLang: 'Chinese', audioSource: 'tab' }, 'Synthetic disposal notification');
+  const heads = new Map(); let closes = 0, calls = 0, notifications = 0;
+  const service = createSpeechService({ store, taskRuntime: runtime,
+    setHead: (owner, id) => id ? heads.set(owner, id) : heads.delete(owner),
+    onDispose: () => { notifications++; throw new Error('Synthetic disposal notification'); },
+    createTts: () => ({ synthesize: async () => { calls++; }, close: () => { closes++; } }) });
+  client = new Client(); service.accept(client);
+  client.message({ type: 'speech.start', epoch: 41, ...run, config: { key: 'test-only', region: 'beijing', voice: 'Cherry', rate: 1 } });
+  const segment = store.addSegment(run.listeningId, run.runId, { id: 'pending', text: 'Pending translation.' }).segment;
+  service.notify(run.listeningId); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([...heads.values()], [segment.id]); assert.equal(service.hasConsumers(run.listeningId), true);
+  const before = store.detail(run.listeningId);
+  assert.doesNotThrow(() => client.message({ type: 'speech.stop', epoch: 41 }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(heads.size, 0); assert.equal(client.readyState, 3); assert.equal(service.hasConsumers(run.listeningId), false);
+  assert.equal(runtime.activeCount, 0); assert.equal(closes, 1); assert.equal(notifications, 1); assert.equal(calls, 0);
+  assert.deepEqual(store.detail(run.listeningId), before);
+  assert.equal(traceReport(runtime.diagnostics()).spans.find(span => span.step === 'speech.session').state, 'cancelled');
 });
