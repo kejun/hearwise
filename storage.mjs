@@ -385,10 +385,14 @@ export class ListeningStore {
     }
     return job;
   }
-  markJob(id, state, error = null, retryAt = null) {
+  markJob(id, state, error = null, retryAt = null, guard = null) {
     return this.tx(() => {
       let outcome;
       const checkpoint = this.knowledgeCheckpoint(id);
+      // A deferred scheduler write may belong to an obsolete attempt/cycle.
+      // Fence and write inside the same transaction, including another connection.
+      if (guard && (!checkpoint || !['pending', 'running'].includes(checkpoint.job.state) ||
+        checkpoint.job.attempts !== guard.attempt || (guard.cycle != null && checkpoint.progress?.cycle !== guard.cycle))) return null;
       if (checkpoint?.job.prompt_version === 2 && state === 'failed' && checkpoint.job.outcome !== 'legacy') {
         const accepted = checkpoint.parts.some(part => part.results.length);
         state = accepted ? 'complete' : 'failed';

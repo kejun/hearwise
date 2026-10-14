@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 1,
+  "specification": "configurations.qnt",
+  "init": "Init",
+  "step": "Step",
+  "invariant": "Safety",
+  "modelSpecifications": [
+    "protocol.qnt",
+    "relation-protocol.qnt",
+    "knowledge-protocol.qnt",
+    "configurations.qnt",
+    "witnesses.qnt"
+  ],
+  "maxCrashes": 1,
+  "single": {
+    "main": "relation_single",
+    "protocol": "relation",
+    "actors": 1,
+    "capacity": 1,
+    "modes": [
+      "valid",
+      "no_candidates",
+      "reserve_fail"
+    ],
+    "responseChoice": "Every legal relation response and one-shot storage/notification fault is free."
+  },
+  "multiple": {
+    "mains": [
+      {
+        "main": "relation_multi_cap1",
+        "protocol": "relation",
+        "actors": 3,
+        "capacity": 1
+      },
+      {
+        "main": "relation_multi_cap2",
+        "protocol": "relation",
+        "actors": 3,
+        "capacity": 2
+      },
+      {
+        "main": "knowledge_single",
+        "protocol": "knowledge",
+        "parts": 1
+      },
+      {
+        "main": "knowledge_two_parts",
+        "protocol": "knowledge",
+        "parts": 2
+      }
+    ],
+    "scope": "Global whole-process crash affects every actor. Relation multi-actor uses fixed scripts by cumulative attempt; knowledge one/two parts keep free responses/errors and fault choices. No original KEJ-63/64 domain is substituted or reduced."
+  },
+  "relation": {
+    "actors": [
+      {
+        "actor": 0,
+        "session": 0,
+        "window": 0
+      },
+      {
+        "actor": 1,
+        "session": 1,
+        "window": 0
+      },
+      {
+        "actor": 2,
+        "session": 0,
+        "window": 1
+      }
+    ],
+    "responses": [
+      "ok",
+      "empty",
+      "filtered",
+      "protocol",
+      "transient",
+      "auth",
+      "rate_limit",
+      "rate_limit_long",
+      "unexpected"
+    ],
+    "maxRequests": 3,
+    "protocolRetryCondition": "cumulativeWindowRequests < 2",
+    "responseScripts": {
+      "0": "attempt 1 protocol, later attempts ok",
+      "1": "attempt 1 transient, later attempts empty",
+      "2": "filtered"
+    },
+    "commitBarrier": "If any actor is committed, the whole JavaScript worker is synchronously blocked; only that actor notify/notify_fail or global crash is legal."
+  },
+  "knowledge": {
+    "responses": {
+      "extract": [
+        "ok",
+        "empty",
+        "partial",
+        "rejected",
+        "unrepairable",
+        "protocol",
+        "transient",
+        "auth",
+        "rate_limit",
+        "rate_limit_long",
+        "unexpected"
+      ],
+      "repair": [
+        "ok",
+        "empty",
+        "protocol",
+        "transient",
+        "auth",
+        "rate_limit",
+        "rate_limit_long",
+        "unexpected"
+      ]
+    },
+    "slots": {
+      "ok": [
+        0
+      ],
+      "partial": {
+        "accepted": [
+          0
+        ],
+        "unresolved": [
+          1
+        ],
+        "anchored": [
+          1
+        ]
+      },
+      "rejected": {
+        "accepted": [],
+        "unresolved": [
+          0
+        ],
+        "anchored": [
+          0
+        ]
+      },
+      "unrepairable": {
+        "accepted": [],
+        "unresolved": [
+          0
+        ],
+        "anchored": []
+      },
+      "repairOk": "Accept exactly the currently anchored unresolved sourceIndex slots."
+    },
+    "maxExtraRequests": 2,
+    "maxProtocolRetries": 1,
+    "maxRepairReservationsPerPart": 1,
+    "automaticCycle": 1,
+    "partExecution": "Sequential; send/response/commit require the actual inflight part."
+  },
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "mains": [
+      "relation_single_witnesses",
+      "relation_multi_cap1_witnesses",
+      "relation_multi_cap2_witnesses",
+      "knowledge_single_witnesses",
+      "knowledge_two_parts_witnesses"
+    ],
+    "seed": "42",
+    "maxSamples": 1,
+    "expectedTestCount": 29,
+    "outputPattern": "{main}-{test}-{seq}.itf.json",
+    "counts": {
+      "relation_single_witnesses": 8,
+      "relation_multi_cap1_witnesses": 1,
+      "relation_multi_cap2_witnesses": 2,
+      "knowledge_single_witnesses": 14,
+      "knowledge_two_parts_witnesses": 4
+    }
+  },
+  "mutants": [
+    {
+      "main": "mutant_relation_reset_on_recovery",
+      "expectedViolation": "durableReservationHistory",
+      "maxSteps": 3
+    },
+    {
+      "main": "mutant_knowledge_reset_on_recovery",
+      "expectedViolation": "durableReservationHistory",
+      "maxSteps": 3
+    },
+    {
+      "main": "mutant_knowledge_reapply_committed",
+      "expectedViolation": "sourceIndexExactlyOnce",
+      "maxSteps": 6
+    }
+  ],
+  "traceContract": {
+    "commonProjectionFields": [
+      "processState",
+      "generation"
+    ],
+    "relation": {
+      "variables": [
+        "lastAction",
+        "actor",
+        "response",
+        "mode",
+        "phase",
+        "counts",
+        "calls",
+        "relations",
+        "outcome",
+        "replies",
+        "ready",
+        "processState",
+        "generation",
+        "reserved_ever"
+      ],
+      "projectionFields": [
+        "processState",
+        "generation",
+        "phase",
+        "counts",
+        "calls",
+        "relations",
+        "outcome",
+        "replies",
+        "ready"
+      ],
+      "ghostVariables": [
+        "reserved_ever"
+      ]
+    },
+    "knowledge": {
+      "variables": [
+        "lastAction",
+        "actor",
+        "response",
+        "stage",
+        "outcome",
+        "ready",
+        "extra_requests",
+        "protocol_retries",
+        "cycle",
+        "phase",
+        "initial_requests",
+        "repair_reserved",
+        "extract_calls",
+        "repair_calls",
+        "initial_complete",
+        "retry_kind",
+        "accepted",
+        "unresolved",
+        "anchored",
+        "replies",
+        "accepted_ever",
+        "apply_counts",
+        "processState",
+        "generation",
+        "initial_ever",
+        "repair_ever",
+        "protocol_ever"
+      ],
+      "projectionFields": [
+        "processState",
+        "generation",
+        "stage",
+        "outcome",
+        "ready",
+        "extra_requests",
+        "protocol_retries",
+        "cycle",
+        "phase",
+        "initial_requests",
+        "repair_reserved",
+        "extract_calls",
+        "repair_calls",
+        "initial_complete",
+        "retry_kind",
+        "accepted",
+        "unresolved",
+        "anchored",
+        "replies"
+      ],
+      "ghostVariables": [
+        "accepted_ever",
+        "apply_counts",
+        "initial_ever",
+        "repair_ever",
+        "protocol_ever"
+      ]
+    },
+    "normalization": "Strip module namespaces through the last ::; reject duplicate normalized names; decode ITF #bigint/#map/#set without reordering actions.",
+    "crash": "Global action, actor=-1. Allowed only at reserved/inflight/received/committed boundary and generation < 1. processState=down; knowledge stage=down. Durable values and external calls remain. Relation observational phases and volatile replies retain the last observed snapshot until recovery.",
+    "recover": "actor=-1. Launch a fresh worker/PID over the same SQLite path; processState=up, generation+1, all replies=none. Never construct a store in the observer: read SQLite read-only.",
+    "relationRecovery": "reserved/inflight/received become idle if counts<3, otherwise done/failed. committed becomes done, retaining result/outcome. Existing retry_wait remains and must advance_time. No persisted request or journal count resets.",
+    "knowledgeRecovery": "extract_inflight becomes extract_pending; repair_inflight becomes done with retained repair_reserved, accepted/unresolved and real REPAIR_INTERRUPTED diagnostic. Other phases, initial_requests, extra/protocol budgets, retry_kind, last_request_at and accepted state remain. stage=idle/outcome=none/ready=false in this fixed-clock active-boundary scope.",
+    "commit": "Real SQLite transaction returns. A synchronous bounded test-only file handshake pauses before the first result callback, without production await; stage/phase committed is observable but no notification or settlement has run.",
+    "notify": "notify or notify_fail resumes the synchronous continuation. Knowledge then settles pending/terminal job state; relation terminal commit result already exists. Notifications are not an outbox.",
+    "settle": "Knowledge actor=-1; after recovery, all parts already done and deadline reached. Scheduler completes without provider call.",
+    "settle_exhausted": "Knowledge actor=p; after recovery, initial_requests>0 and extra_requests>=2 or exhausted protocol retry. Mark part done, no provider call, then settle/continue.",
+    "ready": "Knowledge false only at idle waiting for persisted interval/retry/cooldown; recovery does not bypass last_request_at+2000, even when all parts are done. Relation false for retry_wait only.",
+    "faults": "reserve_fail/commit_fail are one-shot storage failures followed by writable failure-state persistence; notify_fail is a caught callback exception. Persistent SQLITE_BUSY/full disk is outside the finite state model and must be reported honestly by real implementation tests.",
+    "clockDomain": "Time is fixed during provider calls, response delivery, commit, notifications and crash/recovery. Only advance_time advances to the actual persisted dispatch deadline. No slow-response immediate-continuation claim.",
+    "externalCalls": "Count actual HTTP requests at a parent provider server that survives worker SIGKILL. Dead worker responses are discarded; recovery may spend a new durable budget slot. No supplier exactly-once claim.",
+    "terminal": "No new crash/recover transition is offered for an already terminal process; terminal stutter preserves projections."
+  },
+  "profiles": {
+    "fast": {
+      "default": true,
+      "apalacheDepth": {
+        "relation_single": 8,
+        "relation_multi_cap1": 6,
+        "relation_multi_cap2": 6,
+        "knowledge_single": 8,
+        "knowledge_two_parts": 8
+      },
+      "tlc": "All five full declared finite domains must complete enumeration with zero queued states.",
+      "claim": "Only listed bounded depths; does not replace existing relation/knowledge verification."
+    },
+    "deep": {
+      "default": false,
+      "apalacheDepth": {
+        "relation_single": 15,
+        "relation_multi_cap1": 8,
+        "relation_multi_cap2": 8,
+        "knowledge_single": 12,
+        "knowledge_two_parts": 12
+      },
+      "tlc": "Same full five finite domains.",
+      "claim": "Independent deeper report; no claim until every stage actually completes."
+    }
+  },
+  "profileRationale": "Initial cost probe for final actor-guard/synchronous-barrier model: TLC completed all five domains in 9.7-20.4s each under unchanged 60s per-check bound. Fast BMC starts at 8 steps, 6 for scripted relation concurrency, independently of full TLC. Measurements are diagnostic, not release evidence; final exact-source run remains required.",
+  "simulation": {
+    "seed": "20261014",
+    "samples": 100,
+    "maximumSteps": 40,
+    "selectedTraces": 5
+  },
+  "exclusions": [
+    "power loss, disk-controller caches, fsync or hardware durability",
+    "more than one whole-process crash",
+    "arbitrary relation response combinations for three actors",
+    "arbitrary actor/part/sourceIndex counts",
+    "source/epoch changes, cancellation or deletion",
+    "manual retry or new automatic cycle",
+    "supplier exactly-once, lost-response reconciliation, notification outbox/delivery guarantees",
+    "scheduler fairness and eventual provider response",
+    "persistent storage failure guaranteed terminal settlement",
+    "time elapsing during provider/commit/recovery and slow-response immediate continuation",
+    "semantic quality and all M1 acceptance"
+  ]
+}

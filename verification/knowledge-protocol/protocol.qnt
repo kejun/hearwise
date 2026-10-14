@@ -161,7 +161,7 @@ module protocol {
       else phase.set(p, if (retry) "extract_pending" else "done")
     val nextOutcome = if (success) "none" else result(nextPhase, initial_complete, accepted, unresolved)
     all {
-    current(p),
+    current(p), Set("extract_inflight", "repair_inflight").contains(phase.get(p)),
     stage == "inflight",
     responses.contains(r),
     extracting(p) or errors.contains(r) or Set("ok", "empty").contains(r),
@@ -212,7 +212,7 @@ module protocol {
       else settledOutcome
     } else settledOutcome
     all {
-    current(p),
+    current(p), Set("extract_inflight", "repair_inflight").contains(phase.get(p)),
     stage == "received",
     lastAction' = if (notifyFails) "commit_notify_failure" else "commit",
     actor' = p,
@@ -243,7 +243,7 @@ module protocol {
   action commitNotifyFailure(p) = commitResult(p, true)
 
   action commitFail(p) = all {
-    current(p),
+    current(p), Set("extract_inflight", "repair_inflight").contains(phase.get(p)),
     stage == "received",
     lastAction' = "commit_fail",
     actor' = p,
