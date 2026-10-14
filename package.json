@@ -75,7 +75,10 @@
     "preverify:name-browser": "npm run build",
     "verify:name-browser": "node scripts/verify-name-protocol-browser.mjs",
     "prequality:semantic": "npm run build",
-    "quality:semantic": "node scripts/evaluate-semantic-quality.mjs"
+    "quality:semantic": "node scripts/evaluate-semantic-quality.mjs",
+    "preverify:upgrade": "npm run build",
+    "verify:upgrade": "node scripts/verify-upgrade.mjs",
+    "verify:upgrade:report": "node scripts/verify-upgrade-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

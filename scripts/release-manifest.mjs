@@ -26,8 +26,8 @@ for (const suite of technicalSuites) {
   const directory = suite === 'import-atomicity' ? path.join(artifact('test'), 'verification-evidence', 'import-atomicity') : suite === 'semantic-offline' ? path.join(artifact('test'), 'verification-evidence', 'semantic-quality') : suite === 'quality-offline' ? path.join(artifact('test'), 'verification-evidence', 'asr-translation-quality') : suite === 'pilot' ? path.join(artifact('test'), 'verification-evidence') : artifact(suite);
   const candidates = [];
   for (const file of await reports(directory, suite === 'semantic-offline' ? 'summary.json' : suite === 'quality-offline' ? 'offline-summary.json' : 'report.json')) {
-    // Every semantic/atomicity attempt is mandatory, including malformed reports.
-    if (['semantic-offline', 'import-atomicity'].includes(suite)) { candidates.push(path.dirname(file)); continue; }
+    // Every semantic/atomicity/upgrade attempt is mandatory, including malformed reports.
+    if (['semantic-offline', 'import-atomicity', 'install-upgrade'].includes(suite)) { candidates.push(path.dirname(file)); continue; }
     let report; try { report = JSON.parse(await readFile(file, 'utf8')); } catch { continue; }
     if (suite !== 'pilot' || report.profile === 'pilot') candidates.push(path.dirname(file));
   }

@@ -95,16 +95,20 @@ test('real relation workflow produces durable business evidence; gate rejects ab
   assert.equal(summarize({ ...input, release: true, results: [{ ...result, source: { ...result.source, dirty: true } }] }).ok, false);
   assert.equal(summarize({ ...input, required: properties.map(p => p.id) }).ok, false);
   assert.equal(summarize({ ...input, results: [{ ...result, artifacts: result.artifacts.slice(1) }] }).ok, false);
-  const cli = () => runProcess(process.execPath, ['scripts/verify-report.mjs', directory], { timeoutMs: 5000 });
+  const cliLog = path.join(directory, 'report-cli.log');
+  const cli = async () => {
+    const execution = await runProcess(process.execPath, ['scripts/verify-report.mjs', directory], { timeoutMs: 5000, logFile: cliLog });
+    return { ...execution, summary: JSON.parse(await readFile(cliLog, 'utf8')) };
+  };
   assert.equal((await cli()).code, 0);
   // Cached report.ok remains true: the independent reporter must re-read files.
   await rm(path.join(directory, 'result.json'));
-  const missing = await cli(); assert.equal(missing.code, 1); assert.match(missing.tail, /missing/);
+  const missing = await cli(); assert.equal(missing.code, 1); assert.equal(missing.summary.ok, false); assert.deepEqual(missing.summary.rows[0].reasons, ['missing']);
   await writeFile(path.join(directory, 'result.json'), JSON.stringify(result));
   await rm(path.join(directory, 'observations.json'));
-  const missingArtifact = await cli(); assert.equal(missingArtifact.code, 1); assert.match(missingArtifact.tail, /missing_or_changed_artifact/);
+  const missingArtifact = await cli(); assert.equal(missingArtifact.code, 1); assert.equal(missingArtifact.summary.ok, false); assert.deepEqual(missingArtifact.summary.rows[0].reasons, ['missing_or_changed_artifact']);
   await writeFile(path.join(directory, 'observations.json'), '{}');
-  const tampered = await cli(); assert.equal(tampered.code, 1); assert.match(tampered.tail, /missing_or_changed_artifact/);
+  const tampered = await cli(); assert.equal(tampered.code, 1); assert.equal(tampered.summary.ok, false); assert.deepEqual(tampered.summary.rows[0].reasons, ['missing_or_changed_artifact']);
 });
 test('business failure is a completed failing observation, not an incomplete run or a pass', async t => {
   const { report, observations, processResult } = await run(t, 'business-failure');
