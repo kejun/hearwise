@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../scripts/lib/process.mjs';
 import { normalizeNameTrace, validateNameTrace, replayNameTrace, expectedNameMutationViolation } from '../scripts/lib/name-protocol-replay.mjs';
-import { inspectMatchedNameDurable, validMatchedNameDurable, inspectNameBusinessTables } from '../scripts/lib/name-protocol-durable.mjs';
+import { inspectMatchedNameDurable, validMatchedNameDurable, inspectNameBusinessTables, inspectNameNegativeDurable } from '../scripts/lib/name-protocol-durable.mjs';
 import { createNameProtocolAdapter } from '../test-support/name-protocol-adapter.mjs';
 
 let directory;
@@ -49,6 +49,14 @@ test('real source-copy negatives break fingerprint, atomic receipt, revision and
     assert.equal(result.counterexample.minimality, 'first-divergence-prefix');
     const raw = result.observations.at(-1).durable;
     assert.notEqual(raw.mutation.sourceDigest, raw.mutation.mutatedDigest);
+    const checked = inspectNameNegativeDurable(result.observations.at(-1), trace.config, result.observations.at(-2), mutation);
+    assert.equal(checked.ok, true, JSON.stringify(checked));
+    for (const change of [value => { value.durable.tables.knowledge_facts[0].content = 'forged'; },
+      value => { value.durable.events.at(-1).response.status = 418; }, value => { value.actual.phase[0] = 'unknown'; },
+      value => { value.durable.tables.knowledge_edit_jobs[0].fingerprint = 'f'.repeat(64); }]) {
+      const changed = structuredClone(result.observations.at(-1)); change(changed);
+      assert.equal(inspectNameNegativeDurable(changed, trace.config, result.observations.at(-2), mutation).ok, false);
+    }
     if (mutation === 'non_atomic_receipt') {
       assert.equal(result.counterexample.steps.at(-1).action, 'transaction');
       assert.equal(result.counterexample.steps.at(-1).argument, 'receipt_fail');
@@ -143,5 +151,21 @@ test('driver separates unavailable, timeout and cleanup failure from implementat
     assert.equal(result.complete, false); assert.equal(result.ok, false); assert.equal(result.classification, 'driver_cannot_replay');
     if (action === 'timeout') assert.match(result.error.message, /name action 0/);
     if (action === 'cleanup') assert.equal(result.cleanupError, 'Unverified cleanup');
+  }
+});
+
+test('raw client evidence rejects contradicted delivery, preparation and event chronology', { timeout: 10000 }, async () => {
+  const result = await replay('successTest'); assert.equal(result.ok, true);
+  const delivered = result.observations.find(value => value.durable.events.at(-1)?.action === 'deliver');
+  const previous = result.observations[result.observations.indexOf(delivered) - 1], config = traces.get('successTest').config;
+  for (const change of [
+    value => { for (const field of ['phase', 'reply']) { value.actual[field][0] = 'unknown'; value.durable.attempts[0][field] = 'unknown'; } },
+    value => { value.durable.events.at(-1).action = 'lose_response'; value.durable.events.at(-1).argument = 'lost'; },
+    value => { value.actual.submittedName[0] = 2; value.durable.attempts[0].submittedName = 2; },
+    value => { value.durable.events.at(-1).startedAtMs = -10; value.durable.events.at(-1).finishedAtMs = -20; },
+    value => { value.durable.events.at(-1).client.result.job.saved = false; }
+  ]) {
+    const changed = structuredClone(delivered); change(changed);
+    assert.equal(inspectMatchedNameDurable(changed, config, previous).ok, false);
   }
 });

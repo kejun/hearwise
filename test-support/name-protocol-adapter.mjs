@@ -145,7 +145,10 @@ export async function createNameProtocolAdapter({ mode = 'independent', mutation
           receiptInputRevision: row.submittedRevision, receiptCommitRevision: version(fixture.snapshot()), receiptOwner: actor, commits: operation.commits + 1 });
         detail = { id: row.task.id, response: row.task.actualResponse };
       } else if (action === 'deliver' || action === 'lose_response') {
-        assert.notEqual(row.txResult, 'none'); row.task.delivery.resolve(action === 'deliver' ? 'normal' : argument); classify(row, await wait({ promise: row.task.client }, 'Name response delivery'));
+        assert.notEqual(row.txResult, 'none'); row.task.delivery.resolve(action === 'deliver' ? 'normal' : argument);
+        const received = await wait({ promise: row.task.client }, 'Name response delivery'); classify(row, received);
+        detail = { client: { result: received.result || null, error: received.error ? { name: received.error.name, message: received.error.message,
+          outcomeUnknown: received.error.outcomeUnknown ?? null } : null } };
       } else if (action === 'lookup') {
         assert.equal(row.phase, 'recovering');
         const response = await fetch(argument === 'ok' ? `${fixture.url}/edits/${operationIds[row.operationId]}` : `${proxyBase}/unavailable`, { signal: AbortSignal.timeout(5000) });

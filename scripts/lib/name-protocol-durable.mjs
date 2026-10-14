@@ -99,7 +99,13 @@ function committedTables(before, after, ids, id, input) {
   return expected;
 }
 
-export function inspectMatchedNameDurable(observation, config, previousObservation) {
+// Validate the same complete table delta for the browser's one-commit cases.
+export function checkNameCommittedTables({ before, after, identities, id, input }) {
+  try { equalTables(after, committedTables(before, after, identities, id, input), 'Committed name tables'); return { ok: true, reason: null }; }
+  catch (error) { return { ok: false, reason: error.message }; }
+}
+
+function inspectNameDurable(observation, config, previousObservation, mutation = null) {
   try {
     const { actual: state, durable: raw } = observation, ids = raw.identities;
     assert.ok(['independent', 'reuse'].includes(config.mode)); assert.equal(raw.providerCalls, 0);
@@ -123,7 +129,20 @@ export function inspectMatchedNameDurable(observation, config, previousObservati
     }
     let prior = raw.baseline, priorSnapshot = raw.baselineSnapshot, changes = 0, background = 'none';
     const seenVersions = [priorSnapshot.revision], outcomes = new Map(), commits = new Map();
-    for (const event of raw.events) {
+    const clients = [0, 1].map(actor => ({ phase: 'unused', rawName: '', submittedName: -1, submittedRevision: -1,
+      operationId: actor, requests: 0, txResult: 'none', reply: 'none', commitBaseRevision: -1, commitBaseAnchorValid: true,
+      loadedRevision: -1, loadedName: -1 }));
+    let previousFinish = 0, violatedProperty = null;
+    for (const [eventIndex, event] of raw.events.entries()) {
+      assert.ok(Number.isSafeInteger(event.startedAtMs) && Number.isSafeInteger(event.finishedAtMs) && event.startedAtMs > 0 &&
+        event.finishedAtMs >= event.startedAtMs && event.startedAtMs >= previousFinish, 'Ordered real event clock');
+      previousFinish = event.finishedAtMs;
+      const client = clients[event.actor], global = ['background_change', 'stutter'].includes(event.action);
+      assert.ok(global ? event.actor === -1 : Boolean(client), 'Actual event actor');
+      const choices = { prepare: ['new', 'same', 'exact', 'raw_mismatch', 'revision_mismatch'], send: [''], cancel: [''],
+        transaction: ['ok', 'associated_fail', 'receipt_fail'], deliver: [''], lose_response: ['lost', 'proxy502'],
+        lookup: ['ok', 'unavailable'], refresh: [''], background_change: ['revision', 'anchor'], stutter: [''] };
+      assert.ok(choices[event.action]?.includes(event.argument), 'Actual event action/argument');
       equalTables(event.before, prior, 'Checkpoint continuity'); assert.deepEqual(event.beforeSnapshot, priorSnapshot);
       validSnapshot(event.beforeSnapshot, event.before, ids); validSnapshot(event.afterSnapshot, event.after, ids);
       let expected = structuredClone(event.before);
@@ -146,6 +165,7 @@ export function inspectMatchedNameDurable(observation, config, previousObservati
           for (const support of expected.relation_supports.filter(value => value.segment_id === ids.segmentId && value.state === 'active')) support.source_revision = 'f'.repeat(64);
         }
       } else if (event.action === 'transaction') {
+        assert.equal(client.phase, 'pending'); assert.equal(client.txResult, 'none');
         assert.ok(!outcomes.has(event.actor), 'One actual transaction per attempt');
         const attempt = raw.attempts[event.actor], input = attempt.actualRequest, id = raw.operationIds[attempt.operationId];
         assert.equal(event.id, id); assert.deepEqual(event.response, attempt.actualResponse);
@@ -159,6 +179,27 @@ export function inspectMatchedNameDurable(observation, config, previousObservati
         else if (!anchorValid) outcome = 'anchor_conflict';
         else if (event.argument === 'receipt_fail' || event.argument === 'associated_fail' && changed) outcome = 'rolled_back';
         else outcome = 'committed';
+        if (mutation && eventIndex === raw.events.length - 1) {
+          assert.equal(event.action, 'transaction');
+          assert.equal(raw.mutation?.mutation, mutation);
+          if (mutation === 'bypass_fingerprint') {
+            assert.equal(outcome, 'fingerprint_conflict'); assert.equal(config.mode, 'reuse');
+            outcome = 'duplicate'; violatedProperty = 'exactReplay';
+          } else if (mutation === 'bypass_revision') {
+            assert.equal(outcome, 'revision_conflict'); assert.equal(anchorValid, true); assert.equal(event.argument, 'ok');
+            outcome = 'committed'; violatedProperty = 'revisionRechecked';
+          } else if (mutation === 'bypass_anchor') {
+            assert.equal(outcome, 'anchor_conflict'); assert.equal(event.argument, 'ok');
+            outcome = 'committed'; violatedProperty = 'anchorsRechecked';
+          } else {
+            assert.equal(mutation, 'non_atomic_receipt'); assert.equal(outcome, 'rolled_back');
+            assert.equal(event.argument, 'receipt_fail'); assert.equal(changed, true);
+            expected = committedTables(event.before, event.after, ids, id, input);
+            row(expected.knowledge_edit_jobs, id).state = 'running';
+            changes++; violatedProperty = 'atomicRollback';
+          }
+        }
+        client.commitBaseRevision = baseRevision; client.commitBaseAnchorValid = anchorValid; client.txResult = outcome;
         outcomes.set(event.actor, outcome);
         if (['committed', 'duplicate'].includes(outcome)) {
           assert.equal(response.status, 200); assert.equal(body.changed, outcome === 'committed' && changed);
@@ -175,11 +216,49 @@ export function inspectMatchedNameDurable(observation, config, previousObservati
           else assert.equal(body.code, 'KNOWLEDGE_EDIT_FAILED');
         }
       } else if (event.action === 'lookup') {
+        assert.equal(client.phase, 'recovering');
         const attempt = raw.attempts[event.actor], id = raw.operationIds[attempt.operationId], receipt = event.before.knowledge_edit_jobs.find(value => value.id === id);
         assert.equal(event.id, id);
         assert.equal(event.status, event.argument === 'unavailable' ? 502 : receipt ? 200 : 404);
         assert.deepEqual(event.receipt, event.argument === 'ok' && receipt ? receiptView(receipt) : null);
-      } else assert.ok(['prepare', 'send', 'deliver', 'lose_response', 'refresh', 'cancel', 'stutter'].includes(event.action));
+        client.phase = event.receipt?.saved === true ? 'saved' : 'unknown'; client.reply = event.receipt?.saved === true ? 'receipt' : 'unknown';
+      } else if (event.action === 'prepare') {
+        assert.equal(client.phase, 'unused');
+        const reuse = ['exact', 'raw_mismatch', 'revision_mismatch'].includes(event.argument), first = clients[0];
+        assert.ok(event.actor === 0 || config.mode === 'independent' ? !reuse : reuse);
+        if (reuse) { assert.equal(event.actor, 1); assert.equal(config.mode, 'reuse'); assert.equal(first.requests, 1); }
+        const current = seenVersions.indexOf(event.beforeSnapshot.revision), name = names.indexOf(event.beforeSnapshot.item.canonical_name);
+        if (event.argument === 'revision_mismatch') assert.notEqual(current, first.submittedRevision);
+        client.submittedName = reuse ? first.submittedName : event.argument === 'same' ? name : event.actor + 1;
+        client.rawName = reuse ? event.argument === 'raw_mismatch' ? ` ${names[client.submittedName]} ` : first.rawName : names[client.submittedName];
+        client.submittedRevision = reuse && event.argument !== 'revision_mismatch' ? first.submittedRevision : current;
+        client.operationId = reuse ? 0 : event.actor; client.loadedRevision = current; client.loadedName = name; client.phase = 'prepared';
+      } else if (event.action === 'send') {
+        assert.equal(client.phase, 'prepared'); client.requests++; client.phase = 'pending';
+      } else if (event.action === 'cancel') {
+        assert.equal(client.phase, 'prepared'); client.phase = 'cancelled';
+      } else if (event.action === 'deliver' || event.action === 'lose_response') {
+        assert.equal(client.phase, 'pending'); assert.notEqual(client.txResult, 'none');
+        const received = event.client;
+        assert.ok(received && Object.keys(received).sort().join(',') === 'error,result', 'Observed client delivery');
+        if (event.action === 'lose_response') {
+          assert.equal(received.result, null); assert.ok(received.error && typeof received.error.message === 'string');
+          assert.notEqual(received.error.outcomeUnknown, false);
+          client.phase = 'recovering'; client.reply = 'unknown';
+        } else if (['committed', 'duplicate'].includes(client.txResult)) {
+          assert.equal(received.error, null);
+          assert.deepEqual(received.result, JSON.parse(raw.attempts[event.actor].actualResponse.text), 'Delivered actual HTTP bytes');
+          client.phase = 'saved'; client.reply = 'ok';
+        } else {
+          assert.equal(received.result, null); assert.equal(received.error?.outcomeUnknown, false);
+          assert.ok(received.error.message.includes(`HTTP ${raw.attempts[event.actor].actualResponse.status}`));
+          client.phase = client.txResult === 'rolled_back' ? 'failed' : 'conflict'; client.reply = client.phase;
+        }
+      } else if (event.action === 'refresh') {
+        assert.ok(['saved', 'unknown', 'conflict', 'failed', 'cancelled'].includes(client.phase));
+        client.loadedRevision = seenVersions.indexOf(event.beforeSnapshot.revision);
+        client.loadedName = names.indexOf(event.beforeSnapshot.item.canonical_name); client.phase = 'done';
+      } else assert.equal(event.action, 'stutter');
       equalTables(event.after, expected, `${event.action} full durable transition`);
       if (!seenVersions.includes(event.afterSnapshot.revision)) seenVersions.push(event.afterSnapshot.revision);
       prior = event.after; priorSnapshot = event.afterSnapshot;
@@ -196,6 +275,7 @@ export function inspectMatchedNameDurable(observation, config, previousObservati
     for (const actor of [0, 1]) {
       const attempt = raw.attempts[actor], own = raw.events.filter(event => event.actor === actor), sends = own.filter(event => event.action === 'send'), prepares = own.filter(event => event.action === 'prepare');
       assert.equal(attempt.actor, actor); assert.ok(prepares.length <= 1); assert.ok(sends.length <= 1);
+      for (const [field, value] of Object.entries(clients[actor])) assert.deepEqual(state[field][actor], value, `Event-derived client ${field}`);
       for (const field of ['phase', 'rawName', 'submittedRevision', 'submittedName', 'operationId', 'requests', 'txResult', 'reply', 'commitBaseRevision', 'commitBaseAnchorValid', 'loadedRevision', 'loadedName'])
         assert.deepEqual(attempt[field], state[field][actor], `Raw attempt ${field}`);
       assert.equal(state.requests[actor], sends.length); assert.equal(state.txResult[actor], outcomes.get(actor) || 'none');
@@ -212,8 +292,15 @@ export function inspectMatchedNameDurable(observation, config, previousObservati
       assert.deepEqual(operation, expected, 'Receipt bookkeeping bound to first raw commit');
       for (const [field, value] of Object.entries(expected)) assert.deepEqual(state[field][actor], value);
     }
-    return { ok: true, reason: null };
+    if (mutation) assert.ok(violatedProperty && raw.events.at(-1)?.action === 'transaction', 'Precise first negative boundary');
+    return { ok: true, reason: null, ...(mutation ? { violatedProperty } : {}) };
   } catch (error) { return { ok: false, reason: error.message }; }
+}
+export const inspectMatchedNameDurable = (observation, config, previousObservation) => inspectNameDurable(observation, config, previousObservation);
+export function inspectNameNegativeDurable(observation, config, previousObservation, mutation) {
+  if (!previousObservation || !inspectMatchedNameDurable(previousObservation, config).ok ||
+      inspectMatchedNameDurable(observation, config, previousObservation).ok) return { ok: false, reason: 'Negative requires a valid normal prefix and a genuine first violation' };
+  return inspectNameDurable(observation, config, previousObservation, mutation);
 }
 export const validMatchedNameDurable = (observation, config, previousObservation) => inspectMatchedNameDurable(observation, config, previousObservation).ok;
 
