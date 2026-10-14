@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "specification": "configurations.qnt",
+  "init": "Init",
+  "step": "Step",
+  "invariant": "Safety",
+  "single": {
+    "main": "single",
+    "actors": [
+      {
+        "actor": 0,
+        "session": 0,
+        "window": 0
+      }
+    ],
+    "cap": 1,
+    "modes": [
+      "valid",
+      "no_candidates",
+      "reserve_fail"
+    ],
+    "responses": [
+      "ok",
+      "empty",
+      "filtered",
+      "protocol",
+      "transient",
+      "auth",
+      "rate_limit",
+      "rate_limit_long",
+      "unexpected"
+    ],
+    "maxRequests": 3,
+    "protocolRetryCondition": "cumulativeWindowRequests < 2",
+    "apalacheDepth": 15
+  },
+  "multiple": {
+    "mains": [
+      {
+        "main": "multi_cap1",
+        "cap": 1
+      },
+      {
+        "main": "multi_cap2",
+        "cap": 2
+      }
+    ],
+    "actors": [
+      {
+        "actor": 0,
+        "session": 0,
+        "window": 0
+      },
+      {
+        "actor": 1,
+        "session": 1,
+        "window": 0
+      },
+      {
+        "actor": 2,
+        "session": 0,
+        "window": 1
+      }
+    ],
+    "responseScripts": {
+      "0": [
+        "protocol",
+        "ok"
+      ],
+      "1": [
+        "transient",
+        "empty"
+      ],
+      "2": [
+        "filtered"
+      ]
+    },
+    "apalacheDepth": 8,
+    "scope": "All modeled asynchronous interleavings of these fixed scripts, including notification failure; not arbitrary response combinations for three tasks."
+  },
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "mains": [
+      "single_witnesses",
+      "multi_cap1_witnesses",
+      "multi_cap2_witnesses"
+    ],
+    "seed": "42",
+    "maxSamples": 1,
+    "expectedTestCount": 20,
+    "outputPattern": "{main}-{test}-{seq}.itf.json",
+    "counts": {
+      "single_witnesses": 17,
+      "multi_cap1_witnesses": 2,
+      "multi_cap2_witnesses": 1
+    }
+  },
+  "mutants": [
+    {
+      "main": "mutant_send_without_reserve",
+      "expectedViolation": "budgetBeforeSend",
+      "maxSteps": 2
+    },
+    {
+      "main": "mutant_retry_commit_failure",
+      "expectedViolation": "paidResponseNoRetry",
+      "maxSteps": 4
+    },
+    {
+      "main": "mutant_fourth_request",
+      "expectedViolation": "terminalBudget",
+      "maxSteps": 11
+    }
+  ],
+  "traceContract": {
+    "variables": [
+      "lastAction",
+      "actor",
+      "response",
+      "mode",
+      "phase",
+      "counts",
+      "calls",
+      "relations",
+      "outcome",
+      "replies",
+      "ready"
+    ],
+    "normalization": "Strip module namespaces through the last ::; reject duplicate normalized variable names.",
+    "integerEncoding": {
+      "#bigint": "decimal integer string"
+    },
+    "mapEncoding": {
+      "#map": [
+        [
+          "ITF key",
+          "ITF value"
+        ]
+      ]
+    },
+    "ready": "false only during retry_wait; advance_time makes all waiting retries idle at once",
+    "outcome": "commit sets ok/empty from committed storage result; notify cannot change it; filtered maps to empty",
+    "reserveFailure": "execute rejects while the durable job remains pending with zero requests and provider calls",
+    "stutter": "After all actors are terminal, preserve all business projections without invoking workflow again"
+  },
+  "exclusions": [
+    "crash/restart",
+    "cancel",
+    "delete",
+    "epoch/source changes",
+    "scheduler fairness",
+    "provider quality",
+    "shared-key cooldown scheduling",
+    "other M1 faults"
+  ],
+  "profiles": {
+    "fast": {
+      "default": true,
+      "apalacheDepth": {
+        "single": 15,
+        "multi_cap1": 8,
+        "multi_cap2": 8
+      },
+      "tlc": "All three finite configurations must finish complete enumeration.",
+      "claim": "Bounded Apalache checks only to these fast depths; no deep-profile claim."
+    },
+    "deep": {
+      "default": false,
+      "apalacheDepth": {
+        "single": 15,
+        "multi_cap1": 12,
+        "multi_cap2": 12
+      },
+      "tlc": "Same complete finite configurations as fast.",
+      "claim": "Independent deep run and report; in-progress or missing checks are not a pass."
+    }
+  },
+  "profileRationale": "Initial cost measurement completed fast cap2 depth8 in about two minutes. The optional cap2 depth12 cost probe was interrupted after about fourteen minutes and is incomplete, not passed. Fast/deep differ only in Apalache bound, never TLC state-space scope.",
+  "simulation": {
+    "seed": "20261014",
+    "samples": 100,
+    "maximumSteps": 40,
+    "selectedTraces": 5
+  }
+}
