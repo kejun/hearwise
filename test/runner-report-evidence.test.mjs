@@ -1,3 +1,4 @@
+import { nodeTestArgv } from '../scripts/lib/node-test-evidence.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
@@ -29,9 +30,15 @@ async function nodeFixture(directory) {
   const files = await findNodeTests(), log = tap(1), rows = [];
   for (const file of files) {
     const name = file.replaceAll(/[\\/]/g, '_') + '.log'; await writeFile(path.join(directory, name), log);
-    rows.push({ file, log: `/different-ci-root/test-evidence/${name}`, argv: ['--test', '--test-reporter=tap', '--test-timeout=30000', file], logSha256: digest(log), ...execution(log) });
+    const events = `/different-ci-root/test-evidence/${name}.events.ndjson`;
+    const counts = { tests: 1, failed: 0, passed: 1, cancelled: 0, skipped: 0, todo: 0, topLevel: 1, suites: 0 };
+    const eventLog = [{ type: 'test:pass', data: { name: 'synthetic contract row', nesting: 0, testNumber: 1, testId: 1, parentId: 0, details: { type: 'test' }, line: 1, column: 1, file: `/different-ci-root/checkout/${file}` } },
+      { type: 'test:plan', data: { nesting: 0, count: 1 } }, { type: 'test:summary', data: { success: true, counts, file: `/different-ci-root/checkout/${file}` } },
+      { type: 'test:summary', data: { success: true, counts } }].map(row => JSON.stringify(row)).join('\n') + '\n';
+    await writeFile(path.join(directory, name + '.events.ndjson'), eventLog);
+    rows.push({ file, log: `/different-ci-root/test-evidence/${name}`, events, eventsSha256: digest(eventLog), argv: nodeTestArgv(file, events), logSha256: digest(log), ...execution(log) });
   }
-  const report = { ...await aggregate(rows), selected: files.length, passed: files.length };
+  const report = { ...await aggregate(rows), executionRepositoryRoot: '/different-ci-root/checkout', selected: files.length, passed: files.length };
   await json(path.join(directory, 'results.json'), report); return report;
 }
 function browserObservations(kind) {

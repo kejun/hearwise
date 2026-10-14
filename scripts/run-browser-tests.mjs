@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runProcess } from './lib/process.mjs';
 
-import { browserChecks as checks, rootScreenshots, sourceSnapshot, sameSourceSnapshot, executionEnvironment, evidenceFiles, hashEvidenceFiles } from './lib/runner-evidence-contract.mjs';
+import { browserChecks as checks, rootScreenshots, sourceSnapshot, sameSourceSnapshot, validBuildSource, executionEnvironment, evidenceFiles, hashEvidenceFiles } from './lib/runner-evidence-contract.mjs';
 const selected = process.argv.slice(2);
 if (selected.some(name => !checks.includes(name))) throw new Error(`Unknown browser check; choose ${checks.join(', ')}`);
 const directory = process.env.BROWSER_EVIDENCE_DIR || 'browser-evidence';
@@ -10,6 +10,7 @@ await mkdir(directory, { recursive: true });
 const evidenceDirectory = await mkdtemp(path.join(directory, 'run-'));
 const sourceStart = await sourceSnapshot(), { sha, dirty } = sourceStart.source;
 const metadata = executionEnvironment();
+if (!validBuildSource(sourceStart)) throw new Error('Build source differs from checkout; run npm run build before testing');
 const screenshotEnv = Object.fromEntries(Object.entries(rootScreenshots).map(([key, file]) => [key, process.env[key] || path.join(directory, file)]));
 const childEnv = { ...process.env }; delete childEnv.NODE_TEST_CONTEXT;
 const results = [];
@@ -32,7 +33,7 @@ for (const name of selected.length ? selected : checks) {
 const sourceEnd = await sourceSnapshot();
 const runPrefix = path.basename(evidenceDirectory) + '/';
 const artifacts = await hashEvidenceFiles(directory, (await evidenceFiles(directory)).filter(file => file.startsWith(runPrefix) || Object.values(rootScreenshots).includes(file)));
-const complete = results.length === (selected.length || checks.length) && sameSourceSnapshot(sourceStart, sourceEnd);
+const complete = results.length === (selected.length || checks.length) && sameSourceSnapshot(sourceStart, sourceEnd) && validBuildSource(sourceEnd);
 const report = { schemaVersion: 2, sha, dirty, sourceStart, sourceEnd, ...metadata, evidenceDirectory, complete,
   ok: complete && results.every(row => row.ok), artifacts, results };
 await writeFile(`${directory}/results.json`, JSON.stringify(report, null, 2) + '\n');

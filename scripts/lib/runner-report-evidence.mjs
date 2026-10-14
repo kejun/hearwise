@@ -1,9 +1,10 @@
+import { nodeTestArgv, validateNodeTestEvents } from './node-test-evidence.mjs';
 import { readFile, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { digest, sourceVersion, checkArtifacts } from './verification-evidence.mjs';
 import { tapSummary } from './tap-summary.mjs';
-import { browserChecks, browserScreenshots, findNodeTests, sourceSnapshot, sameSourceSnapshot, safeRelative, evidenceFiles } from './runner-evidence-contract.mjs';
+import { browserChecks, browserScreenshots, findNodeTests, sourceSnapshot, sameSourceSnapshot, validBuildSource, safeRelative, evidenceFiles } from './runner-evidence-contract.mjs';
 import { sessionProfile } from '../../verification/session-properties.mjs';
 import { relationResultProfile } from '../../verification/relation-result-properties.mjs';
 import { summarizeSessionResults } from '../../test-support/session-evidence.mjs';
@@ -23,6 +24,7 @@ async function header(kind, directory, release) {
   if (report.schemaVersion !== 2 || !Array.isArray(report.results) || report.complete !== true) result.reasons.push('incomplete_aggregate');
   if (report.sha !== result.target.sha || report.dirty !== result.target.dirty) { result.stale = true; result.reasons.push('source_changed'); }
   if (release && (report.dirty !== false || result.target.dirty !== false)) result.reasons.push('uncommitted_source');
+  if (!validBuildSource(report.sourceStart) || !validBuildSource(report.sourceEnd)) result.reasons.push('stale_or_invalid_runtime_build');
   if (!sameSourceSnapshot(report.sourceStart, report.sourceEnd)) result.reasons.push('source_changed_during_execution');
   if (!isDeepStrictEqual(report.sourceStart?.source, result.source)) result.reasons.push('source_header_mismatch');
   try { if (!sameSourceSnapshot(report.sourceEnd, await sourceSnapshot())) { result.stale = true; result.reasons.push('source_or_build_digest_changed'); } }
@@ -50,7 +52,11 @@ export async function validateNodeEvidence(directory, { release = true } = {}) {
       const logName = row.file.replaceAll(/[\\/]/g, '_') + '.log';
       if (path.basename(row.log) !== logName || !(await lstat(path.join(directory, logName))).isFile()) throw new Error('invalid_test_log_path');
       const bytes = await readFile(path.join(directory, logName)); if (digest(bytes) !== row.logSha256) throw new Error('changed_test_log');
-      if (row.tail !== bytes.toString('utf8').slice(-12000) || !isDeepStrictEqual(row.argv, ['--test', '--test-reporter=tap', '--test-timeout=30000', row.file])) throw new Error('test_execution_binding');
+      if (row.tail !== bytes.toString('utf8').slice(-12000) || !isDeepStrictEqual(row.argv, nodeTestArgv(row.file, row.events))) throw new Error('test_execution_binding');
+      if (typeof row.events !== 'string' || path.basename(row.events) !== logName + '.events.ndjson' || !(await lstat(path.join(directory, path.basename(row.events)))).isFile()) throw new Error('invalid_native_events_path');
+      const eventBytes = await readFile(path.join(directory, path.basename(row.events)));
+      if (digest(eventBytes) !== row.eventsSha256) throw new Error('changed_native_events');
+      validateNodeTestEvents(bytes.toString('utf8'), eventBytes.toString('utf8').trimEnd().split('\n').map(line => JSON.parse(line)), { entry: row.file, repositoryRoot: report.executionRepositoryRoot, sourceFiles: Object.keys(report.sourceStart.digests) });
       const tap = tapSummary(bytes.toString('utf8'));
       item.tests = tap.testCount;
       item.status = !complete(row) || !tap.testComplete ? 'incomplete' : passed(row) && tap.ok ? 'passed' : 'failed';

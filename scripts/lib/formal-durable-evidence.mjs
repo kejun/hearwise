@@ -20,7 +20,8 @@ function relationProjection(durable, state, valid) {
     if (!valid) continue; // A negative replay must retain its actual broken durable state.
     assert.equal(row.budget, row.journal.length); assert.ok(row.budget <= 3 && row.calls <= row.budget);
     if (['reserved', 'inflight', 'received'].includes(row.phase)) {
-      assert.equal(row.job?.state, 'running'); assert.equal(row.window.state, 'pending');
+      assert.equal(row.job?.state, state.allowUnreserved ? 'pending' : 'running'); assert.equal(row.window.state, 'pending');
+      if (state.allowUnreserved) { assert.equal(rows.length, 1); assert.equal(row.phase, 'reserved'); assert.equal(row.budget, 0); assert.equal(row.calls, 0); assert.equal(row.job.request_count, 0); assert.equal(row.relations.length, 0); }
     } else if (row.phase === 'committed' || (row.phase === 'done' && ['ok', 'empty'].includes(row.outcome))) {
       assert.equal(row.job?.state, 'complete'); assert.equal(row.window.state, 'complete'); assert.equal(row.job.last_error, null);
       assert.equal(row.journal.at(-1)?.outcome, 'complete');
@@ -96,9 +97,11 @@ export function validateDurableReplay(kind, replay, { negative = false } = {}) {
   for (const [i, observation] of replay.observations.entries()) {
     assert.equal(observation.step, i - 1); assert.ok(object(observation.durable));
     assert.ok(observation.durable.clock >= clock); clock = observation.durable.clock;
-    assert.deepEqual(project(observation.durable, state, !negative), observation.actual);
+    state.allowUnreserved = negative && kind === 'relation-protocol' && observation.step === replay.difference?.step;
+    assert.deepEqual(project(observation.durable, state, true), observation.actual);
   }
   if (negative) {
+    assert.equal(replay.difference?.step, 0); assert.equal(replay.observations.length, 2);
     const last = replay.observations.at(-1); assert.equal(last.step, replay.difference?.step);
     assert.deepEqual(last.actual, replay.difference.actual); assert.notDeepEqual(replay.difference.actual, replay.difference.expected);
     assert.deepEqual(replay.counterexample?.steps?.at(-1)?.expected, replay.difference.expected);

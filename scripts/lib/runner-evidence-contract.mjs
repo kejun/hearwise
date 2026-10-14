@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile, readdir, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { digest, sourceVersion } from './verification-evidence.mjs';
 
@@ -41,10 +42,15 @@ export async function sourceSnapshot() {
   paths.push('dist/server/index.js', 'public/vendor/cytoscape.js');
   const files = [...new Set(paths)].sort();
   const digests = Object.fromEntries(await Promise.all(files.map(async file => [file, digest(await readFile(file))])));
-  return { source: sourceVersion(), digests, lockDigest: digests['package-lock.json'] };
+  const { createTaskRuntime } = await import(pathToFileURL(path.resolve('dist/server/index.js')).href + `?evidence=${digests['dist/server/index.js']}`);
+  const runtime = createTaskRuntime({ enabled: false }); let runtimeBuild;
+  try { runtimeBuild = structuredClone(runtime.diagnostics().build); } finally { await runtime.dispose(); }
+  return { source: sourceVersion(), digests, runtimeBuild, lockDigest: digests['package-lock.json'] };
 }
+export const validBuildSource = snapshot => Boolean(snapshot?.runtimeBuild && /^[a-f0-9]{40}$/.test(snapshot.runtimeBuild.git_sha) &&
+  snapshot.runtimeBuild.instrumentation_version === 3 && snapshot.runtimeBuild.git_sha === snapshot.source?.sha && snapshot.runtimeBuild.build_dirty === snapshot.source?.dirty);
 export const sameSourceSnapshot = (before, after) => Boolean(before?.digests && Object.keys(before.digests).length && isDeepStrictEqual(before, after));
-export const executionEnvironment = () => ({ tools: { node: process.version, sqlite: process.versions.sqlite }, environment: { platform: process.platform, arch: process.arch, release: os.release() } });
+export const executionEnvironment = () => ({ executionRepositoryRoot: process.cwd(), tools: { node: process.version, sqlite: process.versions.sqlite }, environment: { platform: process.platform, arch: process.arch, release: os.release() } });
 export const safeRelative = value => typeof value === 'string' && value.length > 0 && !path.isAbsolute(value) && !value.includes('\\') && !value.split('/').some(part => !part || part === '.' || part === '..');
 export async function evidenceFiles(directory, prefix = '') {
   const entries = await readdir(path.join(directory, prefix), { withFileTypes: true });
