@@ -110,6 +110,7 @@ jobs:
       - run: npm run check:version
       - run: npm run typecheck
       - run: npm test
+      - run: npm run verify:trace-business -- --node-only --release
       - name: Verify credential and request security boundaries
         run: npm run verify:security -- --node-only --release
       - name: Check offline ASR and MT evaluation plumbing (no quality scores or paid calls)
