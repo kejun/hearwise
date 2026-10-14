@@ -44,9 +44,9 @@ claim is made. The implementation still uses its actual revision hash.
 The cost probes in config are sizing data, not final acceptance. Earlier incomplete
 90-second TLC and 180-second Apalache probes remain explicitly recorded as such.
 Every source-bound release report must establish its own complete results.
-The import profile has a fixed12-minute fast or20-minute deep outer deadline;
-TLC single is capped at60seconds and two_tokens at240seconds. Existing63/64
-budgets are unchanged. CI gives this separate fast-profile job20minutes including
+The import profile has a fixed 12-minute fast or 20-minute deep outer deadline;
+TLC single is capped at 60 seconds and two_tokens at 240 seconds. Existing 63/64
+budgets are unchanged. CI gives this separate fast-profile job 20 minutes including
 tool setup and failure artifact upload; it does not silently run the deep profile.
 
 ## Connection to actual implementation
@@ -136,3 +136,26 @@ Browser evidence is separate and required in CI. The cloud checkout cannot start
 Chromium under its current sandbox, so local authored browser checks are not called
 passes. CI must execute them against the actual UI/server and retain screenshots
 and raw observations. No local sandbox bypass is used.
+
+
+## Browser feedback regression
+
+The real fifth Chromium scenario delays only the automatic preview request after
+an actual stale commit, delivers the original expiry callback, then continues the
+unchanged request. CI run38562108943 on tree`cecd8f47` produced commit409 followed
+by preview410, unchanged business rows and disabled confirmation, but incorrectly
+claimed that the preview had refreshed. Its first four append/replace scenarios
+completed successfully; HW-09-04 remained passed while HW-09-05 failed.
+
+The minimal UI repair makes `refreshImportPreview` report whether it actually
+installed a new review. The caller displays the refreshed message only on success;
+on failure it preserves the original error and executes the normal `finally`
+control reset. No server token, TTL, revision or import condition changes.
+The same unchanged browser regression must pass on the repaired source.
+
+Browser response evidence is a non-blocking clone of the genuine in-page fetch
+Response, avoiding the inspector cache's file-upload eviction. The application
+receives its original Response without waiting for observation; no status, body,
+request or response is mocked. A unit test holds the clone pending and checks
+that the original Response and arguments are already preserved. Full browser
+acceptance still requires actual Chromium execution and raw HTTP/SQLite evidence.
