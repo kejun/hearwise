@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runEditProtocolCommand } from '../scripts/lib/edit-protocol-command.mjs';
 import { editTraceContract, decodeEditITF, normalizeEditTrace, validateEditProjection, replayEditTrace, expectedEditMutationViolation } from '../scripts/lib/edit-protocol-replay.mjs';
 import { editConfig, editProtocolMetadata, editProtocolPlan, editProtocolCoverage, checkerConclusion, validateEditProtocolEvidence } from '../scripts/lib/edit-protocol-evidence.mjs';
 import { writeJson } from '../scripts/lib/verification-evidence.mjs';
@@ -90,4 +92,25 @@ test('evidence gate rejects cached passing claims with absent results, stale sou
   assert.equal(summary.ok, false); assert.ok(summary.reasons.includes('stale')); assert.ok(summary.reasons.includes('missing_artifact'));
   assert.equal(summary.rows.length, editProtocolPlan(domain).length); assert.ok(summary.rows.every(row => row.status === 'not_run'));
   assert.equal(summary.fullProjectAcceptance, false);
+});
+
+// Exercise the same launcher as the formal runner without invoking a checker.
+test('runner executes Node regressions at repository root and formal tools in the evidence directory', async t => {
+  const evidenceDirectory = await mkdtemp(path.join(os.tmpdir(), 'hearwise-edit-command-unit-'));
+  t.after(() => rm(evidenceDirectory, { recursive: true, force: true }));
+  const repositoryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const configModule = new URL('../scripts/lib/edit-protocol-evidence.mjs', import.meta.url).href;
+  const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+  const regression = await runEditProtocolCommand(process.execPath, ['--input-type=module', '-e',
+    `import { editConfig } from ${JSON.stringify(configModule)};
+     const config = await editConfig(); console.log(JSON.stringify({ cwd: process.cwd(), schemaVersion: config.schemaVersion }));`],
+  { kind: 'implementation-regression', repositoryRoot, evidenceDirectory, env, timeoutMs: 5000 });
+  assert.equal(regression.ok, true, regression.tail);
+  assert.deepEqual(JSON.parse(regression.tail), { cwd: repositoryRoot, schemaVersion: 1 });
+  for (const kind of ['typecheck', 'finite-state-complete', 'bounded-model-check', 'model-witness', 'simulation', 'model-negative']) {
+    const formal = await runEditProtocolCommand(process.execPath, ['-e', 'console.log(JSON.stringify(process.cwd()))'],
+      { kind, repositoryRoot, evidenceDirectory, env, timeoutMs: 5000 });
+    assert.equal(formal.ok, true, `${kind}: ${formal.tail}`);
+    assert.equal(JSON.parse(formal.tail), evidenceDirectory, kind);
+  }
 });

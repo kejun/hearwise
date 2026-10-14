@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
-import { runProcess } from './lib/process.mjs';
+import { runEditProtocolCommand } from './lib/edit-protocol-command.mjs';
 import { digest, writeJson } from './lib/verification-evidence.mjs';
 import { checkProtocolTools, quintCli, quintHome, toolchain } from './lib/relation-protocol-tools.mjs';
 import { editConfig, editModelRoot, editProtocolMetadata, editProtocolPlan, editProtocolCoverage, editConfiguration,
@@ -10,6 +10,7 @@ import { normalizeEditTrace, replayEditTrace, expectedEditMutationViolation } fr
 
 const args = process.argv.slice(2);
 if (args.some(arg => arg !== '--release')) throw new Error('Usage: node scripts/verify-edit-protocol.mjs [--release]');
+const repositoryRoot = process.cwd();
 const config = await editConfig(), context = await editProtocolMetadata();
 const root = path.resolve(process.env.EDIT_PROTOCOL_EVIDENCE_DIR || 'verification-evidence/edit-protocol');
 await mkdir(root, { recursive: true });
@@ -36,7 +37,8 @@ async function command(id, kind, argv, { timeoutMs = 60000, bound } = {}) {
   stopped(); console.log(`START ${id}`);
   const startedAt = new Date().toISOString(), logFile = path.join(directory, `${id}.log`);
   const env = { ...process.env, QUINT_HOME: quintHome, JVM_ARGS: '-Xmx2G' }; delete env.NODE_TEST_CONTEXT;
-  const execution = await runProcess(process.execPath, argv, { cwd: directory, env, timeoutMs, graceMs: 1500, logFile });
+  const execution = await runEditProtocolCommand(process.execPath, argv, { kind, repositoryRoot, evidenceDirectory: directory,
+    env, timeoutMs, graceMs: 1500, logFile });
   const log = await readFile(logFile, 'utf8'), conclusion = checkerConclusion(kind, execution, log, bound);
   const { tail: _tail, ...processResult } = execution;
   const row = { id, kind, startedAt, finishedAt: new Date().toISOString(), complete: conclusion.complete,
