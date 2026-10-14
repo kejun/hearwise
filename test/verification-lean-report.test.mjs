@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { profile, requiredSteps, requiredArtifacts } from '../verification/revision/profile.mjs';
 import { corpus, baseline, transport, referenceJSON, units } from '../verification/revision/corpus.mjs';
 import { revisionSources, nameIntervalSources } from '../scripts/lib/lean-source-files.mjs';
@@ -16,6 +17,8 @@ import { tapMetrics } from '../scripts/lib/tap-summary.mjs';
 
 // Deliberately synthetic report fixtures exercise the offline validator only.
 // They are never release evidence and do not pretend to execute a Lean proof.
+const negativeFixtures = JSON.parse(await readFile(new URL('../test-support/lean-negative-evidence-fixture.json', import.meta.url)));
+const testNames = async files => (await Promise.all([...files].sort().map(file => readFile(file, 'utf8')))).flatMap(source => [...source.matchAll(/^test\('([^']+)'/gm)].map(match => match[1]));
 async function fixture(directory) {
   const success = { code: 0, signal: null, timedOut: false, interrupted: false, ok: true, durationMs: 1, tail: '' };
   const { cases, pairs } = corpus();
@@ -25,7 +28,7 @@ async function fixture(directory) {
   const differential = { complete: true, ok: true, seed: profile.seed, generatedBaseSamples: 256, samples: cases.length, pairs: pairs.length,
     groups: Object.fromEntries([...new Set(cases.map(row => row.group))].map(group => [group, cases.filter(row => row.group === group).length])),
     corpusDigest: digest(inputs), observations: cases.map(({ id, group, snapshot }) => ({ id, group, utf16Length: referenceJSON(snapshot).length, digest: digest(referenceJSON(snapshot)) })),
-    mutations: [{ detected: true }, { detected: true }, { detected: true }] };
+    ...structuredClone(negativeFixtures.revision) };
   const audit = await readFile('verification/lean/AxiomAudit.lean', 'utf8');
   const auditEvidence = { complete: true, method: 'Lean #guard_msgs over transitive #print axioms',
     audits: audit.split('\n').filter(line => line.startsWith('/-- info: ')).map(line => line.slice(10, -3).trim()) };
@@ -36,7 +39,7 @@ async function fixture(directory) {
   files.set('oracle-execution.json', JSON.stringify(success));
   const tools = { lean: `Lean (version ${profile.lean}, commit ${profile.leanCommit})`, lake: `Lake (Lean version ${profile.lean})`, node: process.version, sqlite: process.versions.sqlite };
   files.set('lean-version.log', tools.lean + '\n'); files.set('lake-version.log', tools.lake + '\n');
-  const body = "import test from 'node:test';\n" + Array.from({ length: 8 }, (_, i) => `test('synthetic validator fixture ${i}', () => {});`).join('\n');
+  const body = "import test from 'node:test';\n" + (await testNames(['test/knowledge-revision.test.mjs'])).map(name => `test(${JSON.stringify(name)}, () => {});`).join('\n');
   const testFile = path.join(directory, 'fixture.test.mjs'), logFile = path.join(directory, 'legacy-regression.log');
   await writeFile(testFile, body);
   const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
@@ -100,7 +103,7 @@ test('offline Lean evidence independently revalidates corruption and execution o
     ['skip-raw-tap', fixture => { fixture.files.set('legacy-regression.log', fixture.files.get('legacy-regression.log').replace('# pass 8', '# pass 7').replace('# skipped 0', '# skipped 1')); }, 'incomplete', 'invalid_regression_tap'],
     ['forged-footer', fixture => { const log = fixture.files.get('legacy-regression.log'); fixture.files.set('legacy-regression.log', 'TAP version 13\n' + log.slice(log.indexOf('1..8\n'))); }, 'incomplete', 'invalid_regression_tap'],
     ['forged-body-failure', fixture => { fixture.files.set('legacy-regression.log', fixture.files.get('legacy-regression.log').replace('ok 1 -', 'not ok 1 -')); }, 'incomplete', 'invalid_regression_tap'],
-    ['forged-body-skip', fixture => { fixture.files.set('legacy-regression.log', fixture.files.get('legacy-regression.log').replace('ok 1 - synthetic validator fixture 0', 'ok 1 - synthetic validator fixture 0 # SKIP')); }, 'incomplete', 'invalid_regression_tap'],
+    ['forged-body-skip', fixture => { fixture.files.set('legacy-regression.log', fixture.files.get('legacy-regression.log').replace(/^(ok 1 - .+)$/m, '$1 # SKIP')); }, 'incomplete', 'invalid_regression_tap'],
     ['forged-body-count', fixture => { fixture.files.set('legacy-regression.log', fixture.files.get('legacy-regression.log').replace('# tests 8', '# tests 16').replace('# pass 8', '# pass 16')); }, 'incomplete', 'invalid_regression_tap'],
     ['forged-console-footer', fixture => { fixture.files.set('legacy-regression.log', '# pass 99\n' + fixture.files.get('legacy-regression.log')); }, 'incomplete', 'invalid_regression_tap'],
     ['differential-cache', fixture => { fixture.report.differential.observations[0].digest = '0'.repeat(64); }, 'incomplete', 'invalid_differential_evidence'],
@@ -155,9 +158,7 @@ async function nameFixture(directory) {
         return { start, end, quote: nameCorpus.units(text.slice(start, end)) };
       }) };
   });
-  const invalid = Array.from({ length: 13 }, (_, id) => ({ id }));
-  const importedInvalid = Array.from({ length: 12 }, (_, id) => ({ id, imported: true, status: 409, unchanged: true, reopened: true, receiptAbsent: true }));
-  const collision = { publicCommitAccepted: true, code: 'ERR_SQLITE_ERROR', constraint: 'UNIQUE', unchanged: true, receiptAbsent: true };
+  const { invalid, importedInvalid, collision } = structuredClone(negativeFixtures.name);
   const sqliteCases = cases.flatMap((item, i) => {
     if (!item.sqlite) return [];
     const output = outputs[i];
@@ -170,18 +171,20 @@ async function nameFixture(directory) {
       observed: anchorIndexes.map(j => output.anchors[j]), before: [stale], after,
       reopened: true, staleUnchanged: true, unlinkedUnchanged: true, otherListeningUnchanged: true }];
   });
-  const invalidOracle = Array.from({ length: 12 }, (_, i) => ({ id: `synthetic-${i}`, rejected: true, execution: { ...success, code: 1, ok: false } }));
+  const invalidOracle = negativeFixtures.name.invalidOracle.map(row => ({ ...row, rejected: true, execution: { ...success, code: 1, ok: false } }));
   const corpusText = inputs.map(row => JSON.stringify(row)).join('\n') + '\n';
   const differential = { complete: true, ok: true, seed: nameProfile.profile.seed, generatedBaseSamples: 256, samples: cases.length,
     groups: Object.fromEntries([...new Set(cases.map(row => row.group))].map(group => [group, cases.filter(row => row.group === group).length])),
     anchors: cases.reduce((sum, row) => sum + row.anchors.length, 0), sqliteCases: sqliteCases.length,
     sqliteAnchors: sqliteCases.reduce((sum, row) => sum + row.observed.length, 0), sqliteReopened: true, staleSupportsUnchanged: true,
     unlinkedSegmentsUnchanged: true, otherListeningsUnchanged: true, corpusDigest: digest(corpusText), invalid, importedInvalid, collision, invalidOracle,
-    mutations: [{ detected: true }], observations: cases.map((item, i) => {
+    ...structuredClone({ mutations: negativeFixtures.name.mutations, outsideProofDomain: negativeFixtures.name.outsideProofDomain, boundaries: negativeFixtures.name.boundaries }), observations: cases.map((item, i) => {
       const intersecting = item.anchors.filter(anchor => item.matches.some(match => anchor.start < match.end && match.start < anchor.end)).length;
       return { id: item.id, group: item.group, oldUnits: item.text.length, newUnits: outputs[i].text.length,
         matches: item.matches.length, anchors: item.anchors.length, unchanged: item.anchors.length - intersecting, intersecting };
     }) };
+  const source = await readFile('knowledge-name-replacement.mjs', 'utf8');
+  differential.mutations[0].runnableDigest = digest(source.replaceAll('name.length', '[...name].length').replace(/from '(\.\/[^']+)'/g, (_, file) => `from '${pathToFileURL(path.resolve(file)).href}'`));
   const sqlite = { synthetic: true, publicEntry: 'ListeningStore.replaceKnowledgeName', database: 'sqlite-witness.sqlite', cases: sqliteCases, invalid, importedInvalid, collision };
   const witness = sqliteCases.find(row => row.id === 'emoji-target');
   const database = new DatabaseSync(path.join(directory, 'sqlite-witness.sqlite'));
@@ -203,7 +206,7 @@ async function nameFixture(directory) {
     audits: audit.split('\n').filter(line => line.startsWith('/-- info: ')).map(line => line.slice(10, -3).trim()) }));
   for (const name of ['lean-version.log', 'lake-version.log']) files.set(name, base.files.get(name));
   const logFile = path.join(directory, 'implementation-regression.log'), testFile = path.join(directory, 'fixture.test.mjs');
-  await writeFile(testFile, "import test from 'node:test';\n" + Array.from({ length: 9 }, (_, i) => `test('synthetic name fixture ${i}', () => {});`).join('\n'));
+  await writeFile(testFile, "import test from 'node:test';\n" + (await testNames(['test/knowledge-name-replacement.test.mjs', 'test/knowledge-name-replacement-import.test.mjs'])).map(name => `test(${JSON.stringify(name)}, () => {});`).join('\n'));
   const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
   assert.equal((await runProcess(process.execPath, ['--test', '--test-reporter=tap', testFile], { env, logFile, timeoutMs: 5000 })).ok, true);
   files.set('implementation-regression.log', await readFile(logFile, 'utf8'));
@@ -232,4 +235,46 @@ test('name interval validation binds raw anchors, SQLite witness, invalid oracle
     const changed = structuredClone(original); mutate(changed); await save(directory, changed);
     const result = await validate(); assert.equal(result.ok, false); assert.ok(result.reasons.includes(reason), JSON.stringify(result.reasons));
   });
+});
+
+
+function rewriteDifferential(fixture, change) {
+  const d = JSON.parse(fixture.files.get('differential.json')); change(d); fixture.report.differential = d;
+  fixture.files.set('differential.json', JSON.stringify(d));
+  const logged = { ...d, observations: undefined, mutations: d.mutations.map(({ id, detected }) => ({ id, detected })) };
+  if (fixture.files.has('sqlite-evidence.json')) {
+    logged.invalidOracle = d.invalidOracle.map(({ id, rejected, execution }) => ({ id, rejected, code: execution.code }));
+    const sqlite = JSON.parse(fixture.files.get('sqlite-evidence.json'));
+    sqlite.importedInvalid = d.importedInvalid; sqlite.invalid = d.invalid; sqlite.collision = d.collision;
+    fixture.files.set('sqlite-evidence.json', JSON.stringify(sqlite));
+  }
+  fixture.files.set('differential.log', JSON.stringify(logged));
+  fixture.report.steps.find(row => row.name === 'differential').execution.tail = JSON.stringify(logged).slice(-12000);
+}
+
+test('consistent cached flags and unrelated same-count TAP cannot replace concrete negative evidence', { timeout: 30000 }, async t => {
+  for (const kind of ['revision', 'name-interval']) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'lean-negative-bindings-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const original = await (kind === 'revision' ? fixture : nameFixture)(directory);
+    const cases = kind === 'revision' ? [
+      ['flag-only-mutants', d => { d.mutations = d.mutations.map(() => ({ detected: true })); }]
+    ] : [
+      ['changed-import-after', d => { d.importedInvalid[0].after.start = 100; }],
+      ['not-a-counterexample', d => { d.mutations[0].witness.actual = structuredClone(d.mutations[0].witness.expected); }]
+    ];
+    for (const [name, mutate] of cases) await t.test(`${kind}:${name}`, async () => {
+      const changed = structuredClone(original); rewriteDifferential(changed, mutate); await save(directory, changed);
+      const result = await validateLeanEvidence(kind, directory, { release: false });
+      assert.equal(result.ok, false, JSON.stringify(result.reasons));
+      assert.ok(result.reasons.includes('invalid_differential_evidence'), JSON.stringify(result.reasons));
+    });
+    await t.test(`${kind}:unrelated-same-count-TAP`, async () => {
+      const changed = structuredClone(original), step = changed.report.steps.at(-1), file = `${step.name}.log`;
+      const log = changed.files.get(file).replace(/^(ok \d+ - ).+$/gm, '$1unrelated empty test');
+      changed.files.set(file, log); step.execution.tail = log.slice(-12000); await save(directory, changed);
+      const result = await validateLeanEvidence(kind, directory, { release: false });
+      assert.equal(result.ok, false); assert.ok(result.reasons.includes('invalid_regression_tap'));
+    });
+  }
 });
