@@ -3,7 +3,7 @@ const definitions = [
     '11 个工作流场景、4 个完整 HTTP/WS 场景；正常空/过滤/部分/失败恢复/旧代次/重复反馈与迟到账本',
     ['src/server/diagnostics/business.ts', 'src/server/diagnostics/report.ts', 'knowledge-workflow.mjs', 'relation-workflow.mjs', 'server.mjs', 'speech-service.mjs']],
   ['HW-15-03', '通知及诊断故障隔离', '同步通知与诊断回调异常不改变已提交结果、不泄漏逻辑槽、不触发重复供应商请求；sent 只证明同步回调完成。',
-    '实际关系/知识回调抛错与内存sink失败；真实server翻译WebSocket发送抛错和speech metric抛错',
+    '实际关系/知识回调抛错与内存sink失败；真实server翻译WebSocket发送抛错和speech metric抛错；service onDispose抛错后head/连接释放及新owner工作',
     ['relation-workflow.mjs', 'knowledge-workflow.mjs', 'src/server/runtime/diagnostics.ts', 'server.mjs', 'speech-service.mjs']],
   ['HW-15-04', '实际任务报告下钻', '离线浏览器从业务域、活动及任务到对应底层事件；缺失与未知采集明确可见，未关联请求不伪造归属。',
     '桌面/390px Chromium；五业务域、6种状态、任务/事件身份、输入缺口、导出、零网络请求',

@@ -196,7 +196,7 @@ export const cleanTraceExecution = execution => execution && execution.timedOut 
   [0, 1].includes(execution.code) && execution.testComplete !== false;
 export const traceRegressionFiles = ['test/business-trace.test.mjs', 'test/trace-report.test.mjs', 'test/effect-runtime.test.mjs', 'test/trace-business-workflow.test.mjs',
   'test/trace-notification-boundary.test.mjs', 'test/trace-business-negative.test.mjs', 'test/trace-business-evidence.test.mjs'];
-export const traceRegressionCount = 47;
+export const traceRegressionCount = 48;
 export const traceEvidenceScope = property => ({ description: property.domain, scenario: 'trace-business-fixed-boundaries', samples: 1, seed: null,
   ...(property.id === 'HW-15-02' ? { scenarioCases: 15 } : {}) });
 export function tracePropertyState(id, { checks, observationsValid, artifactsValid, browserValid, sourceStable, cleanupOk, nodeOnly }) {

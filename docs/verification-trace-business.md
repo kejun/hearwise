@@ -50,13 +50,15 @@ npm run test:browser -- trace-business
 
 ### HW-15-03：故障不能反转已提交结果
 
-真实回调故障固定了三处反例，修复单独提交：
+真实回调故障固定了四处反例，修复单独提交：
 
 - 关系通知回调抛错后仍发 `notification_sent`。修复只在同步回调成功时记录该事件；已有业务终态、请求预算不变。
 - 真实服务端 WebSocket `translation-updated` 发送抛错：前两个译文已经 complete，Trace 却 failed，第三句因槽未释放而 pending。最小保护三个通知边界，保留原计数、清理和调度顺序；三句各调用一次并最终完成。
 - 实际 `speech_event` 诊断回调抛错使 preview admission 失败。只隔离 metric 回调异常，保留原播放/关闭流程；实际两单元完成、服务仍可访问。
 
-测试通过隔离 child preload 注入已有模块边界，没有新增生产故障开关或调试接口。错误诊断只使用固定标识，不回显异常正文。`notification_sent` 只说明同步 callback 完成，不能声称客户端已经收到通知。
+- 播报关闭时 `onDispose` 抛错，已删除 consumer 却遗留 translation head 与打开的 client。只隔离此通知，继续既有资源清理；验证 stop 不抛、head 释放、连接关闭、后续新 owner 可生成一个单元，两个 owner 各只关闭一次。此项使用现有 service transport interface、真实 runtime 与文件 SQLite，不冒充网络端到端。
+
+服务端发送/诊断故障通过隔离 child preload 注入，其他回调通过已有构造参数注入，没有新增生产故障开关或调试接口。错误诊断只使用固定标识，不回显异常正文。`notification_sent` 只说明同步 callback 完成，不能声称客户端已经收到通知。
 
 同仓库 KEJ-69 的名称纠正提交后通知问题是独立路径，本分支不依赖或重复它的未合修复；安全全出口验收由 KEJ-82 独立承担。
 
@@ -85,6 +87,6 @@ npm run test:browser -- trace-business
 
 每个变异固定唯一 anchor、替换内容、原/变体源 hash，保留实际原 snapshot/业务查询、变体 report/overview、原样 oracle 及具体失败比较。变异必须真的被检出，只有 `detected:true` 不足以通过。
 
-回归清单固定为 7 个文件、47 个实际 Node 测试，读取完整 TAP 日志的唯一末尾 footer，不能依赖截断 tail、测试输出中的伪摘要或 `exit 0`。子进程移除继承的 `NODE_TEST_CONTEXT`。门禁单测包括缺业务快照/案例、错误查询状态、旧源码/埋点、未完整退出、缺文件、伪造 mutation 结果、浏览器缺项、独立性质结果及文件篡改。
+回归清单固定为 7 个文件、48 个实际 Node 测试，读取完整 TAP 日志的唯一末尾 footer，不能依赖截断 tail、测试输出中的伪摘要或 `exit 0`。子进程移除继承的 `NODE_TEST_CONTEXT`。门禁单测包括缺业务快照/案例、错误查询状态、旧源码/埋点、未完整退出、缺文件、伪造 mutation 结果、浏览器缺项、独立性质结果及文件篡改。
 
 执行者负责场景/实现映射，独立审查者核查反例与原始证据；发布负责人确认目标 head 的完整 CI 与真实浏览器附件。仅本地 Node 通过时，HW-15-04 保持未运行，KEJ-84 不能结为完成。
