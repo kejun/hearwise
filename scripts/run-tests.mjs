@@ -31,8 +31,9 @@ await runTestSchedule(files, async (file, plan) => {
   console.log(`START ${file}${plan.exclusive ? ' [exclusive nested processes]' : ''}`);
   const events = log + '.events.ndjson', argv = nodeTestArgv(file, events);
   const result = await runProcess(process.execPath, argv, { env: childEnv, logFile: log, timeoutMs: plan.timeoutMs });
+  const finishedAt = new Date().toISOString();
   let eventsSha256 = null; try { eventsSha256 = digest(await readFile(events)); } catch { /* Missing reporter output is incomplete evidence. */ }
-  results.push({ file, log, argv, events, eventsSha256, logSha256: digest(await readFile(log)), startedAt, finishedAt: new Date().toISOString(), scheduling: plan, ...result });
+  results.push({ file, log, argv, events, eventsSha256, logSha256: digest(await readFile(log)), startedAt, finishedAt, scheduling: plan, ...result });
   console.log(`${result.ok ? 'PASS' : 'FAIL'} ${file} (${result.durationMs}ms)${result.timedOut ? ' — file watchdog expired' : ''}`);
   if (!result.ok) console.error(result.tail);
   await writeFile(path.join(directory, 'results.json'), JSON.stringify({ schemaVersion: 2, sha, dirty, sourceStart, ...metadata, complete: false, ok: false, results }, null, 2));

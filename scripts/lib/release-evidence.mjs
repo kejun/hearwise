@@ -1,3 +1,4 @@
+import { validateSchedulerReleaseEvidence } from './scheduler-release-evidence.mjs';
 import { validatePlaybackReleaseEvidence } from './playback-release-evidence.mjs';
 import { validateProcessReleaseEvidence } from './process-release-evidence.mjs';
 import { validateQualityInfrastructureEvidence } from './quality-release-evidence.mjs';
@@ -14,6 +15,7 @@ import { validateFormalReleaseEvidence } from './formal-release-evidence.mjs';
 
 export async function readTechnicalEvidence(suite, directory, { release = true, profile = 'fast' } = {}) {
   if (!technicalSuites.includes(suite)) throw new Error('Unregistered technical evidence suite');
+  if (suite === 'scheduler') return validateSchedulerReleaseEvidence(directory, { release, requireProfile: profile });
   if (suite === 'node') return validateNodeEvidence(directory, { release });
   if (suite === 'browser') return validateBrowserEvidence(directory, { release });
   if (suite === 'playback-protocol') return validatePlaybackReleaseEvidence(directory, { release, requireProfile: profile });

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { testExecutionPlan } from './test-schedule.mjs';
 import { parseTapFooter, tapSummary } from './tap-summary.mjs';
 
 export const nodeTestArgv = (file, events) => ['--test', '--test-reporter=tap', '--test-reporter-destination=stdout',
@@ -71,5 +72,37 @@ export function validateNodeTestEvents(log, events, { entry, repositoryRoot, sou
   assert.deepEqual(actual, expected);
   assert.equal(plans.filter(event => event.data.nesting === 0).length, 1);
   assert.equal(plans.find(event => event.data.nesting === 0).data.count, footer.plan);
+  return true;
+}
+
+// Validate the observed execution intervals as well as the requested schedule.
+// Result rows arrive in completion order; source-file order defines the barriers.
+export function validateNodeTestSchedule(rows, files, { concurrency = 4 } = {}) {
+  assert.ok(Array.isArray(rows));
+  assert.deepEqual(rows.map(row => row?.file).sort(), [...files].sort(), 'missing_duplicate_or_unexpected_test_file');
+  const intervals = rows.map(row => {
+    const plan = testExecutionPlan(row.file);
+    assert.deepEqual(row.scheduling, plan, `wrong_test_execution_plan:${row.file}`);
+    const times = ['startedAt', 'finishedAt'].map(key => {
+      const value = row[key];
+      assert.ok(typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value, `invalid_test_timestamp:${row.file}:${key}`);
+      return Date.parse(value);
+    });
+    const [start, end] = times;
+    assert.ok(end >= start && Number.isSafeInteger(row.durationMs) && row.durationMs >= 0 && row.durationMs <= end - start, `invalid_test_interval:${row.file}`);
+    assert.ok(row.durationMs <= plan.timeoutMs || row.timedOut === true, `test_exceeded_file_watchdog:${row.file}`);
+    return { file: row.file, index: files.indexOf(row.file), start, end, ...plan };
+  });
+  for (const row of intervals.filter(item => item.exclusive)) {
+    for (const other of intervals) {
+      if (other.index < row.index) assert.ok(other.end <= row.start, `exclusive_test_started_before_drain:${row.file}:${other.file}`);
+      if (other.index > row.index) assert.ok(other.start >= row.end, `test_started_before_exclusive_finished:${row.file}:${other.file}`);
+    }
+  }
+  const events = intervals.filter(row => row.end > row.start).flatMap(row => [{ time: row.start, delta: 1 }, { time: row.end, delta: -1 }]);
+  events.sort((a, b) => a.time - b.time || a.delta - b.delta);
+  let active = 0;
+  for (const event of events) { active += event.delta; assert.ok(active >= 0 && active <= concurrency, 'test_concurrency_exceeded'); }
+  assert.equal(active, 0);
   return true;
 }

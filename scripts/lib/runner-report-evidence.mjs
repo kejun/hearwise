@@ -2,7 +2,8 @@ import { validatePlaybackBrowserReleaseEvidence, playbackNestedFiles } from './p
 import { validateTraceReleaseEvidence, traceNestedFiles } from './trace-release-evidence.mjs';
 import { validateNewNestedBrowserEvidence, newNestedChecks } from './new-browser-release-evidence.mjs';
 import { validateImportBrowserReleaseEvidence } from './import-browser-release-evidence.mjs';
-import { nodeTestArgv, validateNodeTestEvents } from './node-test-evidence.mjs';
+import { nodeTestArgv, validateNodeTestEvents, validateNodeTestSchedule } from './node-test-evidence.mjs';
+import { testExecutionPlan } from './test-schedule.mjs';
 import { readFile, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -47,7 +48,8 @@ export async function validateNodeEvidence(directory, { release = true } = {}) {
   const { result, report } = await header('node', directory, release); if (!report) return result;
   const expected = await findNodeTests(), rows = Array.isArray(report.results) ? report.results : [], statuses = [];
   if (!isDeepStrictEqual(rows.map(row => row?.file).sort(), expected) || report.selected !== expected.length || report.passed !== expected.length) result.reasons.push('missing_duplicate_or_unexpected_test_file');
-  result.scope = { testFiles: expected, allDiscoveredFilesRequired: true, concurrency: 4, individualTestMs: 30000, fileWatchdogMs: 90000 };
+  result.scope = { testFiles: expected, allDiscoveredFilesRequired: true, concurrency: 4, individualTestMs: 30000, executionPlan: Object.fromEntries(expected.map(file => [file, testExecutionPlan(file)])) };
+  try { validateNodeTestSchedule(rows, expected); } catch (error) { result.reasons.push(error.message); statuses.push('incomplete'); }
   result.testRows = [];
   for (const row of rows) {
     const item = { file: row?.file, status: 'incomplete' };

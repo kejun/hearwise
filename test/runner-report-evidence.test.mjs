@@ -1,6 +1,7 @@
 import { releasePlaybackFixture } from '../test-support/release-playback-fixture.mjs';
 import { traceReleaseFixture } from '../test-support/release-trace-fixture.mjs';
 import { addedNestedFixture } from '../test-support/release-added-profile-fixtures.mjs';
+import { testExecutionPlan } from '../scripts/lib/test-schedule.mjs';
 import { nodeTestArgv } from '../scripts/lib/node-test-evidence.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,7 +40,8 @@ async function nodeFixture(directory) {
       { type: 'test:plan', data: { nesting: 0, count: 1 } }, { type: 'test:summary', data: { success: true, counts, file: `/different-ci-root/checkout/${file}` } },
       { type: 'test:summary', data: { success: true, counts } }].map(row => JSON.stringify(row)).join('\n') + '\n';
     await writeFile(path.join(directory, name + '.events.ndjson'), eventLog);
-    rows.push({ file, log: `/different-ci-root/test-evidence/${name}`, events, eventsSha256: digest(eventLog), argv: nodeTestArgv(file, events), logSha256: digest(log), ...execution(log) });
+    const start = Date.UTC(2026, 9, 14) + rows.length * 2;
+    rows.push({ file, scheduling: testExecutionPlan(file), startedAt: new Date(start).toISOString(), finishedAt: new Date(start + 1).toISOString(), log: `/different-ci-root/test-evidence/${name}`, events, eventsSha256: digest(eventLog), argv: nodeTestArgv(file, events), logSha256: digest(log), ...execution(log) });
   }
   const report = { ...await aggregate(rows), executionRepositoryRoot: '/different-ci-root/checkout', selected: files.length, passed: files.length };
   await json(path.join(directory, 'results.json'), report); return report;
@@ -101,6 +103,7 @@ test('Node release reader requires every current test file and full raw logs, no
   const directory = await temporary(t), baseline = await nodeFixture(directory);
   assert.equal((await validateNodeEvidence(directory, { release: false })).ok, true);
   for (const mutate of [r => { r.results.pop(); }, r => { r.results[1] = r.results[0]; }, r => { r.results[0].argv = ['test/unrelated.test.mjs']; },
+    r => { delete r.results[0].scheduling; }, r => { r.results[0].scheduling.timeoutMs++; }, r => { r.results[0].startedAt = 'invalid'; },
     r => { r.results[0].timedOut = true; }, r => { r.results[0].signal = 'SIGTERM'; }, r => { r.tools.sqlite = 'wrong-tool'; },
     r => { r.sourceEnd.digests['public/app.js'] = '0'.repeat(64); }, r => { r.sha = '0'.repeat(40); }]) {
     const changed = structuredClone(baseline); mutate(changed); await json(path.join(directory, 'results.json'), changed);
