@@ -1,3 +1,4 @@
+import { validateUpgradeReleaseEvidence } from './upgrade-release-evidence.mjs';
 import { validateAtomicityReleaseEvidence } from './atomicity-release-evidence.mjs';
 import { validateGenerationReleaseEvidence } from './generation-release-evidence.mjs';
 import { validateNameReleaseEvidence } from './name-release-evidence.mjs';
@@ -20,6 +21,7 @@ import { validateFormalReleaseEvidence } from './formal-release-evidence.mjs';
 export async function readTechnicalEvidence(suite, directory, { release = true, profile = 'fast' } = {}) {
   if (!technicalSuites.includes(suite)) throw new Error('Unregistered technical evidence suite');
   if (suite === 'generation-protocol') return validateGenerationReleaseEvidence(directory, { release, requireProfile: profile });
+  if (suite === 'install-upgrade') return validateUpgradeReleaseEvidence(directory, { release });
   if (suite === 'import-atomicity') return validateAtomicityReleaseEvidence(directory, { release });
   if (suite === 'name-protocol') return validateNameReleaseEvidence(directory, { release, requireProfile: profile });
   if (suite === 'semantic-offline') return validateSemanticOfflineReleaseEvidence(directory, { release });

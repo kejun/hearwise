@@ -52,8 +52,8 @@ test('artifact discovery records all seventeen missing obligations and rejects a
   const execution = await runProcess(process.execPath, ['scripts/release-manifest.mjs', `--artifact-root=${directory}`, `--output=${file}`], { timeoutMs: 10000 });
   assert.equal(execution.code, 0, execution.tail);
   const manifest = JSON.parse(await readFile(file, 'utf8')); assert.deepEqual(manifest.evidence.map(row => row.suite), technicalSuites);
-  assert.equal(manifest.evidence.filter(row => row.discoveryError === 'missing_report_artifact').length, 15);
-  for (const suite of ['playback-protocol', 'scheduler', 'semantic-offline', 'import-atomicity', 'name-protocol', 'generation-protocol']) assert.equal(manifest.evidence.find(row => row.suite === suite).discoveryError, 'missing_report_artifact');
+  assert.equal(manifest.evidence.filter(row => row.discoveryError === 'missing_report_artifact').length, 16);
+  for (const suite of ['playback-protocol', 'scheduler', 'semantic-offline', 'import-atomicity', 'name-protocol', 'generation-protocol', 'install-upgrade']) assert.equal(manifest.evidence.find(row => row.suite === suite).discoveryError, 'missing_report_artifact');
   const invalid = await runProcess(process.execPath, ['scripts/release-manifest.mjs', `--artifact-root=${directory}`, `--output=${file}`, `--source=${'0'.repeat(40)}`], { timeoutMs: 10000 });
   assert.equal(invalid.code, 1);
 });

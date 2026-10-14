@@ -8,8 +8,10 @@ import { readTechnicalEvidence, releaseEvidence } from '../scripts/lib/release-e
 import { validateGenerationFinalSummary } from '../scripts/lib/generation-release-evidence.mjs';
 import { sourceVersion } from '../scripts/lib/verification-evidence.mjs';
 
-test('generation is a mandatory seventeenth suite without removing existing domain obligations', () => {
-  assert.equal(technicalSuites.length, 17);
+test('generation is a mandatory suite in the eighteen-suite union without removing existing domain obligations', () => {
+  assert.deepEqual(technicalSuites, ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval',
+    'import-protocol', 'edit-protocol', 'process-crash', 'quality-offline', 'playback-protocol', 'scheduler', 'semantic-offline',
+    'import-atomicity', 'name-protocol', 'generation-protocol', 'install-upgrade']);
   assert.equal(technicalSuites.filter(suite => suite === 'generation-protocol').length, 1);
   for (const group of ['HW-04', 'HW-10', 'HW-14', 'HW-15']) assert.ok(domainSuites[group].includes('generation-protocol'));
   assert.deepEqual(budgets['generation-protocol'], { fastMs: 2100000, deepMs: 4200000, supervisorGraceMs: 15000,
@@ -37,7 +39,7 @@ test('aggregate waits for generation and M1 while retaining all previously requi
   const release = workflow.slice(workflow.indexOf('\n  release-evidence:'));
   const needs = release.match(/\n    needs: \[([^\]]+)\]/)[1].split(',').map(value => value.trim());
   assert.deepEqual(needs, ['test', 'relation-protocol', 'knowledge-protocol', 'import-protocol', 'edit-protocol',
-    'process-crash', 'playback-protocol', 'scheduler', 'name-protocol', 'browser', 'revision', 'generation-protocol', 'm1-protocols']);
+    'process-crash', 'playback-protocol', 'scheduler', 'name-protocol', 'browser', 'revision', 'generation-protocol', 'm1-protocols', 'install-upgrade']);
 });
 
 // This isolates finalization from the existing 52-stage raw reader. A complete

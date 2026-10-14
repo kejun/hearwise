@@ -5,6 +5,7 @@
 const exclusiveFiles = new Set([
   'test/edit-consistency-evidence.test.mjs',
   'test/import-atomicity-crash.test.mjs',
+  'test/upgrade-recovery.test.mjs',
   'test/knowledge-model-guards.test.mjs',
   'test/generation-protocol-adapter.test.mjs',
   'test/generation-protocol-evidence.test.mjs',

@@ -80,7 +80,10 @@
     "verify:name-protocol": "node scripts/verify-name-protocol.mjs",
     "verify:name-protocol:report": "node scripts/verify-name-protocol-report.mjs",
     "preverify:name-browser": "npm run build",
-    "verify:name-browser": "node scripts/verify-name-protocol-browser.mjs"
+    "verify:name-browser": "node scripts/verify-name-protocol-browser.mjs",
+    "preverify:upgrade": "npm run build",
+    "verify:upgrade": "node scripts/verify-upgrade.mjs",
+    "verify:upgrade:report": "node scripts/verify-upgrade-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
