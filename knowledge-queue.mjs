@@ -136,7 +136,11 @@ export function createKnowledgeScheduler({
     try {
       // A locked finalization blocks admission, including later batches of the
       // same listening. Retry persistence with a bounded wake, without HTTP.
-      for (const [jobId, update] of failedUpdates) { finalize(update); failedUpdates.delete(jobId); }
+      for (const [jobId, update] of failedUpdates) {
+        finalize(update);
+        failedUpdates.delete(jobId);
+        notify(onIdle, update.job.listening_id);
+      }
       admitReady();
     } catch (error) {
       report(error); clearTimer(wakeTimer); wakeTimer = setTimer(pump, 1000);

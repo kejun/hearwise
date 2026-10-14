@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { ListeningStore } from '../storage.mjs';
 import { createKnowledgeScheduler, knowledgeRetryDelay } from '../knowledge-queue.mjs';
 
@@ -11,7 +12,8 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 function harness(t, options = {}) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-09-28T08:00:00Z') });
   const dir = mkdtempSync(path.join(tmpdir(), 'knowledge-queue-'));
-  const store = new ListeningStore(path.join(dir, 'test.sqlite'));
+  const filename = path.join(dir, 'test.sqlite');
+  const store = new ListeningStore(filename);
   const keys = new Map(), calls = [], changes = [], logs = [], idle = [];
   let busy = false, sequence = 0;
   const scheduler = createKnowledgeScheduler({ store, listeningIds: () => keys.keys(), keyFor: id => keys.get(id),
@@ -29,7 +31,7 @@ function harness(t, options = {}) {
   const add = (r, count = 1, text = 'AlphaFold 是本次讨论的核心系统。') => {
     for (let i = 0; i < count; i++) store.addSegment(r.listeningId, r.runId, { id: String(++sequence), text });
   };
-  return { store, scheduler, keys, calls, changes, logs, idle, run, add, setBusy: value => { busy = value; } };
+  return { store, filename, scheduler, keys, calls, changes, logs, idle, run, add, setBusy: value => { busy = value; } };
 }
 
 test('孤立最终句 1.5 秒后整理，未组批期间已经显示为待处理', async t => {
@@ -335,6 +337,113 @@ function delayedFinalization(t, h) {
   });
   return { original, writes, unlock: () => { locked = false; } };
 }
+
+test('真实 SQLite 写锁延迟孤立终态，解锁后重新通知空闲并释放 Key，不重放任务', async t => {
+  const errors = [], idle = [], released = [];
+  const h = harness(t, {
+    onError: error => errors.push(error),
+    onIdle(id) {
+      const hasWork = h.scheduler.hasWork(id);
+      idle.push({ id, hasWork });
+      if (hasWork) return;
+      const key = h.keys.get(id);
+      h.keys.delete(id);
+      if (key) released.push(key);
+      h.scheduler.pump();
+    }
+  }), r = h.run('test-key', 2);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  const job = h.calls[0].job, lock = new DatabaseSync(h.filename);
+  // Keep the production timeout unchanged; this regression only needs real BUSY.
+  h.store.db.exec('PRAGMA busy_timeout=1');
+  let locked = false;
+  try {
+    lock.exec('BEGIN IMMEDIATE'); locked = true;
+    h.calls[0].reject(new TypeError('paid response commit failed')); await settle();
+    assert.ok(errors.some(error => error.errcode === 5));
+    assert.equal(h.store.knowledgeCheckpoint(job.id).job.state, 'running');
+    assert.deepEqual(idle, [{ id: r.listeningId, hasWork: true }]);
+    assert.equal(h.keys.has(r.listeningId), true);
+    assert.deepEqual(released, []);
+    t.mock.timers.tick(999); await settle();
+    assert.equal(idle.length, 1);
+    lock.exec('ROLLBACK'); locked = false;
+    t.mock.timers.tick(1); await settle();
+    assert.equal(h.store.knowledgeCheckpoint(job.id).job.state, 'failed');
+    assert.deepEqual(idle.at(-1), { id: r.listeningId, hasWork: false });
+    assert.equal(h.keys.has(r.listeningId), false);
+    assert.deepEqual(released, ['test-key']);
+    const idleCount = idle.length;
+    h.scheduler.pump(); t.mock.timers.tick(10000); await settle();
+    assert.equal(idle.length, idleCount);
+    assert.deepEqual(released, ['test-key']);
+    assert.equal(h.calls.length, 1, 'deferred persistence must not repeat the paid task');
+  } finally {
+    if (locked) lock.exec('ROLLBACK');
+    lock.close();
+  }
+});
+
+for (const queued of ['pending', 'buffered']) test(`延迟终态通知仍观察到同会话 ${queued} 工作，不提前释放 Key`, async t => {
+  const h = harness(t, { minStartIntervalMs: 0, onError() {} }), r = h.run('test-key', 2);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  const pending = delayedFinalization(t, h);
+  h.calls[0].reject(new TypeError('paid response commit failed')); await settle();
+  h.add(r, queued === 'pending' ? 3 : 1); h.scheduler.schedule(r.listeningId);
+  const idleCount = h.idle.length;
+  pending.unlock(); t.mock.timers.tick(1000); await settle();
+  assert.equal(h.idle.length, idleCount + 1);
+  assert.deepEqual(h.idle.at(-1), { id: r.listeningId, hasWork: true });
+  assert.equal(h.calls.length, queued === 'pending' ? 2 : 1);
+  if (queued === 'buffered') { t.mock.timers.tick(500); await settle(); }
+  assert.equal(h.calls.length, 2);
+  h.calls[1].resolve(); await settle();
+  assert.deepEqual(h.idle.at(-1), { id: r.listeningId, hasWork: false });
+});
+
+test('延迟终态在错误观察者重入 pump 时仍观察到在途任务', async t => {
+  let pending;
+  const h = harness(t, { onError(error) {
+    if (error.errcode === 5) { pending.unlock(); h.scheduler.pump(); }
+  } }), r = h.run('test-key', 2);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  pending = delayedFinalization(t, h);
+  h.calls[0].reject(new TypeError('paid response commit failed')); await settle();
+  assert.deepEqual(h.idle, [{ id: r.listeningId, hasWork: true }, { id: r.listeningId, hasWork: false }]);
+  assert.equal(h.store.detail(r.listeningId).jobs[0].state, 'failed');
+  assert.equal(h.calls.length, 1);
+});
+
+test('逐会话通知已排空终态，其他会话仍锁住或空闲观察者抛错都不丢通知', async t => {
+  const errors = [], idle = [], unlocked = new Set();
+  const observerError = new Error('idle observer failed');
+  const h = harness(t, {
+    onError: error => errors.push(error),
+    onIdle(id) {
+      const hasWork = h.scheduler.hasWork(id);
+      idle.push({ id, hasWork });
+      if (id === a.listeningId && !hasWork) throw observerError;
+    }
+  }), a = h.run('a-key', 2), b = h.run('b-key', 2);
+  for (const r of [a, b]) { h.add(r, 3); h.scheduler.schedule(r.listeningId); }
+  const original = h.store.markJob.bind(h.store);
+  t.mock.method(h.store, 'markJob', (id, state, error, retryAt, guard) => {
+    if (guard && !unlocked.has(id)) throw Object.assign(new Error('database is locked'), { errcode: 5 });
+    return original(id, state, error, retryAt, guard);
+  });
+  for (const call of h.calls) call.reject(new TypeError('paid response commit failed'));
+  await settle();
+  unlocked.add(h.calls[0].job.id); t.mock.timers.tick(1000); await settle();
+  assert.deepEqual(idle.filter(entry => !entry.hasWork), [{ id: a.listeningId, hasWork: false }]);
+  assert.ok(errors.includes(observerError));
+  assert.equal(h.store.detail(a.listeningId).jobs[0].state, 'failed');
+  assert.equal(h.store.detail(b.listeningId).jobs[0].state, 'running');
+  unlocked.add(h.calls[1].job.id); t.mock.timers.tick(1000); await settle();
+  assert.deepEqual(idle.filter(entry => !entry.hasWork), [
+    { id: a.listeningId, hasWork: false }, { id: b.listeningId, hasWork: false }
+  ]);
+  assert.equal(h.calls.length, 2);
+});
 
 test('待写失败终态先于新 admission，SQLite 解锁后 timer 自动收尾而不重放已付费任务', async t => {
   const h = harness(t, { minStartIntervalMs: 0, onError() {} }), r = h.run('test-key', 2);
