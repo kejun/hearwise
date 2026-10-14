@@ -78,7 +78,9 @@
     "quality:semantic": "node scripts/evaluate-semantic-quality.mjs",
     "preverify:upgrade": "npm run build",
     "verify:upgrade": "node scripts/verify-upgrade.mjs",
-    "verify:upgrade:report": "node scripts/verify-upgrade-report.mjs"
+    "verify:upgrade:report": "node scripts/verify-upgrade-report.mjs",
+    "preverify:realtime-baseline": "npm run build",
+    "verify:realtime-baseline": "node scripts/verify-realtime-baseline.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
