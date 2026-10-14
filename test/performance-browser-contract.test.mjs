@@ -215,7 +215,8 @@ test('real import fetch Response clones remain readable when the DevTools body i
       const response = await window.fetch(base + route, { method: 'POST', body: Buffer.alloc(700000, 1), signal: AbortSignal.timeout(2000) });
       received.resolve(wire);
       const originalBody = await response.json();
-      assert.deepEqual(await captured, { status: 200, body: originalBody });
+      const observed = await captured; assert.equal(observed.status, 200); assert.deepEqual(observed.body, originalBody);
+      assert.deepEqual(observed.observation, { wire: { url: base + route, method: 'POST', status: 200 }, entry: window.__importProtocolResponses.find(entry => entry.url === base + route) });
       assert.equal(originalBody.bytes, 700000, 'The genuine upload was delivered once, with no refetch');
     }
     assert.equal(requests, 2);
@@ -234,7 +235,30 @@ test('import response observation rejects duplicate, mismatched and missing real
     waitForResponse: async () => ({ url: () => url, status: () => 409 }),
     waitForFunction: async () => {}, evaluate: async () => entries
   }, '/api/data/import/commit');
-  assert.deepEqual(await run([baseline]), { status: 409, body: { error: 'stale' } });
+  assert.deepEqual(await run([baseline]), { status: 409, body: { error: 'stale' }, observation: { wire: { url, method: 'POST', status: 409 }, entry: baseline } });
   for (const entries of [[], [baseline, baseline], [{ ...baseline, status: 200 }], [{ ...baseline, url: url + '?wrong=1' }],
     [{ ...baseline, done: false }], [{ ...baseline, error: 'stream failed' }], [{ url, status: 409, done: true }]]) await assert.rejects(run(entries));
+});
+
+test('saved import wire and clone records independently reproduce both summaries', async () => {
+  const { validateImportResponseObservations } = await import('../test-support/performance-browser.mjs');
+  const m = manifest(), preview = { mode: 'append', addedCount: 1, skippedCount: 0, previewToken: 'synthetic-preview-token' },
+    result = { mode: 'append', addedCount: 1, listeningCount: 1, changed: true };
+  const responses = ['/api/data/import/validate?mode=append', '/api/data/import/commit'].map((endpoint, index) => {
+    const url = new URL(endpoint, m.baseUrl).href;
+    return { wire: { url, method: 'POST', status: 200 }, entry: { url, done: true, status: 200, body: index ? result : preview } };
+  });
+  const baseline = { responses, preview: { mode: 'append', addedCount: 1, skippedCount: 0, hasPreviewToken: true }, result };
+  assert.equal(validateImportResponseObservations(baseline, m), true);
+  const mutations = [
+    v => { delete v.responses; }, v => { v.responses.pop(); }, v => { v.responses[1] = v.responses[0]; },
+    v => { v.responses.reverse(); }, v => { v.responses[0].wire.method = 'GET'; },
+    v => { v.responses[0].wire.url += '&wrong=1'; }, v => { v.responses[1].entry.url += '?wrong=1'; },
+    v => { v.responses[0].wire.status = v.responses[0].entry.status = 500; },
+    v => { v.responses[0].entry.done = false; }, v => { v.responses[0].entry.error = 'body read failed'; },
+    v => { delete v.responses[0].entry.body; }, v => { v.responses[0].entry.body.addedCount = 0; },
+    v => { v.responses[1].entry.body.changed = false; }, v => { v.preview.skippedCount = 1; },
+    v => { v.result.listeningCount = 2; }, v => { v.responses[0].entry.body.previewToken = ''; }
+  ];
+  for (const mutate of mutations) { const value = structuredClone(baseline); mutate(value); assert.throws(() => validateImportResponseObservations(value, m), mutate.toString()); }
 });

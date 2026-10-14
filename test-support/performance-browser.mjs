@@ -481,7 +481,7 @@ export function captureJsonResponse(page, pathname) {
       const entry = entries[0]; assert.equal(entry.done, true); assert.equal(entry.url, response.url()); assert.equal(entry.status, response.status());
       assert.equal(entry.error, undefined, `Import response body observation failed: ${entry.error}`);
       assert.ok(Object.hasOwn(entry, 'body'), 'Missing real import response body');
-      return { status: entry.status, body: entry.body };
+      return { status: entry.status, body: entry.body, observation: { wire: { url: response.url(), method: 'POST', status: response.status() }, entry } };
     });
   captured.catch(() => {}); // The owner awaits the original promise after input.
   return captured;
@@ -494,18 +494,18 @@ async function importOnce(state) {
     const { page } = session;
     await page.locator('#settings-trigger').click(); await page.locator('#tab-data-button').click(); await page.locator('#data-import-append').check();
     const validated = captureJsonResponse(page, '/api/data/import/validate');
-    await page.locator('#data-import-file').setInputFiles(m.import.file); const { status: previewStatus, body: preview } = await validated;
+    await page.locator('#data-import-file').setInputFiles(m.import.file); const { status: previewStatus, body: preview, observation: previewObservation } = await validated;
     assert.equal(previewStatus, 200); assert.equal(preview.mode, 'append'); assert.equal(preview.addedCount, 1); assert.ok(preview.previewToken);
     await page.locator('#data-import-summary').filter({ hasText: '新增 1 条' }).waitFor();
     const committed = captureJsonResponse(page, '/api/data/import/commit');
     page.once('dialog', async dialog => { if (dialog.type() === 'confirm' && dialog.message().includes('将新增 1 条收听')) await dialog.accept(); else await dialog.dismiss(); });
-    await page.locator('#data-import-confirm').click(); const { status: commitStatus, body: result } = await committed;
+    await page.locator('#data-import-confirm').click(); const { status: commitStatus, body: result, observation: commitObservation } = await committed;
     assert.equal(commitStatus, 200); assert.equal(result.mode, 'append'); assert.equal(result.addedCount, 1); assert.equal(result.listeningCount, m.import.addedCount, 'Imported backup record count, not destination total');
     await page.locator('#data-transfer-status').filter({ hasText: '追加完成：新增 1 条' }).waitFor();
     const reload = page.waitForEvent('load'); await page.locator('#close-settings').click(); await reload;
     const historyResponses = []; await openHistory(page, m, historyResponses, 1, true);
     assert.ok(historyResponses[0].projection.items.some(item => item.id === m.import.record.id), 'Imported record read back through real history response');
-    report.import = { status: 'collected', count: 1, inputSha256: hash(bytes), addedCount: result.addedCount, expectedTotal: m.import.expectedTotal,
+    report.import = { status: 'collected', responses: [previewObservation, commitObservation], count: 1, inputSha256: hash(bytes), addedCount: result.addedCount, expectedTotal: m.import.expectedTotal,
       preview: { mode: preview.mode, addedCount: preview.addedCount, skippedCount: preview.skippedCount, hasPreviewToken: Boolean(preview.previewToken) },
       result: { mode: result.mode, addedCount: result.addedCount, listeningCount: result.listeningCount, changed: result.changed },
       historyResponse: historyResponses[0], reloadedOnClose: true, responseObservation: 'genuine-fetch-response-clone-bound-to-POST-wire-event', timingScope: 'One real UI append per isolated database, outside repeated read-only post-import samples.' };
@@ -628,6 +628,23 @@ export function assertSampleReadiness(phase, sample, m) {
   return true;
 }
 
+export function validateImportResponseObservations(imported, manifest) {
+  assert.ok(Array.isArray(imported.responses)); assert.equal(imported.responses.length, 2);
+  const bodies = imported.responses.map(({ wire, entry }, index) => {
+    const endpoint = index === 0 ? '/api/data/import/validate?mode=append' : '/api/data/import/commit';
+    assert.deepEqual(wire, { url: new URL(endpoint, manifest.baseUrl).href, method: 'POST', status: 200 });
+    assert.equal(entry.url, wire.url); assert.equal(entry.status, wire.status); assert.equal(entry.done, true); assert.equal(entry.error, undefined);
+    assert.ok(entry.body && typeof entry.body === 'object' && !Array.isArray(entry.body)); return entry.body;
+  });
+  const [preview, result] = bodies;
+  assert.deepEqual(imported.preview, { mode: preview.mode, addedCount: preview.addedCount, skippedCount: preview.skippedCount,
+    hasPreviewToken: typeof preview.previewToken === 'string' && preview.previewToken.length > 0 });
+  assert.deepEqual(imported.result, { mode: result.mode, addedCount: result.addedCount, listeningCount: result.listeningCount, changed: result.changed });
+  assert.equal(preview.mode, 'append'); assert.equal(preview.addedCount, 1); assert.equal(preview.skippedCount, 0); assert.equal(imported.preview.hasPreviewToken, true);
+  assert.equal(result.mode, 'append'); assert.equal(result.addedCount, 1); assert.equal(result.listeningCount, manifest.import.addedCount); assert.equal(result.changed, true);
+  return true;
+}
+
 export function validateBrowserEvidence(report, manifest) {
   const errors = [], check = (label, work) => { try { work(); } catch (error) { errors.push(`${label}: ${error.message}`); } };
   check('manifest', () => validateBrowserManifest(manifest));
@@ -670,6 +687,7 @@ export function validateBrowserEvidence(report, manifest) {
     });
   }
   check('import', () => {
+    validateImportResponseObservations(report.import, manifest);
     assert.equal(report.import.status, 'collected'); assert.equal(report.import.responseObservation, 'genuine-fetch-response-clone-bound-to-POST-wire-event'); assert.equal(report.import.count, 1); assert.equal(report.import.inputSha256, manifest.import.sha256);
     assert.equal(report.import.addedCount, 1); assert.equal(report.import.expectedTotal, manifest.import.expectedTotal);
     assert.equal(report.import.preview.hasPreviewToken, true); assert.equal(report.import.result.mode, 'append');
