@@ -15,7 +15,7 @@ export const atomicityCases = ['append', 'replace'].flatMap(mode => [
 export const caseId = row => [row.mode, row.kind, row.boundary || row.fault].join('/');
 export async function atomicityScenario(config, observation = {}) {
   const fixture = await importAtomicityFixture();
-  let writer, pending;
+  let writer, pending, primaryError;
   Object.assign(observation, { id: caseId(config), ...config, snapshots: [], complete: false, ok: false });
   const snapshot = label => { const database = fixture.snapshot(); observation.snapshots.push({ label, database }); return database; };
   try {
@@ -95,13 +95,17 @@ export async function atomicityScenario(config, observation = {}) {
     if (config.kind !== 'negative') observation.usable = await fixture.assertUsable();
     assert.equal(fixture.calls.length, 0);
     observation.complete = observation.ok = true;
-  } catch (error) { observation.error = { name: error.name, message: error.message }; throw error; }
+  } catch (error) { primaryError = error; observation.error = { name: error.name, message: error.message }; throw error; }
   finally {
     if (writer) { writer.exec('ROLLBACK'); writer.close(); }
     observation.runtimes = await fixture.runtimes(); observation.events = await fixture.events(); observation.lifecycle = [...fixture.lifecycle]; observation.providerCalls = [...fixture.calls];
     observation.logs = fixture.logs();
     try { await fixture.close(); observation.cleanup = { ok: true }; }
-    catch (error) { observation.cleanup = { ok: false, message: error.message }; observation.complete = observation.ok = false; throw error; }
+    catch (error) { observation.cleanup = { ok: false, message: error.message }; observation.complete = observation.ok = false; throw atomicityCleanupError(primaryError, error); }
   }
   return observation;
+}
+
+export function atomicityCleanupError(primaryError, cleanupError) {
+  return cleanupError;
 }

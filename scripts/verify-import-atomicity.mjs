@@ -4,7 +4,8 @@ import os from 'node:os';
 import { runProcess } from './lib/process.mjs';
 import { atomicityChecks, atomicityRegressionTap } from '../test-support/import-atomicity-contract.mjs';
 import { writeJson } from './lib/verification-evidence.mjs';
-import { atomicitySource, atomicityVersion, hash, atomicityEvidenceControls } from '../test-support/import-atomicity-evidence.mjs';
+import { atomicitySource, atomicityVersion, hash } from '../test-support/import-atomicity-evidence.mjs';
+import { collectAtomicityControls } from './lib/import-atomicity-controls.mjs';
 import { readAtomicityReport } from './lib/import-atomicity-report.mjs';
 const args = process.argv.slice(2);
 if (args.some(arg => !['--node-only', '--release'].includes(arg))) throw new Error('Usage: verify:import-atomicity [--node-only] [--release]');
@@ -34,10 +35,7 @@ try {
   }
 } catch (error) { report.error = { name: error.name, message: error.message }; }
 finally { await rm(temporary, { recursive: true, force: true }); report.cleanupOk = true; }
-try {
-  const raw = JSON.parse(await readFile(path.join(directory, 'observations.json'), 'utf8'));
-  await writeJson(path.join(directory, 'controls.json'), atomicityEvidenceControls(raw));
-} catch (error) { report.error ||= { name: error.name, message: error.message }; }
+await collectAtomicityControls(directory, report);
 report.sourceEnd = await atomicitySource(); report.finishedAt = new Date().toISOString();
 const files = ['observations.json', 'controls.json', ...report.checks.map(check => check.log)];
 if (!nodeOnly) {
