@@ -32,6 +32,9 @@ export function importedInvalidAnchors(directory) {
       assert.equal(preview.databaseVersion, 12);
       if (mode === 'append') appendDatabase(current, `${prefix}-import.sqlite`, `${prefix}-safety.sqlite`);
       else restoreDatabase(current, `${prefix}-import.sqlite`, `${prefix}-safety.sqlite`);
+      // Normalize the constructor's transient relation-waiting flag before
+      // taking the transaction baseline, then verify another reopen is stable.
+      current.close(); current = new ListeningStore(`${prefix}-current.sqlite`);
       const read = () => ({ ...current.db.prepare('SELECT start,end,quote,state FROM relation_supports WHERE id=?').get(row.id) });
       assert.deepEqual(read(), before, 'the malformed active anchor reaches the public replacement through import');
       const initial = snapshot(current), receiptId = randomUUID();
