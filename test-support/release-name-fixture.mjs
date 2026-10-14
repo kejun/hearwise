@@ -36,13 +36,14 @@ export async function releaseNameBrowserFixture(directory) {
   for (const file of nameBrowserAssets.filter(name => name.endsWith('.png'))) await writeFile(path.join(directory, file), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   const observations = { checks, sourceStart: source, sourceEnd: source, browser, mutation, executionContext: origin };
   const hash = async names => Promise.all(names.map(async file => ({ path: file, sha256: digest(await readFile(path.join(directory, file))) })));
-  const report = { ...context, profile: 'name-protocol-browser', startedAt: time, finishedAt: time, complete: true, ok: true };
+  const finishedAt = new Date(Date.parse(time) + checks.reduce((sum, row) => sum + row.execution.durationMs, 0)).toISOString();
+  const report = { ...context, profile: 'name-protocol-browser', startedAt: time, finishedAt, complete: true, ok: true };
   const save = async (value = observations) => {
     await writeJson(path.join(directory, 'browser.json'), value.browser); value.attachments = await hash(nameBrowserAssets);
     await writeJson(path.join(directory, 'observations.json'), value);
     await writeFile(path.join(directory, 'worker.log'), (await Promise.all(value.checks.map(async row => `CHECK ${row.name}\n${await readFile(path.join(directory, row.name + '.log'), 'utf8')}`))).join('\n'));
     const artifacts = await hash(['observations.json', 'worker.log']);
-    report.results = nameProperties.map(property => ({ ...context, property: { id: property.id, version: property.version }, startedAt: time, finishedAt: time,
+    report.results = nameProperties.map(property => ({ ...context, property: { id: property.id, version: property.version }, startedAt: time, finishedAt,
       status: 'passed', complete: true, scope: { description: 'Synthetic UI packaging, actual loopback HTTP below', scenario: 'name-http-browser', samples: 1, seed: null }, artifacts }));
     Object.assign(report, summarizeChecks({ results: report.results, checks: value.checks, target: context.source, required: nameProfile, release: false,
       sourceStable: true, expectedChecks: nameBrowserChecks.map(row => row.name), checksForProperty: () => nameBrowserChecks.map(row => row.name), artifactsValid: report.results.map(() => true) }));

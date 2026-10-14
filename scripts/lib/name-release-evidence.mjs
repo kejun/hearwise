@@ -26,6 +26,8 @@ export async function validateNameReleaseContract(report, directory) {
   for (const row of report.artifacts) assert.ok(files.has(row.path), 'missing_name_artifact');
   for (const [index, row] of report.results.entries()) {
     assert.equal(validateNameCommand(row, plan[index], config, origin.evidenceDirectory, binding, origin), true, `wrong_name_command:${row.id}`);
+    assert.equal(row.execution.ok, row.execution.code === 0, `contradictory_name_exit:${row.id}`);
+    assert.ok(row.execution.durationMs <= Date.parse(row.finishedAt) - Date.parse(row.startedAt), `wrong_name_stage_duration:${row.id}`);
   }
   const regression = report.results.find(row => row.id === 'driver-regressions');
   assert.equal(regression.log, 'driver-regressions.log');
@@ -69,9 +71,11 @@ export async function validateNameBrowserReleaseEvidence(directory, { release = 
     }
     for (const check of observations.checks) {
       const e = check.execution; assert.ok(!e.error, 'name_browser_process_error');
-      assert.ok(Number.isSafeInteger(e.durationMs) && e.durationMs >= 0 && e.durationMs <= e.timeoutMs + 1500, 'wrong_name_browser_duration');
+      assert.ok(Number.isSafeInteger(e.timeoutMs) && Number.isSafeInteger(e.durationMs) && e.durationMs >= 0 && e.durationMs <= e.timeoutMs + 1500, 'wrong_name_browser_duration');
       if (check.name === 'http') { assert.equal(e.testComplete, true); assert.equal(e.testCount, (await nameHttpRoster()).length); }
     }
+    assert.ok(observations.checks.reduce((sum, row) => sum + row.execution.durationMs, 0) <=
+      Date.parse(report.finishedAt) - Date.parse(report.startedAt), 'name_browser_children_exceed_report_interval');
     const files = await evidenceFiles(directory); for (const file of nameNestedFiles) assert.ok(files.includes(file), `missing_name_browser_asset:${file}`);
     const artifactsValid = await Promise.all(report.results.map(row => checkNameEvidence(directory, row)));
     const { execution, summary } = summarizeChecks({ results: report.results, checks: observations.checks, target: context.source, required: nameProfile,

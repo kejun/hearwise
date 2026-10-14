@@ -22,7 +22,7 @@ async function formalFixture(t) {
     const startedAt = time(index * 10), start = Date.parse(startedAt), log = stage.id + '.log';
     report.results.push({ ...stage, log, startedAt, finishedAt: time(index * 10 + 1), inputStart: binding, inputEnd: binding,
       invocation: nameStageCommand(stage, config, origin.evidenceDirectory, ['finite-state-complete', 'bounded-model-check', 'model-negative'].includes(stage.kind) ? '127.0.0.1:12345' : null, origin),
-      execution: { code: 0, signal: null, timedOut: false, interrupted: false, durationMs: 1, cleanupComplete: true, startedAt,
+      execution: { code: 0, ok: true, signal: null, timedOut: false, interrupted: false, durationMs: 1, cleanupComplete: true, startedAt,
         budget: { timeoutMs: stage.timeoutMs, deadlineAt: start + stage.timeoutMs, childDeadlineAt: start + stage.timeoutMs - 1500 } } });
     await writeFile(path.join(directory, log), stage.kind === 'implementation-regression' ? nameContractTap(nameDriverRoster) : 'SYNTHETIC CONTRACT ONLY; no formal execution.\n');
     report.artifacts.push({ path: log });
@@ -53,6 +53,7 @@ test('name release contract binds portable 23-stage commands and all 52 TAP test
     ['wrong output command', r => { r.results.find(row => row.kind === 'simulation').invocation.argv.pop(); }],
     ['missing stage', r => { r.results.pop(); }], ['changed input', r => { r.results[0].inputEnd = { ...r.results[0].inputEnd, modelDigest: 'wrong' }; }],
     ['wrong budget', r => { r.results[0].invocation.timeoutMs++; }], ['reset deadline', r => { r.results[0].execution.budget.childDeadlineAt++; }],
+    ['contradictory exit', r => { r.results[0].execution.ok = false; }], ['impossible stage duration', r => { r.results[0].execution.durationMs = 2; }],
     ['cleanup failed', r => { r.results[0].execution.cleanupComplete = false; }], ['incomplete native process', r => { r.results[0].execution.signal = 'SIGTERM'; }]
   ]) { const changed = structuredClone(report); mutate(changed); await assert.rejects(validateNameReleaseContract(changed, directory), undefined, label); }
   const file = path.join(directory, 'driver-regressions.log'), raw = await readFile(file, 'utf8');
@@ -69,6 +70,7 @@ test('name nested release reader rechecks full source/assets/HTTP/client/table d
     ['wrong executable', o => { o.executionContext.executable = '/tmp/not-node'; for (const c of o.checks) c.execution.command[0] = '/tmp/not-node'; }],
     ['wrong cwd', o => { o.checks[0].execution.cwd = '/other'; }], ['wrong output', o => { o.checks[1].execution.command[2] = '/other/run'; }],
     ['wrong root', o => { o.executionContext.evidenceDirectory += '-other'; }], ['wrong budget', o => { o.checks[0].execution.configuredTimeoutMs++; }],
+    ['children exceed aggregate', o => { o.checks[0].execution.durationMs = 29000; o.checks[1].execution.durationMs = 100000; }],
     ['process error', o => { o.checks[0].execution.error = 'failure'; }], ['invalid process duration', o => { o.checks[0].execution.durationMs = -1; }],
     ['false test count', o => { o.checks[0].execution.testCount++; }], ['missing check', o => { o.checks.pop(); }], ['missing observation', o => { o.browser.widths[1].results.pop(); }],
     ['wrong HTTP', o => { o.browser.widths[0].results[0].requests[0].body.revision = '0'.repeat(64); }],
