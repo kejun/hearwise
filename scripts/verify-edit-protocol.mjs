@@ -5,7 +5,7 @@ import { runEditProtocolCommand } from './lib/edit-protocol-command.mjs';
 import { digest, writeJson } from './lib/verification-evidence.mjs';
 import { checkProtocolTools, quintCli, quintHome, toolchain } from './lib/relation-protocol-tools.mjs';
 import { editConfig, editModelRoot, editProtocolMetadata, editProtocolPlan, editProtocolCoverage, editConfiguration,
-  checkerConclusion, validateEditProtocolEvidence } from './lib/edit-protocol-evidence.mjs';
+  editStageConclusion, validateEditProtocolEvidence } from './lib/edit-protocol-evidence.mjs';
 import { normalizeEditTrace, replayEditTrace, expectedEditMutationViolation } from './lib/edit-protocol-replay.mjs';
 
 const args = process.argv.slice(2);
@@ -39,7 +39,7 @@ async function command(id, kind, argv, { timeoutMs = 60000, bound } = {}) {
   const env = { ...process.env, QUINT_HOME: quintHome, JVM_ARGS: '-Xmx2G' }; delete env.NODE_TEST_CONTEXT;
   const execution = await runEditProtocolCommand(process.execPath, argv, { kind, repositoryRoot, evidenceDirectory: directory,
     env, timeoutMs, graceMs: 1500, logFile });
-  const log = await readFile(logFile, 'utf8'), conclusion = checkerConclusion(kind, execution, log, bound);
+  const log = await readFile(logFile, 'utf8'), conclusion = editStageConclusion(id, kind, execution, log, config, bound);
   const { tail: _tail, ...processResult } = execution;
   const row = { id, kind, startedAt, finishedAt: new Date().toISOString(), complete: conclusion.complete,
     status: conclusion.ok ? 'passed' : conclusion.complete ? 'failed' : 'incomplete', execution: processResult,

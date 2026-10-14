@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runEditProtocolCommand } from '../scripts/lib/edit-protocol-command.mjs';
 import { editTraceContract, decodeEditITF, normalizeEditTrace, validateEditProjection, replayEditTrace, expectedEditMutationViolation } from '../scripts/lib/edit-protocol-replay.mjs';
-import { editConfig, editProtocolMetadata, editProtocolPlan, editProtocolCoverage, checkerConclusion, validateEditProtocolEvidence } from '../scripts/lib/edit-protocol-evidence.mjs';
-import { writeJson } from '../scripts/lib/verification-evidence.mjs';
+import { editConfig, editProtocolMetadata, editProtocolPlan, editProtocolCoverage, checkerConclusion, editStageConclusion, validateEditProtocolEvidence } from '../scripts/lib/edit-protocol-evidence.mjs';
+import { digest, writeJson } from '../scripts/lib/verification-evidence.mjs';
+const tapLog = ({ tests = 8, passed = tests, failed = 0, skipped = 0 } = {}) =>
+  `TAP version 13\n1..${tests}\n# tests ${tests}\n# suites 0\n# pass ${passed}\n# fail ${failed}\n# cancelled 0\n# skipped ${skipped}\n# todo 0\n# duration_ms 1\n`;
 const config = { clients: 1, codecs: { 0: 'v1' }, initialOverride: false, background: true };
 function initial() {
   const value = { revision: 0, name: 0, override: false, serverOwner: -1, backgroundDone: false };
@@ -68,7 +70,7 @@ test('model-negative acceptance requires its intended invariant, not merely an e
   const resend = { ...loaded(), requests: { 0: 2 }, userSaves: { 0: 1 } };
   assert.equal(expectedEditMutationViolation('mutant_auto_revision_resend', raw([{ value: initial() }, { value: resend, action: 'automatic_resend', actor: 0 }]), config).ok, true);
 });
-test('formal completion needs genuine complete logs, bounded depth, and strict unambiguous TAP footer', () => {
+test('formal completion needs genuine complete logs, bounded depth, and strict unambiguous TAP footer', async () => {
   const execution = { code: 0, signal: null, timedOut: false, interrupted: false };
   const tlc = 'Model checking completed. No error has been found.\n100 states generated, 80 distinct states found, 0 states left on queue.\nThe depth of the complete state graph search is 24.';
   assert.equal(checkerConclusion('finite-state-complete', execution, tlc).ok, true);
@@ -79,6 +81,16 @@ test('formal completion needs genuine complete logs, bounded depth, and strict u
   assert.equal(checkerConclusion('implementation-regression', execution, footer).ok, true);
   assert.equal(checkerConclusion('implementation-regression', execution, '# pass 9\n' + footer).ok, false);
   assert.equal(checkerConclusion('model-negative', { ...execution, code: 1 }, 'Parser failure').ok, false);
+  const domain = await editConfig(); assert.equal(domain.driverRegressions.expectedTestCount, 8);
+  const stage = (log, actualExecution = execution) => editStageConclusion('driver-regressions', 'implementation-regression', actualExecution, log, domain);
+  assert.equal(stage(tapLog()).ok, true); assert.equal(stage(tapLog()).complete, true);
+  for (const log of [tapLog({ tests: 1 }), tapLog({ tests: 7 }), tapLog({ tests: 9 }),
+    tapLog({ passed: 7, skipped: 1 }), 'TAP version 13\nok 1 - missing footer\n']) {
+    assert.equal(stage(log).ok, false); assert.equal(stage(log).complete, false);
+  }
+  for (const actualExecution of [{ ...execution, code: 1 }, { ...execution, signal: 'SIGTERM' },
+    { ...execution, timedOut: true }, { ...execution, interrupted: true }]) assert.equal(stage(tapLog(), actualExecution).ok, false);
+
 });
 test('evidence gate rejects cached passing claims with absent results, stale source and missing raw artifacts', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'hearwise-edit-gate-unit-'));
@@ -92,6 +104,24 @@ test('evidence gate rejects cached passing claims with absent results, stale sou
   assert.equal(summary.ok, false); assert.ok(summary.reasons.includes('stale')); assert.ok(summary.reasons.includes('missing_artifact'));
   assert.equal(summary.rows.length, editProtocolPlan(domain).length); assert.ok(summary.rows.every(row => row.status === 'not_run'));
   assert.equal(summary.fullProjectAcceptance, false);
+  // Only this isolated stage is populated; the aggregate must still reject the
+  // missing formal/replay plan. Cached stage metrics cannot replace raw TAP.
+  for (const [log, passed] of [[tapLog(), true], [tapLog({ tests: 1 }), false], [tapLog({ tests: 7 }), false],
+    [tapLog({ passed: 7, skipped: 1 }), false], ['TAP version 13\nok 1 - missing footer\n', false]]) {
+    await writeFile(path.join(directory, 'driver.log'), log);
+    await writeJson(path.join(directory, 'report.json'), { ...context, startedAt: now, finishedAt: now, config: domain,
+      propertyCoverage: editProtocolCoverage(domain), ok: true, complete: true,
+      execution: { complete: true, code: 0, signal: null, timedOut: false, interrupted: false },
+      results: [{ id: 'driver-regressions', kind: 'implementation-regression', startedAt: now, finishedAt: now,
+        status: 'passed', complete: true, log: 'driver.log', metrics: { tests: 8, passed: 8 },
+        execution: { code: 0, signal: null, timedOut: false, interrupted: false } }],
+      artifacts: [{ path: 'driver.log', sha256: digest(log) }] });
+    const result = await validateEditProtocolEvidence(directory), driver = result.rows.find(row => row.id === 'driver-regressions');
+    assert.equal(result.ok, false, 'Missing stages cannot become an aggregate pass');
+    assert.equal(driver.status === 'passed', passed);
+    if (!passed) assert.ok(driver.reasons.includes('raw_check_not_passed'));
+  }
+
 });
 
 // Exercise the same launcher as the formal runner without invoking a checker.

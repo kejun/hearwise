@@ -48,6 +48,17 @@ const validInterval = row => typeof row?.startedAt === 'string' && typeof row?.f
 const execComplete = execution => execution?.timedOut === false && execution?.interrupted === false &&
   execution?.signal === null && Number.isInteger(execution?.code);
 export { checkerConclusion };
+// Bind this stage to the checked-in suite size without weakening the shared
+// parser or its execution-exit, signal, interruption and timeout requirements.
+export function editStageConclusion(id, kind, execution, log, config, bound) {
+  const conclusion = checkerConclusion(kind, execution, log, bound);
+  if (id !== 'driver-regressions') return conclusion;
+  const expectedTestCount = config.driverRegressions?.expectedTestCount;
+  const countMatches = Number.isSafeInteger(expectedTestCount) && expectedTestCount > 0 &&
+    conclusion.metrics?.tests === expectedTestCount;
+  return { ...conclusion, ok: conclusion.ok && countMatches, complete: conclusion.complete && countMatches,
+    metrics: { ...conclusion.metrics, expectedTestCount } };
+}
 
 // Every pass is recomputed from the checked-in plan, source identity and raw
 // logs/traces/observations. Missing, stale, interrupted and edited evidence fails.
@@ -90,7 +101,7 @@ export async function validateEditProtocolEvidence(directory, { release = false 
     const main = row.id.replace(/^(tlc|bounded|simulation|witnesses|negative)-/, '');
     if (!['implementation-replay', 'implementation-negative'].includes(row.kind) && log != null) {
       const bound = config.configurations.find(item => item.main === main)?.apalacheDepth;
-      if (!checkerConclusion(row.kind, result.execution, log, bound).ok) row.reasons.push('raw_check_not_passed');
+      if (!editStageConclusion(row.id, row.kind, result.execution, log, config, bound).ok) row.reasons.push('raw_check_not_passed');
       if (row.kind === 'bounded-model-check' && result.bound !== bound) row.reasons.push('wrong_bound');
       if (row.kind === 'simulation' && !isDeepStrictEqual(result.parameters, config.simulation)) row.reasons.push('wrong_simulation_parameters');
     }

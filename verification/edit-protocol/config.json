@@ -95,5 +95,8 @@
       "Liveness under unavailable network"
     ],
     "liveness": "Safety and finite reachable witnesses only. Eventual completion would additionally require fair transaction/response scheduling and successful recovery reads."
+  },
+  "driverRegressions": {
+    "expectedTestCount": 8
   }
 }
