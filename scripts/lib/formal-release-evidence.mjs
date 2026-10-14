@@ -14,7 +14,7 @@ import { tapSummary, parseTapFooter } from './tap-summary.mjs';
 
 const definitions = { 'relation-protocol': relationEvidenceDefinition, 'knowledge-protocol': knowledgeEvidenceDefinition, 'import-protocol': importEvidenceDefinition };
 const regressions = { 'import-protocol': { files: ['test/import-protocol-http.test.mjs', 'test/import-protocol-replay.test.mjs', 'test/import-protocol-evidence.test.mjs'], count: 42 }, 'relation-protocol': { files: ['test/relation-protocol-replay.test.mjs'], count: 14 },
-  'knowledge-protocol': { files: ['test/knowledge-protocol-replay.test.mjs', 'test/model-trace-driver.test.mjs'], count: 24 } };
+  'knowledge-protocol': { files: ['test/knowledge-protocol-replay.test.mjs', 'test/knowledge-model-guards.test.mjs', 'test/model-trace-driver.test.mjs'], count: 25 } };
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
 export async function regressionNames(file) {
   const source = await readFile(file, 'utf8');
@@ -49,6 +49,15 @@ export async function validateFormalRegression(kind, log) {
       assert.ok(source.includes("for (const response of ['empty', 'filtered']) await t.test(response,"));
       assert.ok(source.includes("await t.test('no candidates',"));
       validateTapTree(log, names.map(name => ({ name, children: name === parent ? ['empty', 'filtered', 'no candidates'] : [] })));
+    } else if (kind === 'knowledge-protocol') {
+      const children = new Map([
+        ['empty and unrepairable outputs never request a correction or destroy existing knowledge', ['empty', 'unrepairable']],
+        ['failed extract and repair reservations roll back durable occupancy with zero new provider calls', ['extract', 'repair']],
+        ['response then SQLite commit failure uses the actual scheduler failure path without replaying the request', ['extract', 'repair']],
+        ['the actual scheduler blocks early repair and cross-part cooldown admission at exact persisted deadlines', ['part interval', 'repair rate limit', 'long repair rate limit']]
+      ]);
+      for (const name of children.keys()) assert.equal(names.filter(value => value === name).length, 1);
+      validateTapTree(log, names.map(name => ({ name, children: children.get(name) || [] })));
     } else validateFlatTap(log, names);
     return true;
 }

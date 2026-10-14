@@ -83,3 +83,21 @@ test('relation regression reader accepts the real 11-root/3-child TAP tree and r
     assert.notEqual(bad, stdout); await assert.rejects(validateFormalRegression('relation-protocol', bad));
   }
 });
+
+test('knowledge regression reader binds all three actual files and the 16-root/9-child TAP tree', { timeout: 30000 }, async () => {
+  const { execFile } = await import('node:child_process'), { promisify } = await import('node:util');
+  const files = ['test/knowledge-protocol-replay.test.mjs', 'test/knowledge-model-guards.test.mjs', 'test/model-trace-driver.test.mjs'];
+  const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+  const { stdout } = await promisify(execFile)(process.execPath, ['--test', '--test-reporter=tap', '--test-timeout=20000', ...files], { env, timeout: 25000, maxBuffer: 2 * 1024 * 1024 });
+  assert.equal(await validateFormalRegression('knowledge-protocol', stdout), true);
+  for (const bad of [stdout.replace('    ok 1 - empty', '    not ok 1 - empty'), stdout.replace('    ok 2 - repair', '    ok 2 - unrelated'), stdout.replace('    ok 3 - long repair rate limit', ''), stdout.replace('ok 1 - knowledge model rejects', 'ok 2 - knowledge model rejects')]) {
+    assert.notEqual(bad, stdout); await assert.rejects(validateFormalRegression('knowledge-protocol', bad));
+  }
+  const repositoryRoot = '/original/knowledge/checkout', evidenceDirectory = '/original/evidence/run-knowledge';
+  const report = { profile: 'fast', tools: { node: process.version, sqlite: process.versions.sqlite },
+    executionContext: { repositoryRoot, evidenceDirectory, quintCli: repositoryRoot + '/node_modules/@informalsystems/quint/dist/src/cli.js', overallTimeoutMs: 480000, jvmArgs: '-Xmx2G' },
+    results: [{ id: 'implementation-regressions', kind: 'implementation-regression', timeoutMs: 60000, expectedFailure: false,
+      execution: { code: 0, ok: true }, argv: ['--test', '--test-reporter=tap', '--test-timeout=30000', ...files.map(file => repositoryRoot + '/' + file)] }] };
+  assert.equal(await formalCommandContract('knowledge-protocol', report), true);
+  report.results[0].argv.splice(4, 1); await assert.rejects(formalCommandContract('knowledge-protocol', report));
+});
