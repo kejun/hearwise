@@ -74,6 +74,8 @@
     "verify:name-protocol:report": "node scripts/verify-name-protocol-report.mjs",
     "preverify:name-browser": "npm run build",
     "verify:name-browser": "node scripts/verify-name-protocol-browser.mjs",
+    "preverify:user-journey": "npm run build",
+    "verify:user-journey": "node scripts/verify-user-journey-browser.mjs",
     "prequality:semantic": "npm run build",
     "quality:semantic": "node scripts/evaluate-semantic-quality.mjs",
     "preverify:upgrade": "npm run build",

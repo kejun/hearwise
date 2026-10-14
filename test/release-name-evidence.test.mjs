@@ -29,11 +29,11 @@ async function formalFixture(t) {
   }
   await json(path.join(directory, 'report.json'), report); return { directory, report };
 }
-test('name adds one mandatory fixed suite and nineteenth browser without clearing full acceptance', async t => {
+test('name adds one mandatory fixed suite and mandatory browser profile without clearing full acceptance', async t => {
   assert.equal(technicalSuites.length, 17); assert.equal(technicalSuites.filter(row => row === 'name-protocol').length, 1);
   for (const purpose of ['pr', 'release']) assert.ok(purposes[purpose].includes('name-protocol'));
   for (const group of ['HW-07', 'HW-11']) assert.ok(domainSuites[group].includes('name-protocol'));
-  assert.equal(browserChecks.length, 19); assert.equal(browserChecks.filter(row => row === 'name-protocol').length, 1);
+  assert.equal(browserChecks.length, 20); assert.equal(browserChecks.filter(row => row === 'name-protocol').length, 1);
   assert.deepEqual(browserScreenshots['name-protocol'], nameBrowserAssets.filter(row => row.endsWith('.png')));
   assert.equal(fullRequirements.length, 15); assert.equal(externalRequirements.length, 8);
   const absent = await readTechnicalEvidence('name-protocol', await temporary(t), { release: false }); assert.equal(absent.ok, false); assert.equal(absent.status, 'not_run');

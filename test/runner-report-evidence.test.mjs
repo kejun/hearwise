@@ -1,3 +1,4 @@
+import { userJourneyEvidenceFixture } from '../test-support/user-journey-evidence-fixture.mjs';
 import { atomicityReleaseFixture } from '../test-support/release-atomicity-fixture.mjs';
 import { releaseNameBrowserFixture } from '../test-support/release-name-fixture.mjs';
 import { releasePlaybackFixture } from '../test-support/release-playback-fixture.mjs';
@@ -95,6 +96,10 @@ async function browserFixture(directory) {
       await writeFile(path.join(directory, run, `${name}.log`), fixture.outerLog); rows.at(-1).tail = fixture.outerLog;
       continue;
     }
+    if (name === 'user-journey') {
+      const fixture = await userJourneyEvidenceFixture(path.join(directory, run, 'user-journey-contract'), { outerRun: run });
+      await writeFile(path.join(directory, run, `${name}.log`), fixture.outerLog); rows.at(-1).tail = fixture.outerLog; continue;
+    }
     if (name === 'name-protocol') { await releaseNameBrowserFixture(path.join(directory, run, `${name}-contract`)); continue; }
     if (name === 'playback') { await releasePlaybackFixture(path.join(directory, run, `${name}-contract`)); continue; }
     if (name === 'trace-business') { await traceReleaseFixture(path.join(directory, run, `${name}-contract`)); continue; }
@@ -124,12 +129,12 @@ test('Node release reader requires every current test file and full raw logs, no
     assert.equal((await validateNodeEvidence(directory, { release: false })).ok, false);
   }
 });
-test('browser aggregate binds all nineteen suites, screenshots, child log tails and nested complete reports', { timeout: 80000 }, async t => {
+test('browser aggregate binds all twenty suites, screenshots, child log tails and nested complete reports', { timeout: 80000 }, async t => {
   const startedAt = performance.now(), directory = await temporary(t), baseline = await browserFixture(directory), fixtureMs = performance.now() - startedAt;
   const good = await validateBrowserEvidence(directory, { release: false }); assert.equal(good.ok, true, JSON.stringify(good));
-  assert.equal(baseline.results.length, 19);
-  assert.deepEqual(good.nested.map(row => row.kind), ['session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol']);
-  t.diagnostic(`Full 19-profile fixture: ${Math.round(fixtureMs)}ms; positive validation: ${Math.round(performance.now() - startedAt - fixtureMs)}ms; total positive: ${Math.round(performance.now() - startedAt)}ms; test/file budgets: 80000/90000ms`);
+  assert.equal(baseline.results.length, 20);
+  assert.deepEqual(good.nested.map(row => row.kind), ['session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol', 'user-journey']);
+  t.diagnostic(`Full 20-profile fixture: ${Math.round(fixtureMs)}ms; positive validation: ${Math.round(performance.now() - startedAt - fixtureMs)}ms; total positive: ${Math.round(performance.now() - startedAt)}ms; test/file budgets: 80000/90000ms`);
   for (const mutate of [r => { r.results.pop(); }, r => { r.results[0].argv = ['scripts/unrelated.mjs']; }, r => { r.results[0].tail = 'wrong log'; },
     r => { r.artifacts = r.artifacts.filter(a => !a.path.endsWith('session-contract/browser.json')); }, r => { r.artifacts[0].sha256 = '0'.repeat(64); },
     r => { r.results[0].timedOut = true; }, r => { r.sourceStart.digests['dist/server/index.js'] = '0'.repeat(64); }]) {

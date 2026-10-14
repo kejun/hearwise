@@ -1,3 +1,4 @@
+import { validateUserJourneyBrowserReleaseEvidence, userJourneyNestedFiles } from './user-journey-release-evidence.mjs';
 import { validateAtomicityBrowserReleaseEvidence, atomicityNestedFiles } from './atomicity-release-evidence.mjs';
 import { validateNameBrowserReleaseEvidence, nameNestedFiles } from './name-release-evidence.mjs';
 import { validatePlaybackBrowserReleaseEvidence, playbackNestedFiles } from './playback-release-evidence.mjs';
@@ -102,7 +103,8 @@ function validBrowserObservations(kind, browser) {
   }
   return true;
 }
-export async function validateNestedBrowserEvidence(kind, directory, { release = true, outerLog, outerRun } = {}) {
+export async function validateNestedBrowserEvidence(kind, directory, { release = true, outerLog, outerRun, outerOrigin } = {}) {
+  if (kind === 'user-journey') return validateUserJourneyBrowserReleaseEvidence(directory, { release, outerLog, outerRun, outerOrigin });
   if (kind === 'import-atomicity') return validateAtomicityBrowserReleaseEvidence(directory, { release, outerLog, outerRun });
   if (kind === 'name-protocol') return validateNameBrowserReleaseEvidence(directory, { release });
   if (kind === 'playback') return validatePlaybackBrowserReleaseEvidence(directory, { release });
@@ -165,16 +167,16 @@ export async function validateBrowserEvidence(directory, { release = true } = {}
       }
     }
     result.nested = [];
-    for (const kind of ['session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol']) {
+    for (const kind of ['session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol', 'user-journey']) {
       const prefix = kind === 'import-atomicity' ? 'run' : kind;
       const candidates = [...files.keys()].filter(file => new RegExp(`^${run}/${prefix}-[A-Za-z0-9]+/report\\.json$`).test(file));
       if (candidates.length !== 1) throw new Error(`missing_or_duplicate_nested_report:${kind}`);
       const nestedDirectory = path.dirname(candidates[0]);
-      const mandatory = kind === 'import-atomicity' ? atomicityNestedFiles : kind === 'name-protocol' ? nameNestedFiles : kind === 'playback' ? playbackNestedFiles : kind === 'trace-business' ? traceNestedFiles : kind === 'import-protocol' ? ['observations.json'] : ['observations.json', 'worker.log', 'browser.json', ...(newNestedChecks[kind]?.map(row => `${row.name}.log`) || [...Object.keys(nestedCounts[kind]).map(name => `${name}.log`), 'browser.log'])];
+      const mandatory = kind === 'user-journey' ? userJourneyNestedFiles : kind === 'import-atomicity' ? atomicityNestedFiles : kind === 'name-protocol' ? nameNestedFiles : kind === 'playback' ? playbackNestedFiles : kind === 'trace-business' ? traceNestedFiles : kind === 'import-protocol' ? ['observations.json'] : ['observations.json', 'worker.log', 'browser.json', ...(newNestedChecks[kind]?.map(row => `${row.name}.log`) || [...Object.keys(nestedCounts[kind]).map(name => `${name}.log`), 'browser.log'])];
       for (const file of mandatory)
         if (!files.has(`${nestedDirectory}/${file}`)) throw new Error(`missing_bound_nested_file:${kind}:${file}`);
       for (const file of await evidenceFiles(path.join(directory, nestedDirectory))) if (!files.has(`${nestedDirectory}/${file}`)) throw new Error(`unbound_nested_file:${kind}:${file}`);
-      const verdict = await validateNestedBrowserEvidence(kind, path.join(directory, nestedDirectory), { release, outerRun: run, outerLog: files.get(`${run}/${kind}.log`)?.toString() }); result.nested.push(verdict);
+      const verdict = await validateNestedBrowserEvidence(kind, path.join(directory, nestedDirectory), { release, outerRun: run, outerOrigin: { repositoryRoot: report.executionRepositoryRoot, nodeExecutable: report.nodeExecutable }, outerLog: files.get(`${run}/${kind}.log`)?.toString() }); result.nested.push(verdict);
       if (!verdict.ok) throw new Error(`nested_profile_rejected:${kind}:${verdict.reasons.join(',')}`);
     }
   } catch (error) { result.reasons.push(error.message); statuses.push('incomplete'); }

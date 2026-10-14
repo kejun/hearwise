@@ -148,3 +148,26 @@ test('fetch observation preserves real File and Blob HTTP bytes without an extra
   assert.equal(window.__importProtocolResponses[0].requestBody.kind, 'File'); assert.equal(window.__importProtocolResponses[1].requestBody.kind, 'Blob');
   assert.deepEqual(window.__importProtocolResponses.map(row => row.index).join(','), '0,1');
 });
+
+test('optional upload digest reads the actual File without delaying the original fetch', async () => {
+  const { observeImportFetch } = await import('../test-support/import-protocol-browser-observer.mjs');
+  const { runInNewContext } = await import('node:vm');
+  const { createHash, webcrypto } = await import('node:crypto');
+  const gate = Promise.withResolvers(), bytes = new Uint8Array([83, 81, 76, 0, 255]);
+  class HeldFile extends File { arrayBuffer() { return gate.promise; } }
+  const body = new HeldFile([bytes], 'actual.sqlite'), calls = [];
+  const original = new Response('{"accepted":true}', { headers: { 'content-type': 'application/json' } });
+  const window = { fetch: async (...args) => { calls.push(args); return original; } };
+  runInNewContext(`(${observeImportFetch.toString()})({ uploadDigest: true })`,
+    { window, location: { href: 'http://fixture/' }, URL, Request, Blob, File, crypto: webcrypto });
+  const response = await window.fetch('/api/data/import/validate?mode=append', { method: 'POST', body });
+  assert.equal(response, original); assert.equal(calls.length, 1); assert.equal(calls[0][1].body, body);
+  const observed = window.__importProtocolResponses[0]; assert.equal(observed.uploadDigestComplete, false);
+  gate.resolve(bytes.buffer);
+  for (let i = 0; i < 50 && !observed.uploadDigestComplete; i++) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(observed.uploadDigestComplete, true); assert.equal(observed.uploadDigestError, undefined);
+  assert.equal(observed.requestBody.sha256, createHash('sha256').update(bytes).digest('hex'));
+  assert.equal(observed.requestBody.size, bytes.length); assert.equal(observed.requestBody.name, 'actual.sqlite');
+  assert.equal(calls.length, 1, 'hash observation never uploads a second copy');
+  assert.deepEqual(await response.json(), { accepted: true }, 'observer did not consume the app response');
+});
