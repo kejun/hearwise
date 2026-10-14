@@ -157,6 +157,10 @@ async function settle(actor, outcome) {
   }
   await until(() => { refreshTerminals(); return actor === -1 ? task.settled : task.phase === 'settled'; }, 'translation terminal');
   if (actor === -1) completions.push({ actor, outcome: classify(task.error), errorName: task.error?.name || null });
+  // The HTTP client can reject on disconnect before the server observes it.
+  // Wait for the real provider close and server finally, not a consistent but
+  // still in-flight pre-disconnect snapshot.
+  await until(() => entry.ended && (actor !== -1 || api.interimTranslating === 0), 'provider settlement and server release');
   await stable();
 }
 async function act(message) {

@@ -1,0 +1,142 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /tmp/kej67-scheduler-probe/_apalache-out/server/2026-10-14T22-08-30_13604844817938837552
+# APALACHE version: 0.62.1 | build: a321771                       I@22:08:30.216
+Starting checker server on port 8910...                           I@22:08:30.224
+The Apalache server is running on port 8910. Press Ctrl-C to stop.
+Failed to find a usable hardware address from the network interfaces; using random bytes: 6c:1a:18:83:02:d1:aa:93 W@22:08:31.197
+PASS #0: SanyParser                                               I@22:08:33.495
+[TLC] Running TLC model checker...
+
+TLC2 Version 2026.10.14.130835
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 109 and seed 6363992619521218068 with 1 worker on 9 cores with 1024MB heap and 64MB offheap memory [pid: 599] (Linux 6.18.44 amd64, Debian 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /tmp/quint-tlc-k4kPGe/translation_fair.tla
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/Integers.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/Sequences.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/FiniteSets.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/TLC.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/Apalache.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/Variants.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/_TLCTrace.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/Naturals.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/quint-tlc-k4kPGe/tlc-11230010647566373028/TLCExt.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module translation_fair
+Linting of module Apalache
+Linting of module Variants
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module translation_fair
+Starting... (2026-10-14 22:08:35)
+Implied-temporal checking--satisfiability problem has 1 branches.
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-14 22:08:35.
+Checking temporal properties for the current state space with 1286 total distinct states at (2026-10-14 22:08:38)
+Error: Temporal property q_temporalProps was violated.
+
+Error: The following behavior constitutes a counter-example:
+
+State 1: <Initial predicate>
+/\ translation_fair_translation_argument = ""
+/\ translation_fair_translation_running = {}
+/\ translation_fair_translation_headIdentity = -1
+/\ translation_fair_translation_legalStart = TRUE
+/\ translation_fair_translation_actor = -1
+/\ translation_fair_translation_window = <<>>
+/\ translation_fair_translation_legalDrop = TRUE
+/\ translation_fair_translation_excluded = {}
+/\ translation_fair_translation_aged = {}
+/\ translation_fair_translation_interim = 0
+/\ translation_fair_translation_started = {}
+/\ translation_fair_translation_queue = <<0, 1, 2, 3>>
+/\ translation_fair_translation_lastAction = "init"
+/\ translation_fair_translation_recentStarts = <<>>
+/\ translation_fair_translation_speechTurn = TRUE
+/\ translation_fair_translation_streak = 0
+/\ translation_fair_translation_phase = (0 :> "queued" @@ 1 :> "queued" @@ 2 :> "queued" @@ 3 :> "queued")
+
+State 2: <translation_fair_translation_fairClock line 680, col 3 to line 681, col 47 of module translation_fair>
+/\ translation_fair_translation_argument = "starvation_threshold"
+/\ translation_fair_translation_running = {}
+/\ translation_fair_translation_headIdentity = -1
+/\ translation_fair_translation_legalStart = TRUE
+/\ translation_fair_translation_actor = -1
+/\ translation_fair_translation_window = <<>>
+/\ translation_fair_translation_legalDrop = TRUE
+/\ translation_fair_translation_excluded = {}
+/\ translation_fair_translation_aged = {0, 1, 2, 3}
+/\ translation_fair_translation_interim = 0
+/\ translation_fair_translation_started = {}
+/\ translation_fair_translation_queue = <<0, 1, 2, 3>>
+/\ translation_fair_translation_lastAction = "advance_time"
+/\ translation_fair_translation_recentStarts = <<>>
+/\ translation_fair_translation_speechTurn = TRUE
+/\ translation_fair_translation_streak = 0
+/\ translation_fair_translation_phase = (0 :> "queued" @@ 1 :> "queued" @@ 2 :> "queued" @@ 3 :> "queued")
+
+State 3: <translation_fair_translation_fairEnvironment line 891, col 3 to line 908, col 78 of module translation_fair>
+/\ translation_fair_translation_argument = ""
+/\ translation_fair_translation_running = {}
+/\ translation_fair_translation_headIdentity = -1
+/\ translation_fair_translation_legalStart = TRUE
+/\ translation_fair_translation_actor = 2
+/\ translation_fair_translation_window = <<>>
+/\ translation_fair_translation_legalDrop = TRUE
+/\ translation_fair_translation_excluded = {2}
+/\ translation_fair_translation_aged = {0, 1, 3}
+/\ translation_fair_translation_interim = 0
+/\ translation_fair_translation_started = {}
+/\ translation_fair_translation_queue = <<0, 1, 3>>
+/\ translation_fair_translation_lastAction = "cancel_queued"
+/\ translation_fair_translation_recentStarts = <<>>
+/\ translation_fair_translation_speechTurn = TRUE
+/\ translation_fair_translation_streak = 0
+/\ translation_fair_translation_phase = (0 :> "queued" @@ 1 :> "queued" @@ 2 :> "cancelled" @@ 3 :> "queued")
+
+State 4: <translation_fair_translation_fairEnvironment line 891, col 3 to line 908, col 78 of module translation_fair>
+/\ translation_fair_translation_argument = ""
+/\ translation_fair_translation_running = {}
+/\ translation_fair_translation_headIdentity = -1
+/\ translation_fair_translation_legalStart = TRUE
+/\ translation_fair_translation_actor = 3
+/\ translation_fair_translation_window = <<>>
+/\ translation_fair_translation_legalDrop = TRUE
+/\ translation_fair_translation_excluded = {2, 3}
+/\ translation_fair_translation_aged = {0, 1}
+/\ translation_fair_translation_interim = 0
+/\ translation_fair_translation_started = {}
+/\ translation_fair_translation_queue = <<0, 1>>
+/\ translation_fair_translation_lastAction = "cancel_queued"
+/\ translation_fair_translation_recentStarts = <<>>
+/\ translation_fair_translation_speechTurn = TRUE
+/\ translation_fair_translation_streak = 0
+/\ translation_fair_translation_phase = (0 :> "queued" @@ 1 :> "queued" @@ 2 :> "cancelled" @@ 3 :> "cancelled")
+
+State 5: Stuttering
+Warning: The stuttering counterexample above may be caused by the absence of a behavior specification (SPECIFICATION). Only INIT and NEXT have been provided, so TLC permits infinite stuttering. To rule out such counterexamples, use SPECIFICATION Spec, with Spec asserting a suitable fairness constraint (compare Chapter 8, page 87ff of Specifying Systems at https://lamport.azurewebsites.net/tla/book.html).
+Finished checking temporal properties in 00s at 2026-10-14 22:08:39
+9384 states generated, 1678 distinct states found, 1016 states left on queue.
+The depth of the complete state graph search is 6.
+Finished in 03s at (2026-10-14 22:08:39)
+Trace exploration spec path: /tmp/quint-tlc-k4kPGe/translation_fair_TTrace_1791983315.tla
+
+[violation] Found an issue (4130ms).
+
+Oct 14, 2026 10:08:32 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
+As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
+error: found a counterexample
+
+CLI_EXIT=1

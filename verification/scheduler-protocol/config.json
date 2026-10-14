@@ -1,0 +1,894 @@
+{
+  "schemaVersion": 1,
+  "specificationVersion": "1.0",
+  "profileStatus": "frozen after measured full finite-domain/temporal/negative and simulation cost probes; final evidence must rerun delivery source",
+  "checks": [
+    {
+      "id": "translation-small-safety",
+      "specification": "configurations.qnt",
+      "main": "translation_small",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "translation_small",
+      "invariant": "Safety"
+    },
+    {
+      "id": "translation-alias-safety",
+      "specification": "configurations.qnt",
+      "main": "translation_alias",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "translation_alias",
+      "invariant": "Safety"
+    },
+    {
+      "id": "translation-soft-cap-safety",
+      "specification": "configurations.qnt",
+      "main": "translation_soft_cap",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "translation_soft_cap",
+      "invariant": "Safety"
+    },
+    {
+      "id": "knowledge-core-safety",
+      "specification": "knowledge-configurations.qnt",
+      "main": "knowledge_core",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "knowledge_core",
+      "invariant": "Safety"
+    },
+    {
+      "id": "knowledge-deadlines-safety",
+      "specification": "knowledge-configurations.qnt",
+      "main": "knowledge_deadlines",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "knowledge_deadlines",
+      "invariant": "Safety"
+    },
+    {
+      "id": "knowledge-cooldown-shared-safety",
+      "specification": "knowledge-configurations.qnt",
+      "main": "knowledge_cooldown_shared",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "knowledge_cooldown_shared",
+      "invariant": "Safety"
+    },
+    {
+      "id": "knowledge-cooldown-separate-safety",
+      "specification": "knowledge-configurations.qnt",
+      "main": "knowledge_cooldown_separate",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "knowledge_cooldown_separate",
+      "invariant": "Safety"
+    },
+    {
+      "id": "translation-fairness",
+      "specification": "translation-fairness.qnt",
+      "main": "translation_fair",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "translation_fair",
+      "temporal": "Progress",
+      "target": 0
+    },
+    {
+      "id": "translation-missing-clock",
+      "specification": "translation-fairness.qnt",
+      "main": "translation_fair",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "translation_fair",
+      "temporal": "NoClockProgress",
+      "target": 0
+    },
+    {
+      "id": "translation-missing-scheduler",
+      "specification": "translation-fairness.qnt",
+      "main": "translation_fair",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "translation_fair",
+      "temporal": "NoSchedulerProgress",
+      "target": 0
+    },
+    {
+      "id": "translation-missing-termination",
+      "specification": "translation-fairness.qnt",
+      "main": "translation_fair",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "translation_fair",
+      "temporal": "NoTerminationProgress",
+      "target": 0
+    },
+    {
+      "id": "knowledge-fairness",
+      "specification": "knowledge-fairness.qnt",
+      "main": "knowledge_fair",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "pass",
+      "deadlineMs": 180000,
+      "domain": "knowledge_fair",
+      "temporal": "Progress",
+      "target": 2
+    },
+    {
+      "id": "knowledge-missing-clock",
+      "specification": "knowledge-fairness.qnt",
+      "main": "knowledge_fair",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "knowledge_fair",
+      "temporal": "NoClockProgress",
+      "target": 2
+    },
+    {
+      "id": "knowledge-missing-scheduler",
+      "specification": "knowledge-fairness.qnt",
+      "main": "knowledge_fair",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "knowledge_fair",
+      "temporal": "NoSchedulerProgress",
+      "target": 2
+    },
+    {
+      "id": "knowledge-missing-termination",
+      "specification": "knowledge-fairness.qnt",
+      "main": "knowledge_fair",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "knowledge_fair",
+      "temporal": "NoTerminationProgress",
+      "target": 2
+    },
+    {
+      "id": "translation-starvation-mutant",
+      "specification": "translation-fairness.qnt",
+      "main": "mutant_translation_starvation",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_translation_starvation",
+      "temporal": "Progress",
+      "target": 0
+    },
+    {
+      "id": "knowledge-starvation-mutant",
+      "specification": "knowledge-fairness.qnt",
+      "main": "mutant_knowledge_starvation",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "temporal",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_knowledge_starvation",
+      "temporal": "Progress",
+      "target": 2
+    },
+    {
+      "id": "mutant-interim-admission",
+      "specification": "translation-mutations.qnt",
+      "main": "mutant_interim_admission",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_interim_admission",
+      "invariant": "Safety"
+    },
+    {
+      "id": "mutant-interim-total",
+      "specification": "translation-mutations.qnt",
+      "main": "mutant_interim_total",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_interim_total",
+      "invariant": "Safety"
+    },
+    {
+      "id": "mutant-final-cleanup",
+      "specification": "translation-mutations.qnt",
+      "main": "mutant_final_cleanup",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_final_cleanup",
+      "invariant": "Safety"
+    },
+    {
+      "id": "mutant-interim-cleanup",
+      "specification": "translation-mutations.qnt",
+      "main": "mutant_interim_cleanup",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_interim_cleanup",
+      "invariant": "Safety"
+    },
+    {
+      "id": "mutant-knowledge-cleanup",
+      "specification": "knowledge-mutations.qnt",
+      "main": "mutant_knowledge_cleanup",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_knowledge_cleanup",
+      "invariant": "Safety"
+    },
+    {
+      "id": "mutant-knowledge-busy",
+      "specification": "knowledge-mutations.qnt",
+      "main": "mutant_knowledge_busy",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_knowledge_busy",
+      "invariant": "Safety"
+    },
+    {
+      "id": "mutant-knowledge-readiness",
+      "specification": "knowledge-mutations.qnt",
+      "main": "mutant_knowledge_readiness",
+      "init": "Init",
+      "step": "Step",
+      "backend": "tlc",
+      "kind": "safety",
+      "expected": "counterexample",
+      "deadlineMs": 180000,
+      "domain": "mutant_knowledge_readiness",
+      "invariant": "Safety"
+    }
+  ],
+  "toolchain": "toolchain.json",
+  "tlcRuntime": "tlc.json",
+  "domains": {
+    "translation_small": {
+      "tokens": [
+        0,
+        1,
+        2
+      ],
+      "background": [
+        0
+      ],
+      "identities": [
+        0,
+        1,
+        2
+      ],
+      "capacity": 2,
+      "scope": "All safety-model actions. Scaled background-only eviction rule, not a proof of actual 500/501 behavior."
+    },
+    "translation_alias": {
+      "tokens": [
+        0,
+        1,
+        2
+      ],
+      "background": [
+        0
+      ],
+      "identities": [
+        0,
+        1,
+        1
+      ],
+      "capacity": 2,
+      "scope": "Waiting dedup only; active token 1 does not bar enqueue/start of token 2 with the same segment identity."
+    },
+    "translation_soft_cap": {
+      "tokens": [
+        0,
+        1,
+        2
+      ],
+      "background": [],
+      "capacity": 2,
+      "scope": "All-realtime length 3 is legal; no invented hard capacity or realtime eviction."
+    },
+    "translation_replay": {
+      "tokens": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "capacity": 500,
+      "scope": "Deterministic witnesses and seeded real-service replay; no eviction reached. Actual 500/501 is a distinct implementation test."
+    },
+    "knowledge_core": {
+      "jobs": [
+        0,
+        1,
+        2
+      ],
+      "sessions": [
+        0,
+        1
+      ],
+      "jobSessions": [
+        0,
+        0,
+        1
+      ],
+      "keys": "shared",
+      "actions": [
+        "pump",
+        "success/error/timeout settle with immediate pump",
+        "advance_time",
+        "set_translation",
+        "remove",
+        "close",
+        "stutter"
+      ],
+      "scope": "Concurrency 2, busy limit 1 for new starts only, serialization, rotation, grace/interval, cleanup. Does not combine every provider/key/retry toggle."
+    },
+    "knowledge_deadlines": {
+      "jobs": [
+        0
+      ],
+      "sessions": [
+        0,
+        1
+      ],
+      "keys": "shared",
+      "actions": "full step: pump/settle(success,error,timeout,retry,continue,rate_limit), explicit time, provider/key gates, translation snapshots, remove/close/stutter",
+      "scope": "One scheduler job; each retry and continuation environment choice at most once. This is not a product retry bound."
+    },
+    "knowledge_cooldown_shared": {
+      "jobs": [
+        0,
+        2
+      ],
+      "keys": "shared",
+      "initialTranslationWaiting": 1,
+      "actions": [
+        "pump",
+        "success/error/rate_limit settle",
+        "advance_time",
+        "block_provider",
+        "remove",
+        "close",
+        "stutter"
+      ],
+      "scope": "Two jobs compete under persistent translation busy and shared key. Keys stay available."
+    },
+    "knowledge_cooldown_separate": {
+      "jobs": [
+        0,
+        2
+      ],
+      "keys": "separate",
+      "initialTranslationWaiting": 1,
+      "actions": [
+        "pump",
+        "success/error/rate_limit settle",
+        "advance_time",
+        "block_provider",
+        "remove",
+        "close",
+        "stutter"
+      ],
+      "scope": "Per-key cooldown isolation under the same two-job domain."
+    },
+    "translation_fair": {
+      "tokens": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "background": [
+        0
+      ],
+      "capacity": 4,
+      "initialQueue": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "recycle": [
+        1,
+        2,
+        3
+      ],
+      "scope": "Conditional eventual start of explicit background token 0 with a recurring bounded-identity realtime producer; no theorem for old realtime under unlimited arrivals."
+    },
+    "knowledge_fair": {
+      "jobs": [
+        0,
+        1,
+        2
+      ],
+      "sessions": [
+        0,
+        1
+      ],
+      "targetJob": 2,
+      "recycle": [
+        0,
+        1
+      ],
+      "keys": "shared and available",
+      "provider": "available; finite scheduler cooldowns still modeled",
+      "scope": "Conditional eventual start of session 1 despite recurring session-0 backlog, variable translation busy, and finite continuation/retry choices.",
+      "recycleAbstraction": "Conservative recurring admissible session-0 backlog using bounded tokens; it is not real new-job creation or a replayable mutation of completed SQLite jobs. Actual new jobs have new identity/from_sequence/created_at. The fixed real knowledge fairness witness does not recycle. This overapproximation only adds competing admissible work and does not help target admission. The finite-domain temporal result and the 31 fixed real replay traces are separate evidence."
+    }
+  },
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "backend": "typescript",
+    "seed": "42",
+    "maxSamples": 1,
+    "expectedTestCount": 31,
+    "roster": [
+      {
+        "main": "translation_witnesses",
+        "tests": [
+          "sharedAdmissionTest",
+          "activeFinalsRejectInterimTest",
+          "waitingFinalRejectsInterimTest",
+          "finalErrorCleanupTest",
+          "finalTimeoutCleanupTest",
+          "finalCancellationCleanupTest",
+          "interimErrorCleanupTest",
+          "interimTimeoutCleanupTest",
+          "interimCancellationCleanupTest",
+          "speechHeadAlternatesTest",
+          "cancelWaitingTest",
+          "queueDedupTest"
+        ],
+        "count": 12,
+        "traceConfig": {
+          "kind": "translation",
+          "identities": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "background": [
+            0
+          ],
+          "initialQueue": [],
+          "capacity": 500
+        }
+      },
+      {
+        "main": "alias_witnesses",
+        "tests": [
+          "waitingAliasRejectedTest",
+          "inflightIdentityMayRequeueTest"
+        ],
+        "count": 2,
+        "traceConfig": {
+          "kind": "translation",
+          "identities": [
+            0,
+            1,
+            1
+          ],
+          "background": [
+            0
+          ],
+          "initialQueue": [],
+          "capacity": 500
+        }
+      },
+      {
+        "main": "window_witnesses",
+        "tests": [
+          "latestWindowTest",
+          "lockedWindowTest",
+          "realtimeIsNotHardCappedTest"
+        ],
+        "count": 3,
+        "traceConfig": {
+          "kind": "translation",
+          "identities": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "background": [],
+          "initialQueue": [],
+          "capacity": 500
+        }
+      },
+      {
+        "main": "fifo_witnesses",
+        "tests": [
+          "backgroundFifoTest"
+        ],
+        "count": 1,
+        "traceConfig": {
+          "kind": "translation",
+          "identities": [
+            0,
+            1,
+            2
+          ],
+          "background": [
+            0,
+            1,
+            2
+          ],
+          "initialQueue": [],
+          "capacity": 500
+        }
+      },
+      {
+        "main": "fairness_witnesses",
+        "tests": [
+          "backgroundFairSuccessTest"
+        ],
+        "count": 1,
+        "traceConfig": {
+          "kind": "translation",
+          "identities": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "background": [
+            0
+          ],
+          "initialQueue": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "capacity": 500
+        }
+      },
+      {
+        "main": "knowledge_witnesses",
+        "tests": [
+          "twoSessionsSerialTest",
+          "busyDoesNotRevokeTest",
+          "busyGraceAndLimitTest",
+          "intervalWaitTest",
+          "retryBlocksSessionTest",
+          "continuationReleasesTest",
+          "knowledgeExceptionCleanupTest",
+          "providerCooldownWaitTest",
+          "sharedKeyCooldownTest",
+          "removeCleanupTest",
+          "closeCleanupTest"
+        ],
+        "count": 11,
+        "traceConfig": {
+          "kind": "knowledge",
+          "jobs": [
+            0,
+            1,
+            2
+          ],
+          "separateKeys": false,
+          "fairCycle": false
+        }
+      },
+      {
+        "main": "knowledge_fairness_witnesses",
+        "tests": [
+          "knowledgeFairSuccessTest"
+        ],
+        "count": 1,
+        "traceConfig": {
+          "kind": "knowledge",
+          "jobs": [
+            0,
+            1,
+            2
+          ],
+          "separateKeys": false,
+          "fairCycle": true
+        }
+      }
+    ],
+    "outputPattern": "{main}-{test}-{seq}.itf.json"
+  },
+  "traceContract": {
+    "normalization": "Strip namespaces through last ::; reject duplicate variable names. Preserve list order in recentStarts; compare queue membership as sorted tokens.",
+    "translationProjection": [
+      "queue",
+      "running",
+      "phase",
+      "interim",
+      "recentStarts"
+    ],
+    "knowledgeProjection": [
+      "phase",
+      "durable",
+      "running",
+      "lastServed",
+      "recentStarts",
+      "translationWaiting",
+      "translationRunning",
+      "interim",
+      "closed",
+      "listenings",
+      "keyAvailable"
+    ],
+    "metadata": [
+      "lastAction",
+      "actor",
+      "argument"
+    ],
+    "ghosts": [
+      "window",
+      "streak",
+      "speechTurn",
+      "headIdentity (setting input separately verified)",
+      "aged",
+      "started",
+      "excluded",
+      "legalStart",
+      "legalDrop",
+      "intervalReady",
+      "graceReady",
+      "retryReady",
+      "cooldownReady",
+      "providerReady",
+      "retried",
+      "continued",
+      "legalAdmission"
+    ],
+    "macrosteps": "pump synchronously fills every available slot; settling a provider outcome includes actual finally and automatic repump. Cancellation is an abort-and-settle macrostep. close frees runtime but retains durable running rows.",
+    "time": "Translation advance_time crosses 10000ms starvation threshold; timeout advances real controlled clock by 15000ms before abort/finally. Knowledge advance_time crosses all currently outstanding finite deadlines in a delayed event-loop turn; timer pump is explicit.",
+    "unreplayableActions": {
+      "knowledge": [
+        "recycle"
+      ]
+    },
+    "knowledgeRateLimit": "Real v2 executor rejects with status 429 and retryAfterMs 2000; scheduler persists failed and applies key cooldown. Not a synthesized empty terminal result with rateLimitMs."
+  },
+  "profiles": {
+    "fast": {
+      "default": true,
+      "checks": [
+        "translation-small-safety",
+        "translation-alias-safety",
+        "translation-soft-cap-safety",
+        "knowledge-core-safety",
+        "knowledge-deadlines-safety",
+        "knowledge-cooldown-shared-safety",
+        "knowledge-cooldown-separate-safety",
+        "translation-fairness",
+        "translation-missing-clock",
+        "translation-missing-scheduler",
+        "translation-missing-termination",
+        "knowledge-fairness",
+        "knowledge-missing-clock",
+        "knowledge-missing-scheduler",
+        "knowledge-missing-termination",
+        "translation-starvation-mutant",
+        "knowledge-starvation-mutant",
+        "mutant-interim-admission",
+        "mutant-interim-total",
+        "mutant-final-cleanup",
+        "mutant-interim-cleanup",
+        "mutant-knowledge-cleanup",
+        "mutant-knowledge-busy",
+        "mutant-knowledge-readiness"
+      ],
+      "simulation": {
+        "seed": "20261014",
+        "samples": 100,
+        "maxSteps": 40,
+        "selectedTraces": 5
+      }
+    },
+    "deep": {
+      "default": false,
+      "checks": [
+        "translation-small-safety",
+        "translation-alias-safety",
+        "translation-soft-cap-safety",
+        "knowledge-core-safety",
+        "knowledge-deadlines-safety",
+        "knowledge-cooldown-shared-safety",
+        "knowledge-cooldown-separate-safety",
+        "translation-fairness",
+        "translation-missing-clock",
+        "translation-missing-scheduler",
+        "translation-missing-termination",
+        "knowledge-fairness",
+        "knowledge-missing-clock",
+        "knowledge-missing-scheduler",
+        "knowledge-missing-termination",
+        "translation-starvation-mutant",
+        "knowledge-starvation-mutant",
+        "mutant-interim-admission",
+        "mutant-interim-total",
+        "mutant-final-cleanup",
+        "mutant-interim-cleanup",
+        "mutant-knowledge-cleanup",
+        "mutant-knowledge-busy",
+        "mutant-knowledge-readiness"
+      ],
+      "simulation": {
+        "seed": "20261015",
+        "samples": 500,
+        "maxSteps": 80,
+        "selectedTraces": 10
+      }
+    }
+  },
+  "simulation": {
+    "specification": "translation-replay.qnt",
+    "main": "translation_replay",
+    "init": "Init",
+    "step": "Step",
+    "invariant": "Safety",
+    "backend": "typescript",
+    "traceConfig": {
+      "kind": "translation",
+      "identities": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "background": [
+        0
+      ],
+      "initialQueue": [],
+      "capacity": 500
+    },
+    "claim": "Seeded exploration and selected real replay only, never general liveness."
+  },
+  "apalache": {
+    "version": "0.62.1",
+    "status": "incomplete_backend_error",
+    "gate": false,
+    "attemptedDepths": [
+      8,
+      4
+    ],
+    "lastError": "key not found: $C$54",
+    "scope": "No Apalache bounded-proof claim. TLC safety and temporal checks remain independent.",
+    "diagnostic": "diagnostics/apalache-0.62.1-depth4.json",
+    "rawLog": "diagnostics/apalache-0.62.1-depth4.log"
+  },
+  "temporalEvidence": {
+    "requirePositive": [
+      "Model checking completed. No error has been found.",
+      "0 states left on queue",
+      "Checking temporal properties for the complete state space",
+      "Finished checking temporal properties"
+    ],
+    "requireCounterexample": [
+      "Error: Temporal property q_temporalProps was violated.",
+      "Error: The following behavior constitutes a counter-example:",
+      "State 1:",
+      "Back to state N or State N: Stuttering"
+    ],
+    "itf": "Quint 0.33 TLC backend returns no trace object and deletes its temporary directory; --out-itf does not export a TLC lasso. Preserve raw stdout and parsed cycle anchor; never manufacture ITF loop metadata."
+  },
+  "exclusions": [
+    "Unbounded task identities, arbitrary session counts, and every combination of all split domain environments",
+    "General fairness for old realtime under unlimited new realtime arrivals",
+    "Persistent unavailable key/provider, stopped clock, stopped scheduler, nonterminating task, cancelled/evicted victim",
+    "Whole-process crash/restart and persistent SQLite BUSY/failing terminal writes (KEJ-65)",
+    "Knowledge paid-call workflow budgets and semantic extraction quality (KEJ-64)",
+    "A new translation close API or realtime hard-cap eviction policy"
+  ],
+  "checker": {
+    "module": "checker.mjs",
+    "export": "checkTlcOutput",
+    "executionFields": [
+      "exitCode",
+      "signal",
+      "timedOut"
+    ],
+    "supportedTlaValues": [
+      "safe integer",
+      "JSON string",
+      "TRUE/FALSE",
+      "integer set",
+      "integer sequence",
+      "integer-key finite map"
+    ],
+    "unknownSyntax": "reject"
+  },
+  "profileRationale": {
+    "largestObservedTlcCommandMs": 32374,
+    "perCheckDeadlineMs": 180000,
+    "fastSimulationBodyMs": 1214,
+    "deepSimulationBodyMs": 11720,
+    "sameTlcDomainsBothProfiles": true,
+    "reason": "Measured finite enumeration and temporal costs before freezing. A timeout/interruption is incomplete, never a pass. Whole-environment exploratory domains were explicitly replaced by separately declared domains; no completed old-wide-domain claim."
+  }
+}

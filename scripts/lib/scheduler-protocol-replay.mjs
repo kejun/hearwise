@@ -86,9 +86,10 @@ export function validateSchedulerTrace(trace) {
     }
     if (action === 'set_translation') return [0, 1].includes(actor) && ['0,0', '0,1', '1,0', '1,1', '2,0'].includes(argument);
     if (action === 'settle') return tokens.includes(actor) && ['success', 'error', 'timeout', 'retry', 'continue', 'rate_limit'].includes(argument);
-    if (action === 'set_key') return [0, 1].includes(actor) && ['present', 'absent'].includes(argument);
-    if (['remove', 'block_provider'].includes(action)) return [0, 1].includes(actor) && argument === '';
-    if (action === 'recycle') return actor === 0 && argument === '';
+    if (action === 'set_key') return tokens.some(token => (token === 2 ? 1 : 0) === actor) && ['present', 'absent'].includes(argument);
+    if (action === 'block_provider') return tokens.some(token => (config.separateKeys && token === 2 ? 1 : 0) === actor) && argument === '';
+    if (action === 'remove') return [0, 1].includes(actor) && argument === '';
+    if (action === 'recycle') return config.fairCycle === true && tokens.includes(actor) && [0, 1].includes(actor) && argument === '';
     return actor === -1 && argument === (action === 'advance_time' ? 'all_outstanding_deadlines' : '');
   }
   return valid(trace.initial) && trace.steps.every(step => validAction(step) && valid(step.expected));
