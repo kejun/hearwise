@@ -4,7 +4,7 @@ import { runProcess } from './lib/process.mjs';
 import { metadata, sourceVersion, writeJson, digest, checkArtifacts } from './lib/verification-evidence.mjs';
 import { sessionProperties, sessionProfile } from '../verification/session-properties.mjs';
 
-import { sessionTapSummary, runSessionChecks, summarizeSessionResults } from '../test-support/session-evidence.mjs';
+import { sessionTapSummary, runSessionChecks, summarizeSessionResults, sessionRequiredChecks } from '../test-support/session-evidence.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => !['--node-only', '--release'].includes(arg))) throw new Error('Usage: node scripts/verify-session-browser.mjs [--node-only] [--release]');
@@ -48,9 +48,10 @@ const artifacts = await Promise.all(['observations.json', 'worker.log'].map(asyn
 const finishedAt = new Date().toISOString();
 const browserRequired = id => id !== 'HW-01-02';
 report.results = sessionProperties.map(property => {
-  const applicable = checks.filter(check => check.name === 'browser' ? browserRequired(property.id) :
-    check.name === 'caption-frontier' ? property.id === 'HW-02-03' : ['HW-01-02', 'HW-02-02'].includes(property.id));
-  const complete = applicable.every(({ execution: e }) => !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code));
+  const names = sessionRequiredChecks(property.id, nodeOnly);
+  const applicable = checks.filter(check => names.includes(check.name));
+  const complete = applicable.length === names.length && applicable.every(({ execution: e }) =>
+    !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code) && e.testComplete !== false);
   const status = nodeOnly && browserRequired(property.id) ? 'not_run' : !complete ? 'incomplete' :
     applicable.every(({ execution: e }) => e.ok) && (!browserRequired(property.id) || browser?.complete) ? 'passed' : 'failed';
   return { ...context, ...(browser?.chromium ? { tools: { ...context.tools, chromium: browser.chromium } } : {}),

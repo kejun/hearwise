@@ -47,3 +47,20 @@ test('session timeout stops later checks and the shared deadline reserves parent
   }, { now: () => time });
   assert.deepEqual(allowances, [30000, 30000, 90000]);
 });
+
+test('session scoped gate accepts complete coverage but rejects missing dispatch and source changes', async () => {
+  const context = await metadata(), time = new Date().toISOString();
+  const results = sessionProfile.map(id => ({ ...context, property: { id, version: 1 }, startedAt: time, finishedAt: time,
+    complete: true, status: 'passed', scope: { description: 'Synthetic gate only', scenario: 'unit-test', samples: 1, seed: null },
+    artifacts: ['observations.json', 'worker.log'].map(path => ({ path, sha256: '0'.repeat(64) })) }));
+  const checks = ['identity-and-source', 'caption-frontier', 'browser'].map(name => ({ name, execution: outcome() }));
+  const options = { results, checks, target: context.source, required: sessionProfile, artifactsValid: results.map(() => true),
+    release: false, sourceStable: true };
+  assert.equal(summarizeSessionResults(options).summary.ok, true);
+  const missing = summarizeSessionResults({ ...options, checks: checks.slice(0, 1) });
+  assert.equal(missing.execution.complete, false); assert.equal(missing.summary.ok, false);
+  assert.deepEqual(missing.summary.rows.map(row => row.status), ['passed', 'incomplete', 'incomplete', 'incomplete', 'incomplete']);
+  const changed = summarizeSessionResults({ ...options, sourceStable: false });
+  assert.equal(changed.execution.complete, false); assert.equal(changed.summary.ok, false);
+  assert.ok(changed.summary.rows.every(row => row.status === 'incomplete'));
+});

@@ -36,3 +36,11 @@ node scripts/verify-session-browser.mjs --release
 ## 明确未覆盖
 
 本地合成 ASR/MT、Chromium 假麦克风只证明协议与页面一致性，不证明真实语音准确率、翻译意义、实际设备权限提示、真实麦克风、锁屏/后台采集、端到端时延或长期资源指标。质量由 KEJ-77 等对应评测提供，实体设备由相应设备工单提供；没有付费 API、真实凭据或敏感语料。原 HW-01-01 / HW-02-01 / HW-11-01 广义卡仍保留缺口，不因这些子性质通过而关闭整个能力组。
+
+## 失败路径补强
+
+会话与关系 profile 复用 `scripts/lib/verification-checks.mjs` 的严格 TAP、顺序预算和按性质汇总。TAP 必须实际完成全部测试：pass + fail = tests，cancelled/skipped/todo 均为 0；断言失败保留失败，未执行完整保持 incomplete。浏览器或字幕检查失败不会污染独立完成的来源性质，整个 profile 仍失败。缺少应执行的检查、性质缺失/重复和源码变化不能成为通过。
+
+两个 Node 检查各最多 30 秒、浏览器最多 100 秒，但共享 150 秒总检查预算（最坏 30/30/90），父运行器保持 180 秒。超时、中断或不完整 TAP 立即停止后续检查，并在 finally 清理临时运行目录；预留余量用于终止进程组、哈希和最终报告。关系 profile 保持此前 40/40/70 的边界与行为。
+
+`test/session-evidence-failures.test.mjs` 固定浏览器/字幕/来源失败隔离、全 skip/todo/缺少 pass 的假通过、超时仍启动后续的红回归。共享真实挂起子进程终止与最终报告回归仍由 `test/relation-result-evidence.test.mjs` 执行。合成结果只验证证据门禁，不能替代真实 Chromium 或 ASR/MT 质量验收。

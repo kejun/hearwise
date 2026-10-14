@@ -1,25 +1,20 @@
-import { summarize } from '../scripts/lib/verification-evidence.mjs';
+import { summarizeChecks } from '../scripts/lib/verification-checks.mjs';
+export { tapSummary as sessionTapSummary, runChecks as runSessionChecks } from '../scripts/lib/verification-checks.mjs';
 
-// Extracted without behavior changes so the session failure paths can be tested.
-export function sessionTapSummary(tail) {
-  const testCount = Number(tail.match(/# tests (\d+)/)?.[1] || 0);
-  return { testCount, ok: testCount > 0 && /# fail 0(?:\r?\n|$)/.test(tail) && /# cancelled 0(?:\r?\n|$)/.test(tail) };
+const requiredChecks = {
+  'HW-01-02': ['identity-and-source'],
+  'HW-01-03': ['browser'],
+  'HW-02-02': ['identity-and-source', 'browser'],
+  'HW-02-03': ['caption-frontier', 'browser'],
+  'HW-11-02': ['browser']
+};
+export function sessionRequiredChecks(id, nodeOnly = false) {
+  if (!requiredChecks[id]) throw new Error(`Unknown session property: ${id}`);
+  return requiredChecks[id].filter(name => !nodeOnly || name !== 'browser');
 }
-export async function runSessionChecks(specifications, execute, { cleanup = async () => {} } = {}) {
-  const checks = [];
-  try {
-    for (const specification of specifications) {
-      const execution = await execute(specification, specification.timeoutMs);
-      checks.push({ name: specification.name, execution });
-      if (execution.interrupted) break;
-    }
-    return { checks, budgetExpired: false };
-  } finally { await cleanup(); }
-}
-export function summarizeSessionResults({ results, checks, target, required, artifactsValid, release, sourceStable }) {
-  const execution = { code: checks.every(({ execution: e }) => e.ok) ? 0 : 1, signal: null,
-    timedOut: checks.some(({ execution: e }) => e.timedOut), interrupted: checks.some(({ execution: e }) => e.interrupted),
-    complete: checks.every(({ execution: e }) => !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code)) };
-  if (!sourceStable) execution.complete = false;
-  return { execution, summary: summarize({ results, target, required, artifactsValid, release, execution }) };
+export function summarizeSessionResults(options) {
+  const { nodeOnly = false } = options;
+  return summarizeChecks({ ...options,
+    expectedChecks: ['identity-and-source', 'caption-frontier', ...(nodeOnly ? [] : ['browser'])],
+    checksForProperty: id => sessionRequiredChecks(id, nodeOnly) });
 }
