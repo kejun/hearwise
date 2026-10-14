@@ -36,7 +36,11 @@
     "setup:knowledge-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:knowledge-protocol": "npm run build",
     "verify:knowledge-protocol": "node scripts/verify-knowledge-protocol.mjs",
-    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs"
+    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs",
+    "setup:edit-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:edit-protocol": "npm run build",
+    "verify:edit-protocol": "node scripts/verify-edit-protocol.mjs",
+    "verify:edit-protocol:report": "node scripts/verify-edit-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

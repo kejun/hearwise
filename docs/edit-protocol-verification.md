@@ -8,9 +8,10 @@
 
 ```bash
 npm ci --ignore-scripts
-npm run setup:relation-protocol
-node scripts/verify-edit-protocol.mjs --release
-node scripts/verify-edit-protocol-report.mjs RUN_DIRECTORY --release
+npm run setup:edit-protocol
+npm run verify:edit-protocol -- --release
+npm run verify:edit-protocol:report -- RUN_DIRECTORY --release
+npm run test:browser -- edit-consistency
 ```
 
 复用 `scripts/lib/relation-protocol-tools.mjs` 的 Quint 0.33.0、Apalache 0.62.1、TLC 1.8.0 校验与缓存；不安装另一套工具。TLC 来自已校验 SHA256 的 Apalache JAR。每次工具运行使用独立本地服务端口、单项超时及进程组清理。整体预算为 480 秒，TLC 每项 60 秒，Apalache 每项 120 秒。未完成必须失败退出，不能提高预算消除超时。
@@ -64,6 +65,8 @@ node scripts/verify-edit-protocol-report.mjs RUN_DIRECTORY --release
 
 两个模型变异分别绕过事务版本校验、以及冲突读取新修订后自动 POST。单客户端加一次后台修订变化已足以产生真实前提，最短预期反例分别为 5 和 8 步。必须检查 ITF 中确实违反 `revisionCheckedInTransaction` 或 `noAutomaticOverwrite`；解析错误、未安装工具或超时不能算检出。
 
+第二个适配器变异是协议客户端驱动负例，不是生产浏览器副本。实际浏览器 profile 另有真实客户端副本变异，见下文。
+
 两个实现负例从正向 `backgroundConflictTest` 轨迹出发，分别执行测试隔离副本中的真实版本校验变异，以及额外真实 POST。结果必须为 `implementation_mismatch`，保存第一次不同的状态前缀。该前缀只是在当前轨迹中的首次差异，不声称是全局最短反例。无法执行和清理失败报告为 `unreplayable`。
 
 Quint 0.33.0 的 TLC 后端不导出 ITF；完整 TLC 原日志提供有限域检查证据。确定性测试、模拟和 Apalache 反例导出 ITF，再由独立编辑 normalizer 解码并逐步重放；已有关系协议驱动未改动。
@@ -71,3 +74,24 @@ Quint 0.33.0 的 TLC 后端不导出 ITF；完整 TLC 原日志提供有限域�
 ## 不作出的保证
 
 本范围不覆盖无限会话／保存次数、持久本地草稿、供应商语义质量、断电、进程崩溃恢复或浏览器实现的形式化证明。没有一般活性结论；环境可以持续不交付响应。若要保证最终完成，必须额外假设公平调度、事务处理及恢复读取最终成功。固定成功、失败、取消和恢复见证仅证明这些目标在声明环境下可达。
+
+## HTTP、浏览器与回归证据
+
+`test/edit-commit-notification.test.mjs` 固定实际事务已提交、回执为 succeeded/saved:true，而通知异常导致 HTTP 502/saved:false 的反例。修复只使 `notifyNameCorrection` 成为尽力通知；原事务失败仍明确失败并全表回滚。它是 KEJ-84 通知边界可复用的局部证据，不代表其完整验收。
+
+`test/edit-protocol-http.test.mjs` 单独固定两客户端同版、冻结版本兼容、事务中途回滚、提交后丢响应/代理 502、晚到成功和真实变异。丢响应代理先收完真实上游成功响应，再切断或替换下游；不存在把请求到达服务端前的 abort 当作已提交未知的假象。
+
+浏览器 profile 为 `edit-consistency`，在 1280 和 390 宽度分别运行以下五项：
+
+- 两个真实页面先读同版，A 保存、B 冲突，B 保留草稿且不自动重发；关闭重开读到真实保存值，再明确点击保存可以继续。
+- 真实提交成功后，代理分别返回 HTML 502 或切断响应，回执 GET 也不可用。界面明确显示未知、保留输入、禁用写操作并允许关闭；关闭重开前后比较所有 SQLite 表、确认无新增 POST，之后用户可明确再保存。
+- SQLite 中途故障回滚全部表，界面保留草稿并可显式重试。
+- A 已提交的响应晚于 B 的后续保存到达，A 再读取和重开时显示 B 的持久结果。A 请求忙碌时关闭与 Escape 仍不可用。
+
+另一个 390 宽度负例通过 route 仅替换测试浏览器加载的真实 `public/knowledge-editor.js` 副本，在冲突读取新版本后加入自动 `save('POST')`。必须实际观察一次用户保存对应两次 POST、第二次成功覆盖持久内容，才判定 `implementation_mismatch`。脚本异常、超时、无可执行页面都不算检出。
+
+每次真实运行保存 browser.json、十张正向截图和一张变异截图，共十二份附加文件，并在 observations 中逐一引用和校验文件 SHA256。通用结果合同仍严格只含 observations.json 和 worker.log 两件。合成打包测试只验证合同和哈希拒绝路径，不算浏览器通过。所有场景同时要求无页面异常、对话框可见且不横向溢出、供应商调用为零。
+
+`HW-06-06` 和 `HW-06-07` 需要对应 HTTP 和真实浏览器证据；`HW-11-04` 需要真实浏览器交互证据。模型报告上的同 ID 只覆盖其明确的有限协议范围。浏览器本地无法启动时保持 not_run，由远端 Chromium CI 运行补足，不能用 Node 或模型通过替代。
+
+CI 新增独立的 `Edit protocol model and SQLite replay` job，保留既有五项检查。其 15 分钟外层预算覆盖工具安装、480 秒验证期限及报告/清理/上传；验证内部超时不算成功。发布要求当前 head 的全部六个 job 和 workflow 成功，再核对实际浏览器与模型 artifact 的源码身份、完整状态和哈希。报告展示的范围不扩大到供应商语义质量或无限协议证明。
