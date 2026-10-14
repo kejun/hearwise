@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { atomicityChecks, atomicityRegressionTap, validAtomicityCommand, validAtomicityLocations } from '../../test-support/import-atomicity-contract.mjs';
-import { atomicitySource, atomicityVersion, hash, stableAtomicitySources, validateAtomicityObservations, validateAtomicityBrowser, executionPassed, atomicityEvidenceControls } from '../../test-support/import-atomicity-evidence.mjs';
+import { atomicitySource, atomicityVersion, hash, stableAtomicitySources, validateAtomicityObservations, validateAtomicityBrowser, executionPassed, atomicityEvidenceControls, atomicityMatrixComplete } from '../../test-support/import-atomicity-evidence.mjs';
 
 export async function readAtomicityReport(directory, { release = false, nodeOnly = false } = {}) {
   const report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8'));
@@ -44,14 +44,17 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
   try { raw = JSON.parse(artifacts.get('observations.json')); nodeValidation = validateAtomicityObservations(raw, report);
     if (!isDeepStrictEqual(raw.source, { sha: report.sourceStart.sha, dirty: report.sourceStart.dirty })) nodeValidation = { ok: false, reasons: ['runtime_source_mismatch'] }; } catch { /* fail closed */ }
   let controlsValid = false;
+  const controlsReasons = [];
   try {
     const controls = JSON.parse(artifacts.get('controls.json'));
-    controlsValid = controls.every(row => row.rejected === true) && isDeepStrictEqual(controls, atomicityEvidenceControls(raw));
+    controlsValid = !report.controlsError && Array.isArray(controls) && controls.every(row => row.rejected === true) && isDeepStrictEqual(controls, atomicityEvidenceControls(raw));
   } catch { /* Real-evidence negative controls are required. */ }
+  if (!controlsValid) controlsReasons.push(report.controlsError ? `controls_failed:${report.controlsError.name}: ${report.controlsError.message}` : 'controls_missing_or_invalid');
+  if (report.controlsWriteError) controlsReasons.push(`controls_write_failed:${report.controlsWriteError.name}: ${report.controlsWriteError.message}`);
   const tap = atomicityRegressionTap(artifacts.get('regressions.log')?.toString() || '');
   const nodeOk = executionPassed(node?.execution) && artifacts.has('node.log') && nodeValidation.ok && controlsValid && executionPassed(regressions?.execution) && tap.ok;
   const finished = value => [0, 1].includes(value?.code) && value.signal === null && value.timedOut === false && value.interrupted === false;
-  const nodeComplete = Boolean(finished(node?.execution) && finished(regressions?.execution) && raw && tap.testComplete && tap.bodiesComplete);
+  const nodeComplete = Boolean(finished(node?.execution) && finished(regressions?.execution) && atomicityMatrixComplete(raw) && tap.testComplete && tap.bodiesComplete);
   if (!tap.bodiesComplete) nodeArtifactReasons.push('regression_body_incomplete');
   let browser, browserValidation = { ok: false, reasons: ['browser_not_run'] };
   if (!report.nodeOnly) {
@@ -64,11 +67,18 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
     } catch { browserValidation = { ok: false, reasons: ['browser_missing'] }; }
   }
   const browserOk = !report.nodeOnly && executionPassed(browserCheck?.execution) && artifacts.has('browser.log') && browserValidation.ok;
-  const rows = ['HW-09-06', 'HW-09-07', 'HW-09-08'].map(id => ({ id,
-    status: reasons.length || nodeArtifactReasons.length || !nodeComplete ? 'incomplete' : nodeOk ? 'passed' : 'failed', reasons: [...reasons, ...nodeArtifactReasons, ...(!nodeOk ? nodeValidation.reasons : [])] }));
-  rows.push({ id: 'HW-09-09', status: report.nodeOnly ? 'not_run' : reasons.length || browserArtifactReasons.length || !browser || !finished(browserCheck?.execution) ? 'incomplete' : browserOk ? 'passed' : 'failed',
-    reasons: report.nodeOnly ? ['node_only_profile'] : [...reasons, ...browserArtifactReasons, ...(!browserOk ? browserValidation.reasons : [])] });
+  const rows = atomicityPropertyRows({ nodeOnly: report.nodeOnly, reasons,
+    node: { complete: nodeComplete, ok: nodeOk, artifactReasons: nodeArtifactReasons, reasons: [...nodeValidation.reasons, ...controlsReasons] },
+    browser: { complete: Boolean(browser && finished(browserCheck?.execution)), ok: browserOk, artifactReasons: browserArtifactReasons, reasons: browserValidation.reasons } });
   const required = report.nodeOnly ? rows.slice(0, 3) : rows;
   return { complete: required.every(row => !['not_run', 'incomplete'].includes(row.status)), ok: required.every(row => row.status === 'passed'),
     nodeOnly: report.nodeOnly, fullImportAtomicityAcceptance: !report.nodeOnly && rows.every(row => row.status === 'passed'), fullProjectAcceptance: false, rows };
+}
+
+export function atomicityPropertyRows({ nodeOnly, reasons, node, browser }) {
+  const row = (id, evidence) => ({ id,
+    status: reasons.length || evidence.artifactReasons.length || !evidence.complete ? 'incomplete' : evidence.ok ? 'passed' : 'failed',
+    reasons: [...reasons, ...evidence.artifactReasons, ...(!evidence.ok ? evidence.reasons : [])] });
+  return [...['HW-09-06', 'HW-09-07', 'HW-09-08'].map(id => row(id, node)),
+    nodeOnly ? { id: 'HW-09-09', status: 'not_run', reasons: ['node_only_profile'] } : row('HW-09-09', browser)];
 }

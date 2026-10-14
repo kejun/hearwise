@@ -115,6 +115,11 @@ function withinExecutionWindow(rows, window) {
     }
   }
 }
+export function atomicityMatrixComplete(observations) {
+  const expected = [...dataCases.map(kind => `data/${kind}`), ...atomicityCases.map(caseId)].sort();
+  return observations?.version === atomicityVersion && Array.isArray(observations.scenarios) &&
+    isDeepStrictEqual(observations.scenarios.map(row => row?.id).sort(), expected);
+}
 export function validateAtomicityObservations(observations, window) {
   const reasons = [];
   try {

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, access } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { atomicitySource, stableAtomicitySources, validateAtomicityObservations, validateAtomicityBrowser, executionPassed } from '../test-support/import-atomicity-evidence.mjs';
+import { atomicitySource, atomicityMatrixComplete, stableAtomicitySources, validateAtomicityObservations, validateAtomicityBrowser, executionPassed } from '../test-support/import-atomicity-evidence.mjs';
 
 test('atomicity source hashes reject dirty-to-dirty changes and release dirtiness', async () => {
   const start = await atomicitySource(), end = structuredClone(start);
@@ -22,10 +22,28 @@ test('atomicity evidence rejects absent cases despite cached passed flags', asyn
     const report = {}; await collectAtomicityControls(directory, report);
     assert.equal(report.error, undefined, 'a failed Node matrix must not become a global runner error');
     assert.equal(report.controlsError.name, 'AssertionError');
-    await assert.rejects(readFile(path.join(directory, 'controls.json')), { code: 'ENOENT' });
+    assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'controls.json'))), { error: report.controlsError });
     const runnerError = { name: 'Error', message: 'independent runner failure' }, existing = { error: runnerError };
     await collectAtomicityControls(directory, existing);
     assert.equal(existing.error, runnerError); assert.equal(existing.controlsError.name, 'AssertionError');
+    const generationFailure = new Error('independent control generation failed'), generated = {};
+    await collectAtomicityControls(directory, generated, () => { throw generationFailure; });
+    assert.equal(generated.error, undefined); assert.equal(generated.controlsError.message, generationFailure.message);
+    await rm(path.join(directory, 'controls.json')); await (await import('node:fs/promises')).mkdir(path.join(directory, 'controls.json'));
+    const writeFailure = {}; await collectAtomicityControls(directory, writeFailure, () => []);
+    assert.equal(writeFailure.error, undefined); assert.match(writeFailure.controlsError.message, /EISDIR/);
+    assert.match(writeFailure.controlsWriteError.message, /EISDIR/);
+    const { atomicityPropertyRows } = await import('../scripts/lib/import-atomicity-report.mjs');
+    const passed = { complete: true, ok: true, artifactReasons: [], reasons: [] };
+    const failed = { ...passed, ok: false, reasons: ['real oracle failure', generated.controlsError.message] };
+    const states = node => atomicityPropertyRows({ nodeOnly: false, reasons: [], node, browser: passed });
+    assert.deepEqual(states(failed).map(row => row.status), ['failed', 'failed', 'failed', 'passed']);
+    assert.ok(states(failed)[0].reasons.includes(generationFailure.message));
+    assert.deepEqual(states({ ...failed, complete: false }).map(row => row.status), ['incomplete', 'incomplete', 'incomplete', 'passed']);
+    assert.deepEqual(states({ ...failed, reasons: [writeFailure.controlsError.message] }).map(row => row.status), ['failed', 'failed', 'failed', 'passed']);
+    assert.equal(atomicityMatrixComplete(undefined), false);
+    assert.equal(atomicityMatrixComplete({ version: '1.0', scenarios: [] }), false);
+
   } finally { await rm(directory, { recursive: true, force: true }); }
 
 });
@@ -44,6 +62,26 @@ test('atomicity execution rejects timeouts signals interruption and missing fini
   assert.equal(combined.cause, primary); assert.deepEqual(combined.errors, [primary, cleanup]);
   assert.equal(combined.errors[0].stack, primary.stack); assert.equal(combined.errors[1].stack, cleanup.stack);
   assert.equal(atomicityCleanupError(undefined, cleanup), cleanup);
+  const { atomicityScenario } = await import('../test-support/import-atomicity-scenarios.mjs');
+  const { importAtomicityFixture } = await import('../test-support/import-atomicity-fixture.mjs');
+  let fixture, closed = false; const observation = {};
+  try {
+    await assert.rejects(atomicityScenario({ mode: 'append', kind: 'crash', boundary: 'after-commit' }, observation, async () => {
+      fixture = await importAtomicityFixture();
+      return { ...fixture,
+        upload: async mode => { await fixture.upload(mode); throw primary; },
+        close: async () => { await fixture.close(); closed = true; throw cleanup; } };
+    }), error => {
+      assert.ok(error instanceof AggregateError); assert.equal(error.cause, primary);
+      assert.equal(error.errors[0], primary); assert.equal(error.errors[1], cleanup); return true;
+    });
+    assert.equal(closed, true);
+    assert.deepEqual(observation.error, { name: primary.name, message: primary.message });
+    assert.deepEqual(observation.cleanup, { ok: false, message: cleanup.message });
+    assert.equal(observation.ok, false); assert.equal(observation.complete, false);
+    await assert.rejects(access(fixture.directory), { code: 'ENOENT' });
+  } finally { if (fixture && !closed) await fixture.close(); }
+
 
 });
 

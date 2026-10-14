@@ -13,8 +13,8 @@ export const atomicityCases = ['append', 'replace'].flatMap(mode => [
   { mode, kind: 'negative-write', fault: 'write', mutation: 'early-commit' }
 ]);
 export const caseId = row => [row.mode, row.kind, row.boundary || row.fault].join('/');
-export async function atomicityScenario(config, observation = {}) {
-  const fixture = await importAtomicityFixture();
+export async function atomicityScenario(config, observation = {}, createFixture = importAtomicityFixture) {
+  const fixture = await createFixture();
   let writer, pending, primaryError;
   Object.assign(observation, { id: caseId(config), ...config, snapshots: [], complete: false, ok: false });
   const snapshot = label => { const database = fixture.snapshot(); observation.snapshots.push({ label, database }); return database; };
@@ -107,5 +107,5 @@ export async function atomicityScenario(config, observation = {}) {
 }
 
 export function atomicityCleanupError(primaryError, cleanupError) {
-  return cleanupError;
+  return primaryError ? new AggregateError([primaryError, cleanupError], 'Import scenario and cleanup both failed', { cause: primaryError }) : cleanupError;
 }
