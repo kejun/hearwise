@@ -8,7 +8,12 @@ import { securityFixture, SECURITY_KEY, credentialFindings } from '../test-suppo
 import { seedNameReplacement } from '../test-support/name-replacement-fixture.mjs';
 import { deadline } from '../test-support/lifecycle.mjs';
 
-const seed = store => ({ first: seedNameReplacement(store, { graph: true }), second: seedNameReplacement(store) });
+const seed = store => {
+  const first = seedNameReplacement(store, { graph: true }), second = seedNameReplacement(store), receiptId = randomUUID();
+  const snapshot = store.knowledgeEditSnapshot(second.listeningId, second.item.id);
+  store.replaceKnowledgeName(second.listeningId, second.item.id, receiptId, { name: 'SecondDeebo', revision: snapshot.revision });
+  return { first, second, receiptId };
+};
 function snapshot(filename) {
   const db = new DatabaseSync(filename, { readOnly: true });
   try { return Object.fromEntries(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
@@ -83,10 +88,18 @@ test('cross-listening item, run, segment and receipt combinations cannot read or
   assert.equal((await request(f, route)).status, 404);
   for (const method of ['PATCH', 'DELETE']) assert.equal((await request(f, route, { method, body: method === 'DELETE' ? { revision: 'a'.repeat(64) } : { revision: 'a'.repeat(64), key: SECURITY_KEY, name: 'Tibo', source: 'Deebo' } })).status, 404);
   assert.equal((await request(f, route + '/name-replacements', { method: 'POST', body: { revision: 'a'.repeat(64), name: 'MustNotChange' }, headers: { 'Idempotency-Key': randomUUID() } })).status, 404);
-  assert.equal((await request(f, route + `/edits/${randomUUID()}`)).status, 404);
+  const receipt = `/edits/${f.seeded.receiptId}`;
+  assert.equal((await request(f, `/api/listenings/${second.listeningId}/knowledge/${second.item.id}` + receipt)).status, 200, 'The foreign receipt really exists');
+  for (const prefix of [route, `/api/listenings/${first.listeningId}/knowledge/${first.item.id}`, `/api/listenings/${second.listeningId}/knowledge/${first.item.id}`]) assert.equal((await request(f, prefix + receipt)).status, 404);
   assert.equal((await request(f, `/api/listenings/${first.listeningId}/segments?runId=${second.runId}`)).status, 404);
   const segments = await request(f, `/api/listenings/${first.listeningId}/segments?ids=${second.segment.id}`);
   assert.equal(segments.status, 200); assert.deepEqual(segments.body.items, []);
+  const ws = new WebSocket(f.base.replace('http:', 'ws:') + '/ws/tts'); t.after(() => ws.terminate());
+  const messages = []; ws.on('message', bytes => messages.push(JSON.parse(bytes.toString())));
+  await deadline(() => once(ws, 'open'), 5000, 'Cross-run speech open'); const closed = once(ws, 'close');
+  ws.send(JSON.stringify({ type: 'speech.start', epoch: 1, listeningId: first.listeningId, runId: second.runId,
+    config: { key: SECURITY_KEY, region: 'beijing', voice: 'Cherry', rate: 1 } }));
+  await deadline(() => closed, 5000, 'Cross-run speech rejected'); assert.ok(messages.some(row => row.type === 'speech.error'));
   assert.deepEqual(snapshot(f.filename), before); assert.equal(f.stats.requests.length, 0);
 });
 

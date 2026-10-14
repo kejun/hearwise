@@ -5,7 +5,7 @@ import { tapSummary } from './lib/tap-summary.mjs';
 import { metadata, writeJson, digest, checkArtifacts } from './lib/verification-evidence.mjs';
 import { securityProperties } from '../verification/security-properties.mjs';
 import { securitySourceSnapshot, stableSecuritySources, securityPropertyState, summarizeSecurity, verifySecurityBrowserArtifacts } from '../test-support/security-evidence.mjs';
-import { redactSecurityDiagnostic } from '../test-support/security-browser-support.mjs';
+import { renderingMutant, redactSecurityDiagnostic } from '../test-support/security-browser-support.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => !['--node-only', '--release'].includes(arg))) throw new Error('Usage: node scripts/verify-security-browser.mjs [--node-only] [--release]');
@@ -23,6 +23,8 @@ const specifications = [
   { name: 'negative', files: ['test/security-negative.test.mjs', 'test/security-browser-support.test.mjs'], timeoutMs: 20000 },
   ...(!nodeOnly ? [{ name: 'browser', timeoutMs: 100000 }] : [])
 ];
+const appSource = await readFile('public/app.js', 'utf8'), rendering = renderingMutant(appSource);
+const expectedRenderingMutation = { normalAppSha256: digest(appSource), mutantAppSha256: digest(rendering.source), anchor: rendering.anchor, replacement: rendering.replacement, replacements: rendering.replacements };
 const checks = [], expires = Date.now() + 150000; let cleanupOk = false, failure, budgetExpired = false;
 try {
   for (const check of specifications) {
@@ -49,7 +51,7 @@ if (browser && (browser.source?.sha !== context.source.sha || browser.source?.di
   browser.browserBuildSource?.appSha256 !== sourceStart.digests['public/app.js'] || browser.browserBuildSource?.serverBuildSha256 !== sourceStart.digests['dist/server/index.js'] ||
   browser.browserBuildSource?.servedAppSha256 !== sourceStart.digests['public/app.js'])) browserArtifactsValid = false;
 const observations = { sourceStart, sourceEnd, sourceStable, checks, cleanupOk, budgetExpired, failure,
-  browser: browser || { status: nodeOnly ? 'not_run' : 'incomplete', complete: false, ok: false }, browserArtifactsValid,
+  browser: browser || { status: nodeOnly ? 'not_run' : 'incomplete', complete: false, ok: false }, browserArtifactsValid, expectedRenderingMutation,
   boundary: 'Fixed synthetic local-provider security cases. Node-only does not claim Chromium; no real credentials, remote authentication, TLS or arbitrary payload completeness.' };
 await writeJson(path.join(directory, 'observations.json'), observations);
 await writeFile(path.join(directory, 'worker.log'), (await Promise.all(checks.map(async check =>
@@ -57,7 +59,7 @@ await writeFile(path.join(directory, 'worker.log'), (await Promise.all(checks.ma
 const artifacts = await Promise.all(['observations.json', 'worker.log'].map(async name => ({ path: name, sha256: digest(await readFile(path.join(directory, name))) })));
 const finishedAt = new Date().toISOString();
 report.results = securityProperties.map(property => ({ ...context, property: { id: property.id, version: property.version }, startedAt, finishedAt,
-  ...securityPropertyState(property.id, { checks, browser, nodeOnly, sourceStable: sourceStable && !budgetExpired && !failure, cleanupOk, browserArtifactsValid }),
+  ...securityPropertyState(property.id, { checks, browser, nodeOnly, sourceStable: sourceStable && !budgetExpired && !failure, cleanupOk, browserArtifactsValid, expectedRenderingMutation }),
   scope: { description: property.domain, scenario: 'security-fixed-boundaries', samples: 1, seed: null }, artifacts }));
 const summary = summarizeSecurity({ results: report.results, checks, target: sourceEnd?.source || context.source, nodeOnly,
   sourceStable: sourceStable && !budgetExpired && !failure, cleanupOk, release,

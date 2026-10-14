@@ -122,9 +122,10 @@ async function inspectRuntime(label) {
   assert.equal(credentialFindings(currentLogs).length, 0, `${label} server logs and Trace must exclude credentials`);
   const db = new DatabaseSync(fixture.filename, { readOnly: true });
   let tables = 0, rows = 0, files = 0, bytes = 0;
+  const tableRows = {}, fileNames = [];
   try {
     for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()) {
-      const data = db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all(); tables++; rows += data.length;
+      const data = db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all(); tables++; rows += data.length; tableRows[name] = data.length;
       assert.equal(credentialFindings(data).length, 0, `${label} SQLite business rows must exclude credentials`);
     }
   } finally { db.close(); }
@@ -133,13 +134,13 @@ async function inspectRuntime(label) {
       const name = path.join(directory, entry.name);
       if (entry.isDirectory()) await scan(name);
       else if (entry.isFile()) {
-        const data = await readFile(name); files++; bytes += data.length;
+        const data = await readFile(name); files++; bytes += data.length; fileNames.push(path.relative(fixture.directory, name));
         assert.equal(credentialFindings(data).length, 0, `${label} SQLite/runtime files must exclude credentials`);
       }
     }
   }
   await scan(fixture.directory);
-  return { tables, rows, files, bytes, traceEvents: currentLogs.split('\n').filter(line => line.startsWith('execution_trace ')).length };
+  return { tables, rows, files, bytes, tableRows, fileNames: fileNames.sort(), traceEvents: currentLogs.split('\n').filter(line => line.startsWith('execution_trace ')).length };
 }
 
 try {
@@ -239,6 +240,7 @@ try {
       assert.equal(credentialFindings(JSON.stringify([...response.headers])).length, 0, 'Export headers must exclude credentials');
       exports.push({ kind: route === '/api/data/export' ? 'database' : route.endsWith('original') ? 'original' : 'translation', bytes: data.length });
     }
+    await until(async () => (await readdir(path.join(fixture.directory, '.exports'))).length === 0, 'Completed export file cleanup');
     const storage = await inspectRuntime('final');
     assert.ok(storage.traceEvents > 0, 'Actual structured Trace must be observed');
     assert.ok(fixture.stats.requests.length >= 8, 'Credential flow must include actual successful and failed provider requests');
