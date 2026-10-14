@@ -8,7 +8,7 @@ import { userJourneyEvidenceFixture } from '../test-support/user-journey-evidenc
 import { journeyStages, journeyWidths, journeyScreenshots, journeyLimits } from '../test-support/user-journey-contract.mjs';
 import { userJourneyProfile } from '../verification/user-journey-properties.mjs';
 import { properties } from '../verification/properties.mjs';
-import { validateUserJourneyEvidence, journeyRecord } from '../scripts/lib/user-journey-evidence.mjs';
+import { validateUserJourneyEvidence, journeyRecord, assertJourneySupersededGraphRead } from '../scripts/lib/user-journey-evidence.mjs';
 import { validateUserJourneyReleaseContract, validateUserJourneyBrowserReleaseEvidence } from '../scripts/lib/user-journey-release-evidence.mjs';
 import { browserChecks, browserScreenshots, hashEvidenceFiles, evidenceFiles } from '../scripts/lib/runner-evidence-contract.mjs';
 import { digest, writeJson } from '../scripts/lib/verification-evidence.mjs';
@@ -89,6 +89,15 @@ test('journey import contract requires explicit file bytes, stale/expired refusa
   const f = await fixture(t);
   for (const [label, mutate] of [
     ['export snapshot omitted', b => { b.widths[0].downloads[0].database.rows.knowledge_facts = []; }],
+    ['server export response missing', b => { b.widths[0].exportResponses = []; }],
+    ['server export returned failure', b => { b.widths[0].exportResponses[0].status = 500; }],
+    ['server export disconnected', b => { b.widths[0].exportResponses[0].source = 'server-response-close'; }],
+    ['server export body differs', b => { b.widths[0].exportResponses[0].sha256 = '0'.repeat(64); }],
+    ['server export length differs', b => { b.widths[0].exportResponses[0].headers.contentLength++; }],
+    ['server export unrelated fixture', b => { b.widths[0].exportResponses[0].fixtureId = b.widths[1].fixtureId; }],
+    ['download unrelated URL', b => { b.widths[0].downloads[0].url = b.widths[0].base + '/api/unrelated'; }],
+    ['download filename differs', b => { b.widths[0].downloads[0].suggestedFilename = 'hearwise-backup-20261014-020000.sqlite'; }],
+    ['download before actual response finish', b => { b.widths[0].downloads[0].finishedAt = b.widths[0].downloads[0].startedAt; }],
     ['different upload bytes', b => { b.widths[0].actions.find(row => row.type === 'upload').value.sha256 = '0'.repeat(64); }],
     ['different wire upload', b => { b.widths[0].http.find(row => row.path.endsWith('/validate')).request.uploadBytes = 2; }],
     ['stale auto-accepted', b => { b.widths[0].http.find(row => row.response?.code === 'IMPORT_PREVIEW_STALE').status = 200; }],
@@ -104,6 +113,90 @@ test('journey import contract requires explicit file bytes, stale/expired refusa
     ['deleted without UI approval', b => { b.widths[0].actions.find(row => row.type === 'dialog-accept').type = 'click'; }],
     ['restore missing indirect facts', b => { stage(b, 'import-restored').database.rows.knowledge_facts = []; }]
   ]) { const changed = structuredClone(f.browser); mutate(changed); assert.equal(validate(f, changed).ok, false, label); }
+});
+
+test('journey API contracts distinguish asynchronous graph admission, durable receipts and competing metadata', async t => {
+  const f = await fixture(t); assert.equal(validate(f).ok, true);
+  const graph = b => b.widths[0].http.find(row => row.method === 'POST' && row.path.endsWith('/graph'));
+  const cancel = b => b.widths[0].http.find(row => row.method === 'DELETE' && row.path.endsWith('/graph'));
+  const patch = b => b.widths[0].http.find(row => row.method === 'PATCH');
+  const imported = b => b.widths[0].http.find(row => row.path.endsWith('/commit') && row.status === 200);
+  // Server route audit: graph POST=202 / DELETE=200; names, receipts and import
+  // successes=200; stale name/import=409; expired import=410. Actual HTTP graph
+  // responses are also positives in user-journey-fixture.test.mjs.
+  for (const [label, mutate] of [
+    ['graph admission claimed synchronous 200', b => { graph(b).status = 200; }],
+    ['graph cancellation claimed asynchronous 202', b => { cancel(b).status = 202; }],
+    ['graph boolean-only receipt', b => { graph(b).response = { ok: true }; }],
+    ['graph wrong response listening', b => { graph(b).response.listeningId = b.widths[0].unrelatedId; }],
+    ['graph wrong admission revision', b => { graph(b).response.graphRevision++; }],
+    ['graph wrong round epoch', b => { graph(b).response.status.round.epoch++; }],
+    ['graph wrong round identity', b => { graph(b).response.status.round.id = b.widths[0].mainId; }],
+    ['graph cancellation still active', b => { cancel(b).response.status.state = 'running'; }],
+    ['provider wire borrows durable UUID', b => { b.widths[0].providerLedger.find(row => row.kind === 'relation').output.relations[0].subject_item_id = b.widths[0].itemId; }],
+    ['provider wire candidate renamed', b => { b.widths[0].providerLedger.find(row => row.kind === 'relation').input.candidates[0].canonical_name = 'forged'; }],
+    ['provider wire evidence identity forged', b => { b.widths[0].providerLedger.find(row => row.kind === 'relation').output.evidence_version = 'forged'; }],
+    ['normal committed name response uses 202', b => { b.widths[0].http.find(row => row.request?.name === 'Kodak').status = 202; }],
+    ['missing competing UI PATCH', b => { patch(b).method = 'GET'; }],
+    ['competing metadata wrong actor', b => { patch(b).contextId = '1280-reopened'; }],
+    ['competing metadata wrong status', b => { patch(b).status = 202; }],
+    ['competing metadata wrong request', b => { patch(b).request.notes = 'unrelated notes'; }],
+    ['competing metadata wrong receipt', b => { patch(b).response.listening.notes = 'unrelated notes'; }],
+    ['competing metadata missing UI action', b => { b.widths[0].actions.find(row => row.target === '#record-notes-input').value = 'not submitted'; }],
+    ['import success missing ok', b => { delete imported(b).response.ok; }],
+    ['import success missing changed', b => { delete imported(b).response.changed; }],
+    ['import success missing mode', b => { delete imported(b).response.mode; }],
+    ['import success wrong version', b => { imported(b).response.databaseVersion++; }],
+    ['import success missing safety backup', b => { delete imported(b).response.safetyBackup; }],
+    ['import success invalid safety backup', b => { imported(b).response.safetyBackup = '../backup.sqlite'; }]
+  ]) { const changed = structuredClone(f.browser); mutate(changed); assert.equal(validate(f, changed).ok, false, label); }
+});
+
+test('only observed graph-loader supersession can recover an aborted read', async t => {
+  const f = await fixture(t), row = f.browser.widths[0], failed = value => value.http.find(request => request.failure);
+  const replacement = value => value.http.find(request => request.graphReadIndex === 1);
+  assert.doesNotThrow(() => assertJourneySupersededGraphRead(failed(row), row)); assert.equal(validate(f).ok, true);
+  const preHeader = structuredClone(row), request = failed(preHeader);
+  request.status = null; delete request.bodyError; request.graphRead.status = null; delete request.graphRead.headersAt; delete request.graphRead.bodyError;
+  request.graphRead.fetchError = { name: 'AbortError', message: 'The operation was aborted.' };
+  assert.doesNotThrow(() => assertJourneySupersededGraphRead(request, preHeader));
+  const delayedCdp = structuredClone(f.browser);
+  replacement(delayedCdp.widths[0]).at = stage(delayedCdp, 'name-corrected').at;
+  assert.equal(validate(f, delayedCdp).ok, true, 'Node may receive CDP events after the browser clone completed');
+  for (const cloneFinished of [true, false]) {
+    const complete = structuredClone(f.browser), next = replacement(complete.widths[0]);
+    next.graphRead.abortedAt = next.graphRead.finishedAt;
+    next.graphRead.abortStack = `Error: Observed graph signal abort\n    at stop (${row.base}/knowledge-graph.js:62:31)`;
+    if (!cloneFinished) { delete next.graphRead.body; next.graphRead.bodyError = { name: 'AbortError', message: 'The operation was aborted.' }; }
+    assert.equal(validate(f, complete).ok, true, 'a complete original HTTP response survives an aborted observer clone');
+  }
+  for (const [label, mutate] of [
+    ['missing actual signal observation', r => { delete failed(r).graphRead; }],
+    ['arbitrary aborted transport', r => { failed(r).failure = 'net::ERR_CONNECTION_RESET'; }],
+    ['mutating request aborted', r => { failed(r).method = 'POST'; }],
+    ['unrelated path aborted', r => { failed(r).path = '/api/data/import/commit'; }],
+    ['unobserved signal', r => { failed(r).graphRead.hasSignal = false; }],
+    ['timeout callback stack', r => { failed(r).graphRead.abortStack = `Error: Observed graph signal abort\n    at abort (${r.base}/knowledge-graph.js:352:71)`; }],
+    ['deadline reached', r => { failed(r).graphRead.startedAt = new Date(Date.parse(failed(r).graphRead.abortedAt) - 10000).toISOString(); }],
+    ['fetch failure settled before abort', r => {
+      const wire = failed(r), read = wire.graphRead; wire.status = null; delete wire.bodyError;
+      read.status = null; delete read.headersAt; delete read.bodyError; read.fetchError = { name: 'AbortError' };
+      read.finishedAt = new Date(Date.parse(read.abortedAt) - 1).toISOString();
+    }],
+    ['body failure settled before abort', r => { const read = failed(r).graphRead; read.finishedAt = new Date(Date.parse(read.abortedAt) - 1).toISOString(); }],
+    ['headers observed after abort', r => { const read = failed(r).graphRead; read.headersAt = new Date(Date.parse(read.abortedAt) + 1).toISOString(); }],
+    ['foreign code stack', r => { failed(r).graphRead.abortStack = 'at stop (https://other.example/knowledge-graph.js:62:31)'; }],
+    ['arbitrary body parse failure', r => { failed(r).bodyError = 'Unexpected token in JSON'; }],
+    ['wrong observed URL', r => { failed(r).graphRead.url = r.base + '/api/unrelated'; }],
+    ['wrong observed ordinal', r => { failed(r).graphRead.index++; }],
+    ['replacement context differs', r => { replacement(r).contextId = '1280-competitor'; }],
+    ['replacement document differs', r => { replacement(r).documentIndex++; }],
+    ['replacement response incomplete', r => { replacement(r).graphRead.done = false; }],
+    ['replacement clone failed without abort', r => { delete replacement(r).graphRead.body; replacement(r).graphRead.bodyError = { name: 'TypeError' }; }],
+    ['replacement is an HTTP failure', r => { replacement(r).status = 500; }],
+    ['replacement epoch stale', r => { replacement(r).response.status.round.epoch--; replacement(r).graphRead.body = structuredClone(replacement(r).response); }],
+    ['replacement content forged', r => { replacement(r).response.nodes[0].canonical_name = 'forged'; replacement(r).graphRead.body = structuredClone(replacement(r).response); }]
+  ]) { const changed = structuredClone(row); mutate(changed); assert.throws(() => assertJourneySupersededGraphRead(failed(changed), changed), undefined, label); }
 });
 
 test('journey release boundary rejects rebound SQLite bytes, missing artifacts, timeout and external quality claims', async t => {

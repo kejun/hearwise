@@ -6,6 +6,10 @@ import { speechIntervalLedger } from '../../test-support/playback-text-contract.
 import { journeyText } from '../../test-support/user-journey-fixture.mjs';
 import { journeyWidths, journeyStages, journeyServedFiles, journeyLimits, journeyTitle, journeyUnrelatedTitle } from '../../test-support/user-journey-contract.mjs';
 import { userJourneyProfile } from '../../verification/user-journey-properties.mjs';
+import { CURRENT_DATABASE_VERSION } from '../../data-transfer.mjs';
+import { buildRelationRequest } from '../../relations.mjs';
+import { assertJourneyGraphResponse, bindGraphRead, assertCompleteGraphRead } from './user-journey-http-evidence.mjs';
+export { assertJourneyGraphResponse } from './user-journey-http-evidence.mjs';
 
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const contextId = value => typeof value === 'string' && /^[0-9]+-(main|competitor|reopened|negative)$/.test(value);
@@ -183,7 +187,9 @@ function verifyGraph(row) {
   activate(stageActions(row, 'graph-retry-complete'), '#graph-generate');
   assert.ok(cancelled.database.rows.relation_jobs.some(value => value.state === 'cancelled'), 'journey_cancel_durable');
   for (const [stageName, method] of [['graph-held', 'POST'], ['graph-cancelled', 'DELETE'], ['graph-retry-complete', 'POST']]) {
-    const wire = one(stageHttp(row, stageName), value => value.path === `/api/listenings/${row.mainId}/graph` && value.method === method, 'journey_graph_ui_http'); assert.equal(wire.status, 200);
+    const wire = one(stageHttp(row, stageName), value => value.path === `/api/listenings/${row.mainId}/graph` && value.method === method, 'journey_graph_ui_http');
+    const index = journeyStages.indexOf(stageName);
+    assertJourneyGraphResponse(wire, { listeningId: row.mainId, before: row.stages[index - 1].database, database: row.stages[index].database });
   }
   assert.equal(current.graph.status.state, 'complete');
   assert.equal(current.database.rows.relation_requests.length, 2);
@@ -193,11 +199,23 @@ function verifyGraph(row) {
   const relation = one(current.database.rows.relations, value => value.listening_id === row.mainId, 'journey_one_authored_relation');
   assert.equal(relation.subject_item_id, row.itemId); assert.equal(relation.predicate, 'released');
   const camera = one(current.database.rows.knowledge_items, value => value.canonical_name === 'Brownie camera', 'journey_camera'); assert.equal(relation.object_item_id, camera.id);
-  for (const request of calls) {
-    assert.equal(request.output.relations.length, 1); const proposed = request.output.relations[0];
+  for (const [index, request] of calls.entries()) {
+    const epoch = atStage(row, index ? 'graph-retry-complete' : 'graph-held').graph.status.round.epoch;
+    const job = one(current.database.rows.relation_jobs, value => value.listening_id === row.mainId && value.epoch === epoch, 'journey_provider_durable_job');
+    const input = JSON.parse(job.input_json), adapter = buildRelationRequest(input);
+    // Provider IDs are request-scoped n0/s0/e0 tokens, never SQLite UUIDs.
+    // Rebuild the exact wire from the persisted job, then parse back to durable IDs.
+    assert.deepEqual(request.input, JSON.parse(adapter.body.messages.at(-1).content), 'journey_relation_wire_input');
+    for (const segment of input.focus_segments) {
+      const saved = byId(current.database.rows.segments, segment.id);
+      assert.equal(saved.listening_id, row.mainId); assert.equal(segment.text, saved.original_text); assert.equal(segment.source_revision, digest(saved.original_text));
+    }
+    const parsed = adapter.parse(JSON.stringify(request.output)); assert.deepEqual(parsed.rejected, [], 'journey_relation_wire_rejected'); assert.equal(parsed.relations.length, 1);
+    const proposed = parsed.relations[0];
     assert.equal(proposed.subject_item_id, row.itemId); assert.equal(proposed.object_item_id, camera.id); assert.equal(proposed.predicate, 'released');
-    assert.ok(proposed.evidence_ids.length > 0);
-    for (const id of proposed.evidence_ids) assert.equal(byId(request.input.evidence, id).quote, journeyText.original[0]);
+    assert.equal(proposed.polarity, 'positive'); assert.equal(proposed.modality, 'asserted'); assert.equal(proposed.status, 'active');
+    assert.ok(proposed.supports.length > 0);
+    for (const support of proposed.supports) { assert.equal(support.quote, journeyText.original[0]); assert.equal(support.segment_id, segments(current.database, row.mainId)[0].id); }
   }
 }
 function verifyEdits(row) {
@@ -211,6 +229,7 @@ function verifyEdits(row) {
     assert.equal(added.length, 1, `journey_one_edit_receipt:${stageName}`); const receipt = added[0];
     const request = one(stageHttp(row, stageName), value => value.path === editPath(row) && value.method === 'POST' && value.request?.name === name, `journey_ui_edit_post:${stageName}`);
     assert.equal(request.idempotencyKey, receipt.id); assert.equal(receipt.state, 'succeeded');
+    assert.equal(request.status, ['receipt-recovered', 'save-uncertain'].includes(stageName) ? 502 : 200, 'journey_name_http_status');
     if (request.status === 200) assert.deepEqual(request.response.job, receiptView(receipt), 'journey_public_committed_receipt');
     const checked = checkNameCommittedTables({ before: before.database.rows, after: after.database.rows,
       identities: { listeningId: row.mainId, itemId: row.itemId, cameraId, segmentId: segments(before.database, row.mainId)[0].id }, id: receipt.id, input: request.request });
@@ -270,13 +289,25 @@ function verifyPlayback(row) {
 }
 function verifyImports(row) {
   assert.equal(row.downloads.length, 2, 'journey_two_ui_exports');
+  assert.equal(row.exportResponses?.length, 2, 'journey_actual_export_responses');
   const initial = row.downloads[0], final = row.downloads[1];
   for (const [download, stageName] of [[initial, 'exported'], [final, 'final-exported']]) {
     assert.ok(hash(download.sha256)); assert.ok(download.bytes > 100); assert.ok(download.path.endsWith('.sqlite'));
     assert.deepEqual(download.database, atStage(row, stageName).database, 'journey_export_complete_snapshot');
     assert.equal(row.actions[download.actionIndex].type, 'download');
     activate(stageActions(row, stageName), '#data-export');
-    assert.ok(stageHttp(row, stageName).some(value => value.method === 'GET' && value.path === '/api/data/export' && value.status === 200));
+    const url = new URL(download.url); assert.equal(url.origin, row.base, 'journey_download_origin');
+    assert.equal(url.pathname, '/api/data/export'); assert.match(url.search, /^\?download=\d+$/);
+    assert.match(download.suggestedFilename, /^hearwise-backup-\d{8}-\d{6}\.sqlite$/, 'journey_download_filename');
+    const response = one(row.exportResponses, value => value.path === url.pathname + url.search, 'journey_export_server_response');
+    assert.equal(response.fixtureId, row.fixtureId); assert.equal(response.origin, row.base); assert.equal(response.source, 'server-response-finish');
+    assert.equal(response.kind, 'data-export'); assert.equal(response.method, 'GET'); assert.equal(response.status, 200, 'journey_export_http_status');
+    assert.equal(response.sha256, download.sha256, 'journey_export_wire_hash'); assert.equal(response.bytes, download.bytes, 'journey_export_wire_bytes');
+    assert.deepEqual(response.headers, { contentType: 'application/vnd.sqlite3', contentLength: download.bytes,
+      contentDisposition: `attachment; filename="${download.suggestedFilename}"` }, 'journey_export_headers');
+    assert.ok(time(row.actions[download.actionIndex].at) <= time(download.startedAt) && time(download.startedAt) <= time(response.startedAt) &&
+      time(response.startedAt) <= time(response.finishedAt) && time(response.finishedAt) <= time(download.finishedAt) &&
+      time(download.finishedAt) <= time(atStage(row, stageName).at), 'journey_export_time_chain');
   }
   const documents = new Map(), urls = new Map();
   for (const request of row.http.filter(value => value.path.startsWith('/api/data/import/'))) {
@@ -307,6 +338,15 @@ function verifyImports(row) {
   assert.deepEqual(edited, changed, 'journey_competing_notes_only');
   const post = one(stageHttp(row, 'import-stale-rejected'), value => value.path === '/api/data/import/commit', 'journey_stale_import_once');
   assert.equal(post.status, 409); assert.equal(post.response.code, 'IMPORT_PREVIEW_STALE');
+  const patch = one(stageHttp(row, 'import-stale-rejected'), value => value.method === 'PATCH' && value.path === `/api/listenings/${row.mainId}`, 'journey_competing_metadata_http');
+  assert.equal(patch.contextId, `${row.width}-competitor`, 'journey_competing_metadata_actor'); assert.notEqual(patch.contextId, post.contextId);
+  assert.equal(patch.status, 200, 'journey_metadata_http_status');
+  const record = byId(stale.database.rows.listenings, row.mainId);
+  assert.deepEqual(patch.request, { title: record.title, notes: record.notes }, 'journey_metadata_request');
+  assert.deepEqual(patch.response, { listening: record }, 'journey_metadata_response');
+  const edits = stageActions(row, 'import-stale-rejected').filter(value => value.contextId === patch.contextId && time(value.at) <= time(patch.at));
+  activate(edits, '#edit-record'); expectAction(edits, 'fill', '#record-title-input', record.title); expectAction(edits, 'fill', '#record-notes-input', record.notes); activate(edits, '#save-record');
+  assert.ok(time(patch.at) <= time(post.at), 'journey_metadata_before_stale_commit');
   const expiry = one(stageHttp(row, 'import-expiry-rejected'), value => value.path === '/api/data/import/commit', 'journey_expired_import_once');
   assert.equal(expiry.status, 410); assert.equal(expiry.response.code, 'IMPORT_EXPIRED');
   assert.deepEqual(expired.database, stale.database, 'journey_expired_import_no_write');
@@ -334,6 +374,9 @@ function verifyImports(row) {
     assert.ok(hash(commit.request.tokenSha256) && hash(commit.request.previewTokenSha256), 'journey_redacted_import_capabilities');
     if (['import-collision-preserved', 'import-restored'].includes(stageName)) {
       assert.equal(commit.status, 200); assert.equal(commit.response.addedCount, 1); assert.equal(commit.response.skippedCount, 1);
+      assert.equal(commit.response.ok, true, 'journey_import_success'); assert.equal(commit.response.changed, true, 'journey_import_changed');
+      assert.equal(commit.response.mode, 'append', 'journey_import_response_mode'); assert.equal(commit.response.databaseVersion, CURRENT_DATABASE_VERSION);
+      assert.equal(commit.response.listeningCount, 2); assert.match(commit.response.safetyBackup, /^before-import-\d{8}-\d{6}-[a-f0-9]{8}\.sqlite$/, 'journey_import_safety_backup');
     }
   }
   const collision = atStage(row, 'import-collision-preserved');
@@ -373,6 +416,40 @@ function verifyNegative(row, sourceDigests, mutation) {
   expectAction(row.actions.slice(before.actionThrough, after.actionThrough), 'press', '#knowledge-edit-name', 'Enter');
   assert.ok(row.served.some(value => value.file === mutation.file && value.sha256 === mutation.mutantSha256 && value.contextId === negative.after.contextId), 'journey_negative_served_mutant');
 }
+export function assertJourneySupersededGraphRead(request, row) {
+  assert.equal(request.method, 'GET', 'journey_cancel_only_graph_read'); assert.equal(request.path, `/api/listenings/${row.mainId}/graph`, 'journey_cancel_only_graph_read');
+  assert.equal(request.query, ''); assert.equal(request.failure, 'net::ERR_ABORTED', 'journey_graph_abort_transport');
+  assert.ok(request.status === null || request.status === 200, 'journey_graph_abort_status');
+  if (request.bodyError) assert.match(request.bodyError, /^response\.text: Protocol error \(Network\.getResponseBody\): (?:No data found for resource with given identifier|No resource with given identifier found)(?:\n|$)/, 'journey_graph_abort_body_error');
+  const read = bindGraphRead(request, row), aborted = time(read.abortedAt);
+  assert.ok(aborted >= time(read.startedAt) && aborted - time(read.startedAt) < 10000, 'journey_graph_abort_not_timeout');
+  if (read.fetchError || read.bodyError) assert.ok(aborted <= time(read.finishedAt), 'journey_graph_abort_before_error_settlement');
+  if (read.headersAt !== undefined) assert.ok(time(read.headersAt) <= aborted, 'journey_graph_headers_before_abort');
+  assert.ok(time(request.failureAt) >= aborted && time(request.failureAt) <= time(row.finishedAt), 'journey_graph_abort_time');
+  const source = row.base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/knowledge-graph\\.js';
+  assert.match(read.abortStack, new RegExp(`\\bat (?:Object\\.)?(?:stop|reconcile|select|changeGeneration) \\(${source}:\\d+:\\d+\\)`), 'journey_graph_abort_owner');
+  if (read.fetchError) { assert.equal(read.status, null); assert.equal(read.fetchError.name, 'AbortError'); }
+  else {
+    assert.equal(read.status, 200); assert.ok(time(read.headersAt) >= time(read.startedAt) && time(read.headersAt) <= time(read.finishedAt));
+    if (read.bodyError) assert.equal(read.bodyError.name, 'AbortError');
+    else assert.equal(read.body?.listeningId, row.mainId, 'journey_graph_aborted_body_identity');
+  }
+  const replacement = row.http.find(value => value.index > request.index && value.contextId === request.contextId && value.documentIndex === request.documentIndex &&
+    value.path === request.path && value.query === request.query && value.method === 'GET' && value.status === 200 && !value.failure && !value.bodyError && value.response);
+  assert.ok(replacement, 'journey_graph_replacement_read'); const next = assertCompleteGraphRead(replacement, row);
+  assert.ok(time(next.startedAt) >= aborted, 'journey_graph_replacement_after_abort');
+  assert.equal(next.status, 200);
+  const checkpoint = row.stages.find(stage => stage.httpThrough > replacement.index && time(stage.at) >= time(next.finishedAt));
+  assert.ok(checkpoint && checkpoint.selectedId === row.mainId, 'journey_graph_replacement_checkpoint');
+  const record = byId(checkpoint.database.rows.listenings, row.mainId), graph = replacement.response;
+  assert.equal(graph.listeningId, row.mainId); assert.equal(graph.graphRevision, record.graph_revision, 'journey_graph_replacement_revision');
+  assert.equal(graph.graph_revision, graph.graphRevision); assert.equal(graph.status.round?.epoch, record.relation_epoch, 'journey_graph_replacement_epoch');
+  const round = byId(checkpoint.database.rows.relation_rounds, graph.status.round.id);
+  assert.equal(round.listening_id, row.mainId); assert.equal(round.epoch, record.relation_epoch); assert.equal(graph.status.round.state, round.state);
+  // The same fixed checkpoint is subsequently checked against its public query,
+  // complete SQLite projection and rendered view/recovery state by inspectWidth.
+  bindPublic({ ...checkpoint, graph }, row);
+}
 function inspectWidth(row, { sourceDigests, mutation }) {
   const [start, finish] = interval(row.startedAt, row.finishedAt, journeyLimits.browserMs);
   assert.equal(row.complete, true); assert.ok(!row.failure, 'journey_width_failure');
@@ -388,8 +465,14 @@ function inspectWidth(row, { sourceDigests, mutation }) {
   for (const request of row.http) {
     assert.ok(Number.isInteger(request.documentIndex) && request.documentIndex >= 1, 'journey_http_document'); assert.equal(typeof request.query, 'string');
     assert.ok(['GET', 'POST', 'PATCH', 'DELETE'].includes(request.method)); assert.ok(request.path.startsWith('/api/'));
-    assert.ok(!request.bodyError && !request.failure, 'journey_incomplete_http_observation');
-    assert.ok(time(request.at) >= start && time(request.at) <= finish); assert.ok(Number.isInteger(request.status) && request.status >= 200 && request.status <= 599);
+    assert.ok(time(request.at) >= start && time(request.at) <= finish);
+    if (request.bodyError || request.failure) assertJourneySupersededGraphRead(request, row);
+    else {
+      assert.ok(Number.isInteger(request.status) && request.status >= 200 && request.status <= 599);
+      if (request.method === 'GET' && /^\/api\/listenings\/[0-9a-f-]{36}\/graph$/.test(request.path)) {
+        assertCompleteGraphRead(request, row);
+      }
+    }
   }
   for (const [index, stage] of row.stages.entries()) {
     const expectedSelected = ['empty', 'main-deleted', 'import-reviewed', 'import-restored'].includes(stage.name) ? null : stage.name === 'unrelated-created' ? row.unrelatedId : row.mainId;

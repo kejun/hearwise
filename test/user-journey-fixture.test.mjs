@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import WebSocket from 'ws';
 import { userJourneyFixture, journeyText } from '../test-support/user-journey-fixture.mjs';
 import { deadline } from '../test-support/lifecycle.mjs';
+import { assertJourneyGraphResponse } from '../scripts/lib/user-journey-evidence.mjs';
 
 async function until(read, predicate, label) {
   const end = Date.now() + 10000;
@@ -47,9 +48,10 @@ for (const batches of [[journeyText.original], journeyText.original.map(text => 
     assert.deepEqual(detail.segments.map(row => row.original_text), journeyText.original);
     assert.deepEqual(detail.segments.map(row => row.translation_text), journeyText.translation);
     assert.deepEqual(detail.knowledge.map(row => row.canonical_name).sort(), ['Brownie camera', 'Eastman Kodak']);
-    const started = await fetch(f.base + url + '/graph', { method: 'POST', signal: AbortSignal.timeout(3000),
+    const before = f.snapshot(), started = await fetch(f.base + url + '/graph', { method: 'POST', signal: AbortSignal.timeout(3000),
       headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'journey-synthetic-only' }) });
-    assert.equal(started.status, 202);
+    assertJourneyGraphResponse({ method: 'POST', path: url + '/graph', status: started.status, response: await started.json() },
+      { listeningId: identity, before, database: f.snapshot() });
     const graph = await until(() => get(url + '/graph'), value => value.relations.length === 1 && value.status.runningJobs === 0 && value.status.pendingJobs === 0, 'committed relation');
     assert.equal(graph.nodes.length, 2);
     const durable = f.snapshot(); assert.equal(durable.integrity, 'ok'); assert.deepEqual(durable.foreignKeyErrors, []);
@@ -75,8 +77,19 @@ for (const batches of [[journeyText.original], journeyText.original.map(text => 
 test('journey relation continuation completes before an obsolete HTTP supplier is released', { timeout: 30000 }, async () => {
   const f = await userJourneyFixture(); let socket;
   const request = async (url, method = 'GET', body) => {
+    const before = method === 'GET' ? null : f.snapshot();
     const response = await fetch(f.base + url, { method, ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(3000) });
-    assert.ok(response.ok); return response.json();
+    const value = await response.json();
+    if (method === 'GET') assert.equal(response.status, 200);
+    else {
+      // Feed actual server responses into the same reader used for browser raw
+      // evidence; a synthetic 200 default must not conceal POST admission 202.
+      const wire = { method, path: url, status: response.status, response: value };
+      const options = { listeningId: url.split('/')[3], before, database: f.snapshot() };
+      assertJourneyGraphResponse(wire, options);
+      assert.throws(() => assertJourneyGraphResponse({ ...wire, status: method === 'POST' ? 200 : 202 }, options), /journey_graph_http_status/);
+    }
+    return value;
   };
   try {
     socket = new WebSocket(f.base.replace('http:', 'ws:') + '/ws'); const messages = [];

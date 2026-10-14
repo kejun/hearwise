@@ -20,7 +20,7 @@ export async function userJourneyFixture() {
   let workletCapture;
   let holdRelation = false, holdSpeech = false, clockSequence = 0;
   let fixture;
-  try { workletCapture = await capturePlaybackWorkletResponses(); fixture = await speechFixture({
+  try { workletCapture = await capturePlaybackWorkletResponses({ captureExports: true }); fixture = await speechFixture({
     audioSamples: 6000,
     serverImports: [new URL('./import-protocol-control.mjs', import.meta.url).href, ...workletCapture.imports],
     extraEnv: { HEARWISE_IMPORT_TEST_CONTROL: controlDirectory, ...workletCapture.env },

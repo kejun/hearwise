@@ -157,11 +157,20 @@ File passed to fetch, without waiting before calling the original fetch. The raw
 reader binds that observed hash/size/name, upload request, explicit confirmation,
 HTTP response, local SQLite checkpoint, and saved download bytes. Missing Chromium
 inspector upload bodies are not filled from expected local file contents.
+When Chromium omits page-level download requests, the existing isolated server
+response observer records the actual export stream's hash, byte count and three
+download headers. These must match the real Download URL, suggested filename,
+UI action, saved backup bytes and SQLite contents; no page HTTP event is invented.
 The fetch URL, method and ordinal must match that document's HTTP requests;
 closing settings after a successful import reloads the document and resets those
 ordinals. An old-document response cannot borrow the next document's clone ledger.
 Rendered graph relations include the actual relation ID, visible text and
 accessible label, all checked against the stored edge and current node names.
+Graph reads also retain real fetch/AbortSignal observations. A cancelled GET is
+not a successful response: accepting intentional supersession requires the actual
+production loader-stop stack, a bounded abort time and a successful same-document
+replacement bound to the subsequent durable/UI checkpoint. A network abort or
+the graph loader's ten-second timeout alone cannot satisfy that contract.
 
 The graph cancellation case holds the real supplier HTTP response while a new
 legitimate round completes on the same listening. Releasing the old supplier

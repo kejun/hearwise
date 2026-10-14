@@ -6,6 +6,33 @@ import { observeImportFetch } from './import-protocol-browser-observer.mjs';
 import { deadline } from './lifecycle.mjs';
 import { digest } from '../scripts/lib/verification-evidence.mjs';
 
+// Serialized into the page. Observe the application's real abort signal and a
+// response clone without replacing the response or delaying its delivery. A
+// network ERR_ABORTED alone cannot establish intentional loader supersession.
+export function observeJourneyGraphReads() {
+  const original = window.fetch;
+  window.__journeyGraphReads = [];
+  window.fetch = function (...args) {
+    const input = args[0], options = args[1], url = new URL(input instanceof Request ? input.url : input, location.href).href;
+    const method = String(options?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    if (method !== 'GET' || !/^\/api\/listenings\/[0-9a-f-]{36}\/graph$/.test(new URL(url).pathname)) return original.apply(this, args);
+    const signal = options?.signal || (input instanceof Request ? input.signal : null), now = () => new Date().toISOString();
+    const entry = { index: window.__journeyGraphReads.length, url, method, startedAt: now(), hasSignal: Boolean(signal),
+      initiallyAborted: signal?.aborted ?? false, abortedAt: null, abortStack: null, status: null, done: false };
+    window.__journeyGraphReads.push(entry);
+    signal?.addEventListener('abort', () => { entry.abortedAt = now(); entry.abortStack = new Error('Observed graph signal abort').stack; }, { once: true });
+    return original.apply(this, args).then(response => {
+      entry.status = response.status; entry.headersAt = now();
+      void response.clone().json().then(body => { entry.body = body; })
+        .catch(error => { entry.bodyError = { name: error.name, message: error.message }; })
+        .finally(() => { entry.done = true; entry.finishedAt = now(); });
+      return response;
+    }, error => {
+      entry.fetchError = { name: error.name, message: error.message }; entry.done = true; entry.finishedAt = now(); throw error;
+    });
+  };
+}
+
 export function safeJourneyValue(value) {
   if (Array.isArray(value)) return value.map(safeJourneyValue);
   if (!value || typeof value !== 'object') return value;
@@ -15,10 +42,11 @@ export function safeJourneyValue(value) {
 }
 export async function observeJourneyPage(page, row, contextId) {
   const pending = new Set(), requests = new Map(), responseIndices = new Map();
-  let documentIndex = 0;
+  let documentIndex = 0, graphReadIndex = 0;
   const task = promise => { pending.add(promise); void promise.finally(() => pending.delete(promise)); };
   const now = () => new Date().toISOString();
   await page.addInitScript(observeImportFetch, { uploadDigest: true });
+  await page.addInitScript(observeJourneyGraphReads);
   await page.addInitScript(() => {
     const NativeAudioContext = window.AudioContext;
     window.__journeyAudioContexts = [];
@@ -34,7 +62,7 @@ export async function observeJourneyPage(page, row, contextId) {
   // The fetch clone ledger belongs to the current document. Successful import
   // reloads on closing settings, so its ordinals restart for that new document.
   page.on('framenavigated', frame => {
-    if (frame === page.mainFrame()) { documentIndex++; responseIndices.clear(); }
+    if (frame === page.mainFrame()) { documentIndex++; graphReadIndex = 0; responseIndices.clear(); }
   });
   page.on('pageerror', error => row.errors.push({ contextId, message: error.message }));
   page.on('request', request => {
@@ -50,6 +78,7 @@ export async function observeJourneyPage(page, row, contextId) {
     if (url.pathname.startsWith('/api/data/import/')) {
       entry.responseIndex = responseIndices.get(request.url()) || 0; responseIndices.set(request.url(), entry.responseIndex + 1);
     }
+    if (entry.method === 'GET' && /^\/api\/listenings\/[0-9a-f-]{36}\/graph$/.test(entry.path)) entry.graphReadIndex = graphReadIndex++;
     row.http.push(entry); requests.set(request, entry);
   });
   page.on('response', response => {
@@ -82,7 +111,7 @@ export async function observeJourneyPage(page, row, contextId) {
       } catch (error) { row.errors.push({ contextId, message: 'served response: ' + error.message }); }
     })());
   });
-  page.on('requestfailed', request => { const entry = requests.get(request); if (entry) entry.failure = request.failure()?.errorText ?? 'unknown request failure'; });
+  page.on('requestfailed', request => { const entry = requests.get(request); if (entry) { entry.failure = request.failure()?.errorText ?? 'unknown request failure'; entry.failureAt = now(); } });
   page.on('websocket', socket => {
     const url = new URL(socket.url()); if (url.host !== new URL(row.base).host) return;
     const entry = { index: row.websockets.length, contextId, path: url.pathname, at: now(), sent: [], received: [], closedAt: null };
@@ -96,7 +125,18 @@ export async function observeJourneyPage(page, row, contextId) {
     socket.on('framesent', ({ payload }) => frame('sent', payload)); socket.on('framereceived', ({ payload }) => frame('received', payload));
     socket.on('close', () => { entry.closedAt = now(); });
   });
-  return { drain: () => deadline(() => Promise.all([...pending]), 7000, 'Journey browser observations') };
+  return { drain: () => deadline(async () => {
+    await Promise.all([...pending]);
+    const entries = row.http.filter(entry => entry.contextId === contextId && entry.documentIndex === documentIndex && entry.graphReadIndex !== undefined);
+    if (!entries.length || page.isClosed()) return;
+    await page.waitForFunction(count => window.__journeyGraphReads?.length >= count && window.__journeyGraphReads.every(entry => entry.done), entries.length, { timeout: 7000 });
+    const observed = await page.evaluate(() => window.__journeyGraphReads);
+    for (const entry of entries) {
+      const value = observed[entry.graphReadIndex]; assert.ok(value); assert.equal(value.index, entry.graphReadIndex);
+      assert.equal(value.url, row.base + entry.path + entry.query); assert.equal(value.method, entry.method);
+      entry.graphRead = safeJourneyValue(value);
+    }
+  }, 7000, 'Journey browser observations') };
 }
 export async function journeyUi(page) {
   return page.evaluate(() => {

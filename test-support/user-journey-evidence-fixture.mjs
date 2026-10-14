@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ListeningStore } from '../storage.mjs';
 import { exportDatabase, appendDatabase } from '../data-transfer.mjs';
+import { buildRelationRequest } from '../relations.mjs';
 import { databaseSnapshot } from './import-protocol-fixture.mjs';
 import { journeyText } from './user-journey-fixture.mjs';
 import { journeyWidths, journeyStages, journeyScreenshots, journeyServedFiles, journeyLimits, journeyExternalAcceptance } from './user-journey-contract.mjs';
@@ -29,7 +30,7 @@ export async function userJourneyEvidenceFixture(directory, { outerRun } = {}) {
       const filename = path.join(working, `${width}.sqlite`), store = new ListeningStore(filename);
       try {
         const row = { width, fixtureId: randomUUID(), base: 'http://127.0.0.1:43210', startedAt: tick(), complete: true, stages: [], actions: [],
-          http: [], websockets: [], providerLedger: [], served: [], downloads: [], errors: [], clockEvents: [], faults: [], ttsLedger: [], cleanup: [] };
+          http: [], websockets: [], providerLedger: [], served: [], downloads: [], exportResponses: [], errors: [], clockEvents: [], faults: [], ttsLedger: [], cleanup: [] };
         browser.widths.push(row); let actor = `${width}-main`, selectedId = null, documentIndex = 1, main, aux, held;
         const importIndices = new Map(), urlIndices = new Map();
         const action = (type, target, value) => { row.actions.push({ index: row.actions.length, contextId: actor, at: tick(), type, target, ...(value === undefined ? {} : { value }) }); return row.actions.length - 1; };
@@ -98,14 +99,17 @@ export async function userJourneyEvidenceFixture(directory, { outerRun } = {}) {
               short_description: value.short_description, new_information: journeyText.original[0], evidence: [{ segment_id: run.segments[0].id, quote: value.canonical_name }] })) }, startedAt: tick(), completedAt: tick(), held: false, transport: [] });
         };
         const relation = hold => {
-          action('press', '#graph-generate', 'Enter'); http('POST', `/api/listenings/${row.mainId}/graph`); store.enableRelations(row.mainId); const job = store.beginRelationRequest(store.nextRelationJob(row.mainId, { quietMs: 0 }).id);
-          const span = job.input.focus_segments[0];
-          const proposal = { subject_item_id: row.itemId, object_item_id: main.items[1].id, predicate: 'released', polarity: 'positive', modality: 'asserted', status: 'active', evidence_ids: ['span'] };
-          const request = { sequence: row.providerLedger.length + 1, kind: 'relation', input: { candidates: main.items, evidence: [{ id: 'span', quote: journeyText.original[0] }] }, output: { relations: [proposal] },
+          action('press', '#graph-generate', 'Enter'); store.enableRelations(row.mainId); const job = store.beginRelationRequest(store.nextRelationJob(row.mainId, { quietMs: 0 }).id);
+          http('POST', `/api/listenings/${row.mainId}/graph`, { key: '[synthetic credential omitted]' }, { ok: true, ...store.graphMetadata(row.mainId), processingAvailable: true }, 202);
+          const adapter = buildRelationRequest(job.input), wire = JSON.parse(adapter.body.messages.at(-1).content);
+          const proposal = { subject_item_id: wire.candidates.find(value => value.canonical_name === 'Eastman Kodak').id,
+            object_item_id: wire.candidates.find(value => value.canonical_name === 'Brownie camera').id,
+            predicate: 'released', polarity: 'positive', modality: 'asserted', status: 'active', evidence_ids: [wire.evidence.find(value => value.quote === journeyText.original[0]).id] };
+          const output = { contract_version: wire.contract_version, evidence_version: wire.evidence_version, relations: [proposal] };
+          const request = { sequence: row.providerLedger.length + 1, kind: 'relation', input: wire, output,
             startedAt: tick(), completedAt: hold ? null : tick(), held: hold, transport: [] }; row.providerLedger.push(request);
           if (!hold) {
-            const result = store.commitRelationJob(job.id, { relations: [{ ...proposal, statement: journeyText.original[0], conditions: null, time_scope: null, attribution: null, correction_of: null,
-              supports: [{ segment_id: span.id, source_revision: span.source_revision, start: 0, end: span.text.length, quote: span.text, role: 'relation' }] }] }); assert.equal(result.accepted, 1);
+            const result = store.commitRelationJob(job.id, adapter.parse(JSON.stringify(output))); assert.equal(result.accepted, 1);
           }
           return request;
         };
@@ -120,11 +124,24 @@ export async function userJourneyEvidenceFixture(directory, { outerRun } = {}) {
             http('GET', namePath().replace('/name-replacements', `/edits/${key}`), null, unknown === 'receipt-recovery' ? { job: response.job } : null, unknown === 'receipt-recovery' ? 200 : 502);
           }
         };
+        const supersededGraphRead = () => {
+          const startedAt = tick(), endpoint = `/api/listenings/${row.mainId}/graph`;
+          const failed = http('GET', endpoint, null, null, 200), headersAt = tick(), abortedAt = tick();
+          failed.graphReadIndex = 0; failed.failure = 'net::ERR_ABORTED'; failed.failureAt = tick();
+          failed.bodyError = 'response.text: Protocol error (Network.getResponseBody): No data found for resource with given identifier';
+          failed.graphRead = { index: 0, url: row.base + endpoint, method: 'GET', startedAt, hasSignal: true, initiallyAborted: false,
+            abortedAt, abortStack: `Error: Observed graph signal abort\n    at stop (${row.base}/knowledge-graph.js:62:31)`, status: 200, headersAt,
+            bodyError: { name: 'AbortError', message: 'The operation was aborted.' }, done: true, finishedAt: tick() };
+          const nextStarted = tick(), next = http('GET', endpoint, null, { ...store.graph(row.mainId), processingAvailable: false }); next.graphReadIndex = 1;
+          next.graphRead = { index: 1, url: row.base + endpoint, method: 'GET', startedAt: nextStarted, hasSignal: true, initiallyAborted: false,
+            abortedAt: null, abortStack: null, status: 200, headersAt: tick(), body: clone(next.response), done: true, finishedAt: tick() };
+        };
         capture('empty'); main = start('Journey main'); row.mainId = main.listeningId; capture('listening-started'); captions(main); capture('captions'); finish(main); row.itemId = main.items[0].id; capture('stopped');
-        held = relation(true); capture('graph-held'); action('press', '#graph-cancel', 'Enter'); store.cancelRelations(row.mainId); http('DELETE', `/api/listenings/${row.mainId}/graph`); capture('graph-cancelled');
+        held = relation(true); capture('graph-held'); action('press', '#graph-cancel', 'Enter'); store.cancelRelations(row.mainId);
+        http('DELETE', `/api/listenings/${row.mainId}/graph`, null, { ok: true, ...store.graphMetadata(row.mainId), processingAvailable: false }, 200); capture('graph-cancelled');
         relation(false); capture('graph-retry-complete'); held.completedAt = tick(); held.transport.push({ type: 'close', destroyed: true, at: tick() }, { type: 'provider-return', destroyed: true, at: tick() }); capture('graph-late-completed');
         aux = start('Journey unrelated'); row.unrelatedId = aux.listeningId; captions(aux); finish(aux); capture('unrelated-created'); selectedId = row.mainId;
-        edit('Kodak'); capture('name-corrected'); actor = `${width}-competitor`; const staleRevision = store.knowledgeEditSnapshot(row.mainId, row.itemId).revision; capture('conflict-opened');
+        edit('Kodak'); supersededGraphRead(); capture('name-corrected'); actor = `${width}-competitor`; const staleRevision = store.knowledgeEditSnapshot(row.mainId, row.itemId).revision; capture('conflict-opened');
         actor = `${width}-main`; edit('Kodak Company'); actor = `${width}-competitor`; action('press', '#knowledge-edit-name', 'Enter');
         http('POST', namePath(), { name: 'Eastman Kodak Company', revision: staleRevision }, { code: 'KNOWLEDGE_EDIT_STALE', saved: false }, 409, randomUUID());
         const rejected = capture('conflict-rejected'); Object.assign(rejected.ui.editor, { open: true, draft: 'Eastman Kodak Company', source: 'Kodak Company', status: '已读取最新内容，输入已保留' });
@@ -145,9 +162,15 @@ export async function userJourneyEvidenceFixture(directory, { outerRun } = {}) {
         const paused = capture('paused-seek', { playback: clone(seek) }); paused.ui.speech.paused = true; paused.ui.speech.enabled = true;
         seek.sockets[0].sent.push({ type: 'speech.resume' }); capture('seek-resumed', { playback: seek }); capture('history-reopened'); actor = `${width}-reopened`; capture('context-reopened');
         const backup = async (name, stage) => {
-          const file = `journey-${width}-${name}.sqlite`, actionIndex = action('download', '#data-export'); exportDatabase(store, path.join(directory, file));
-          const bytes = await readFile(path.join(directory, file)); const result = { path: file, name, actionIndex, bytes: bytes.length, sha256: digest(bytes), database: databaseSnapshot(path.join(directory, file)) };
-          row.downloads.push(result); http('GET', '/api/data/export'); capture(stage); return result;
+          const file = `journey-${width}-${name}.sqlite`, actionIndex = action('download', '#data-export'), startedAt = tick(), serverStart = tick();
+          const endpoint = `/api/data/export?download=${Date.parse(startedAt)}`, suggestedFilename = 'hearwise-backup-20261014-010000.sqlite';
+          exportDatabase(store, path.join(directory, file));
+          const bytes = await readFile(path.join(directory, file)), sha256 = digest(bytes);
+          row.exportResponses.push({ fixtureId: row.fixtureId, origin: row.base, source: 'server-response-finish', method: 'GET', path: endpoint,
+            kind: 'data-export', startedAt: serverStart, finishedAt: tick(), status: 200, bytes: bytes.length, sha256,
+            headers: { contentType: 'application/vnd.sqlite3', contentLength: bytes.length, contentDisposition: `attachment; filename="${suggestedFilename}"` } });
+          const result = { path: file, name, actionIndex, url: row.base + endpoint, suggestedFilename, startedAt, finishedAt: tick(), bytes: bytes.length, sha256, database: databaseSnapshot(path.join(directory, file)) };
+          row.downloads.push(result); capture(stage); return result;
         };
         const first = await backup('initial', 'exported');
         const remove = (id, stage) => { action('dialog-accept', 'delete-listening'); store.removeListening(id); if (selectedId === id) selectedId = null; http('DELETE', `/api/listenings/${id}`); capture(stage); };
@@ -160,14 +183,24 @@ export async function userJourneyEvidenceFixture(directory, { outerRun } = {}) {
           request.fetch.requestBody = { kind: 'File', name: backup.path, size: backup.bytes, type: 'application/vnd.sqlite3', sha256: backup.sha256 }; capture(stage);
         };
         const commit = (status, response) => { action('press', '#data-import-confirm', 'Enter'); return http('POST', '/api/data/import/commit', { mode: 'append', tokenSha256: lastPreview.tokenSha256, previewTokenSha256: lastPreview.previewTokenSha256 }, response, status); };
-        upload(first, 'import-reviewed-stale'); store.updateMetadata(row.mainId, { notes: 'Changed local metadata' }); commit(409, { code: 'IMPORT_PREVIEW_STALE' });
+        upload(first, 'import-reviewed-stale'); actor = `${width}-competitor`;
+        const metadata = { title: 'Journey main', notes: 'Local metadata changed after import preview' };
+        action('click', '#edit-record'); action('fill', '#record-title-input', metadata.title); action('fill', '#record-notes-input', metadata.notes); action('click', '#save-record');
+        http('PATCH', `/api/listenings/${row.mainId}`, metadata, { listening: store.updateMetadata(row.mainId, metadata) });
+        actor = `${width}-reopened`; commit(409, { code: 'IMPORT_PREVIEW_STALE' });
         lastPreview = { ...lastPreview, previewTokenSha256: digest('refreshed-preview') };
         http('POST', '/api/data/import/preview', { mode: 'append', tokenSha256: lastPreview.tokenSha256 }, lastPreview); capture('import-stale-rejected');
         row.clockEvents.push({ command: 'expire', error: null, timers: [{ id: 0, active: false, requestedMilliseconds: 900000 }] }); capture('import-token-expired');
         commit(410, { code: 'IMPORT_EXPIRED' }); capture('import-expiry-rejected'); upload(first, 'import-reuploaded');
-        appendDatabase(store, path.join(directory, first.path), path.join(working, `${width}-safety-1.sqlite`)); commit(200, { addedCount: 1, skippedCount: 1 }); capture('import-collision-preserved');
+        const append = backup => {
+          const safetyBackup = `before-import-${new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)}-${randomUUID().slice(0, 8)}.sqlite`;
+          const result = appendDatabase(store, path.join(directory, backup.path), path.join(working, safetyBackup));
+          commit(200, { ok: true, databaseVersion: result.databaseVersion, listeningCount: result.listeningCount, mode: 'append', changed: result.changed !== false,
+            addedCount: result.addedCount, skippedCount: result.skippedCount, safetyBackup });
+        };
+        append(first); capture('import-collision-preserved');
         documentIndex++; const last = await backup('final', 'final-exported'); remove(row.mainId, 'main-deleted'); upload(last, 'import-reviewed');
-        appendDatabase(store, path.join(directory, last.path), path.join(working, `${width}-safety-2.sqlite`)); commit(200, { addedCount: 1, skippedCount: 1 }); capture('import-restored'); documentIndex++; selectedId = row.mainId; capture('restored-reopened');
+        append(last); capture('import-restored'); documentIndex++; selectedId = row.mainId; capture('restored-reopened');
         actor = `${width}-negative`; documentIndex = 1; const before = { at: tick(), contextId: actor, dbPathSha256: digest(filename), selectedId: row.mainId, actionThrough: row.actions.length, httpThrough: row.http.length, database: databaseSnapshot(filename), ui: ui() };
         edit('Kodak Broken Refresh'); const after = { at: tick(), contextId: actor, dbPathSha256: digest(filename), selectedId: row.mainId, actionThrough: row.actions.length, httpThrough: row.http.length, database: databaseSnapshot(filename), ui: clone(before.ui) };
         row.negative = { property: 'HW-11-06', contextId: actor, before, after, mutation, screenshot: `journey-${width}-negative.png` };

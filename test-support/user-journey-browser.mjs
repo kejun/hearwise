@@ -28,7 +28,7 @@ async function journey(width) {
   const fixture = await userJourneyFixture(), contexts = [], observers = [];
   const row = { width, fixtureId: fixture.fixtureId, base: fixture.base, startedAt: now(), finishedAt: null, complete: false,
     mainId: null, unrelatedId: null, itemId: null, stages: [], actions: [], http: [], websockets: [], providerLedger: [], served: [],
-    errors: [], cleanup: [], downloads: [], faults: [], clockEvents: [], ttsLedger: [], negative: null };
+    errors: [], cleanup: [], downloads: [], exportResponses: [], faults: [], clockEvents: [], ttsLedger: [], negative: null };
   report.widths.push(row);
   let a, competitor, failed = false;
   const dbPathSha256 = digest(fixture.seeded.filename);
@@ -143,10 +143,12 @@ async function journey(width) {
   async function openData(client) { await click(client, '#settings-trigger'); await click(client, '#tab-data-button'); }
   async function exportBackup(client, label) {
     await openData(client); const downloadPromise = client.page.waitForEvent('download'); const actionIndex = action(client, 'download', '#data-export');
+    const startedAt = now();
     await client.page.locator('#data-export').click(); const download = await downloadPromise;
     const file = `journey-${width}-${label}.sqlite`; await download.saveAs(path.join(directory, file));
     assert.equal(await download.failure(), null); const bytes = await readFile(path.join(directory, file));
-    const result = { name: label, path: file, sha256: digest(bytes), bytes: bytes.length, database: databaseSnapshot(path.join(directory, file)), actionIndex };
+    const result = { name: label, path: file, url: download.url(), suggestedFilename: download.suggestedFilename(), startedAt, finishedAt: now(),
+      sha256: digest(bytes), bytes: bytes.length, database: databaseSnapshot(path.join(directory, file)), actionIndex };
     row.downloads.push(result); return result;
   }
   async function closeData(client) { await click(client, '#close-settings'); await client.page.waitForLoadState(); }
@@ -303,7 +305,10 @@ async function journey(width) {
     ]);
     for (const [index, result] of diagnostics.entries()) {
       if (result.status === 'rejected') row.errors.push({ message: result.reason?.message ?? String(result.reason), phase: 'diagnostic-cleanup' });
-      else if (index === observers.length) row.served.push(...result.value);
+      else if (index === observers.length) {
+        row.exportResponses.push(...result.value.filter(value => value.kind === 'data-export'));
+        row.served.push(...result.value.filter(value => value.kind !== 'data-export'));
+      }
     }
     try {
       row.providerLedger = structuredClone(fixture.providerLedger); row.ttsLedger = structuredClone(fixture.ttsLedger); row.clockEvents = structuredClone(fixture.clockEvents);
