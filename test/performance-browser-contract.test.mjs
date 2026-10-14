@@ -182,26 +182,59 @@ test('wheel input waits for the renderer page-scroll guard before dispatching th
   } finally { if (oldDocument === undefined) delete globalThis.document; else globalThis.document = oldDocument; }
 });
 
-test('import wire bodies are consumed before the UI action completes or navigates', async () => {
+
+test('real import fetch Response clones remain readable when the DevTools body is unavailable', async () => {
+  const { createServer } = await import('node:http');
+  const { observeImportFetch } = await import('../test-support/import-protocol-browser-observer.mjs');
   const { captureJsonResponse } = await import('../test-support/performance-browser.mjs');
-  for (const endpoint of ['/api/data/import/validate', '/api/data/import/commit']) {
-    const arrived = Promise.withResolvers(), bodyRead = Promise.withResolvers();
-    let evicted = false, reads = 0;
-    const response = { url: () => `http://127.0.0.1:1234${endpoint}`, request: () => ({ method: () => 'POST' }), status: () => 200,
-      json: async () => { assert.equal(evicted, false, 'Read must start before navigation'); reads++; bodyRead.resolve(); return { mode: 'append', addedCount: 1 }; } };
-    const page = { waitForResponse: predicate => { assert.equal(predicate(response), true);
-      assert.equal(predicate({ ...response, request: () => ({ method: () => 'GET' }) }), false);
-      assert.equal(predicate({ ...response, url: () => 'http://127.0.0.1:1234/api/unrelated' }), false); return arrived.promise; } };
-    const captured = captureJsonResponse(page, endpoint);
-    arrived.resolve(response); await bodyRead.promise; evicted = true;
-    assert.deepEqual(await captured, { status: 200, body: { mode: 'append', addedCount: 1 } }); assert.equal(reads, 1);
+  const oldWindow = globalThis.window, oldLocation = globalThis.location;
+  let requests = 0;
+  const server = createServer(async (request, response) => {
+    requests++; assert.equal(request.method, 'POST');
+    let bytes = 0; for await (const chunk of request) bytes += chunk.length;
+    response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ mode: 'append', addedCount: 1, bytes }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  globalThis.window = { fetch: globalThis.fetch }; globalThis.location = { href: base };
+  try {
+    observeImportFetch();
+    for (const route of ['/api/data/import/validate', '/api/data/import/commit']) {
+      const received = Promise.withResolvers();
+      const wire = { url: () => base + route, status: () => 200, request: () => ({ method: () => 'POST' }),
+        json: async () => { throw new Error('Network.getResponseBody: inspector cache evicted'); } };
+      const page = {
+        waitForResponse: predicate => { assert.equal(predicate(wire), true); return received.promise; },
+        waitForFunction: async (predicate, value) => {
+          const deadline = Date.now() + 2000;
+          while (!predicate(value)) { assert.ok(Date.now() < deadline, 'Real clone must complete'); await new Promise(resolve => setTimeout(resolve, 1)); }
+        },
+        evaluate: async (predicate, value) => structuredClone(predicate(value))
+      };
+      const captured = captureJsonResponse(page, route);
+      const response = await window.fetch(base + route, { method: 'POST', body: Buffer.alloc(700000, 1), signal: AbortSignal.timeout(2000) });
+      received.resolve(wire);
+      const originalBody = await response.json();
+      assert.deepEqual(await captured, { status: 200, body: originalBody });
+      assert.equal(originalBody.bytes, 700000, 'The genuine upload was delivered once, with no refetch');
+    }
+    assert.equal(requests, 2);
+  } finally {
+    if (oldWindow === undefined) delete globalThis.window; else globalThis.window = oldWindow;
+    if (oldLocation === undefined) delete globalThis.location; else globalThis.location = oldLocation;
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
   }
 });
 
-test('import response capture preserves HTTP status and body read failures', async () => {
+test('import response observation rejects duplicate, mismatched and missing real bodies', async () => {
   const { captureJsonResponse } = await import('../test-support/performance-browser.mjs');
-  const response = { status: () => 409, json: async () => ({ error: 'stale' }) };
-  assert.deepEqual(await captureJsonResponse({ waitForResponse: async () => response }, '/api/data/import/commit'), { status: 409, body: { error: 'stale' } });
-  const error = new Error('body unavailable');
-  await assert.rejects(captureJsonResponse({ waitForResponse: async () => ({ ...response, json: async () => { throw error; } }) }, '/api/data/import/commit'), error);
+  const url = 'http://127.0.0.1:1234/api/data/import/commit';
+  const baseline = { url, status: 409, done: true, body: { error: 'stale' } };
+  const run = entries => captureJsonResponse({
+    waitForResponse: async () => ({ url: () => url, status: () => 409 }),
+    waitForFunction: async () => {}, evaluate: async () => entries
+  }, '/api/data/import/commit');
+  assert.deepEqual(await run([baseline]), { status: 409, body: { error: 'stale' } });
+  for (const entries of [[], [baseline, baseline], [{ ...baseline, status: 200 }], [{ ...baseline, url: url + '?wrong=1' }],
+    [{ ...baseline, done: false }], [{ ...baseline, error: 'stream failed' }], [{ url, status: 409, done: true }]]) await assert.rejects(run(entries));
 });

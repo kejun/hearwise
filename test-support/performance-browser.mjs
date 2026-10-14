@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { observeImportFetch } from './import-protocol-browser-observer.mjs';
 
 export const browserPhases = Object.freeze(['history-first-page', 'history-next-page', 'detail-primary', 'detail-next-page',
   'graph-initial-e2e', 'graph-prefetched-activation', 'record-switch-a-b-a', 'graph-fullscreen', 'graph-zoom-in',
@@ -329,12 +330,13 @@ export async function realPointer(page, kind, record) {
   return { kind, ...point, mechanism: 'Playwright real mouse input; Cytoscape read-only coordinate observation' };
 }
 
-async function createSession(state, view = 'graph') {
+async function createSession(state, view = 'graph', { importObservation = false } = {}) {
   const { manifest: m, browser, report, contexts } = state;
   const { headless: _headless, ...contextOptions } = m.browser;
   const context = await browser.newContext({ ...contextOptions, serviceWorkers: 'block' }); contexts.add(context);
   await context.addInitScript(value => localStorage.setItem('tongsheng:knowledge-view', value), view);
   await context.addInitScript(installObservers);
+  if (importObservation) await context.addInitScript(observeImportFetch);
   const page = await context.newPage(), cdp = await context.newCDPSession(page), pageErrors = [], blockedRequests = [];
   page.setDefaultTimeout(m.timeouts.actionMs); page.setDefaultNavigationTimeout(m.timeouts.actionMs);
   page.on('pageerror', error => pageErrors.push(errorData(error)));
@@ -468,17 +470,26 @@ async function measurePhase(session, phase, state, prepared, index, warmup) {
   return sample;
 }
 export function captureJsonResponse(page, pathname) {
-  // Start consuming the body as soon as the wire response arrives, before the
-  // triggering UI action can finish or navigate and evict Chromium's body cache.
+  // Large file POST bodies need not remain in Chromium's DevTools cache. Bind
+  // the real wire event to the application's genuine Response clone instead.
+  // The existing observer neither awaits that clone nor replaces the Response.
   const captured = page.waitForResponse(response => new URL(response.url()).pathname === pathname && response.request().method() === 'POST')
-    .then(async response => ({ status: response.status(), body: await response.json() }));
+    .then(async response => {
+      await page.waitForFunction(route => window.__importProtocolResponses?.some(entry => new URL(entry.url).pathname === route && entry.done), pathname);
+      const entries = await page.evaluate(route => window.__importProtocolResponses.filter(entry => new URL(entry.url).pathname === route), pathname);
+      assert.equal(entries.length, 1, 'Import observation must identify exactly one real response');
+      const entry = entries[0]; assert.equal(entry.done, true); assert.equal(entry.url, response.url()); assert.equal(entry.status, response.status());
+      assert.equal(entry.error, undefined, `Import response body observation failed: ${entry.error}`);
+      assert.ok(Object.hasOwn(entry, 'body'), 'Missing real import response body');
+      return { status: entry.status, body: entry.body };
+    });
   captured.catch(() => {}); // The owner awaits the original promise after input.
   return captured;
 }
 async function importOnce(state) {
   const { manifest: m, report } = state;
   const bytes = await readFile(m.import.file); assert.equal(hash(bytes), m.import.sha256, 'Frozen import file hash');
-  const session = await createSession(state, 'list');
+  const session = await createSession(state, 'list', { importObservation: true });
   try {
     const { page } = session;
     await page.locator('#settings-trigger').click(); await page.locator('#tab-data-button').click(); await page.locator('#data-import-append').check();
@@ -497,7 +508,7 @@ async function importOnce(state) {
     report.import = { status: 'collected', count: 1, inputSha256: hash(bytes), addedCount: result.addedCount, expectedTotal: m.import.expectedTotal,
       preview: { mode: preview.mode, addedCount: preview.addedCount, skippedCount: preview.skippedCount, hasPreviewToken: Boolean(preview.previewToken) },
       result: { mode: result.mode, addedCount: result.addedCount, listeningCount: result.listeningCount, changed: result.changed },
-      historyResponse: historyResponses[0], reloadedOnClose: true, timingScope: 'One real UI append per isolated database, outside repeated read-only post-import samples.' };
+      historyResponse: historyResponses[0], reloadedOnClose: true, responseObservation: 'genuine-fetch-response-clone-bound-to-POST-wire-event', timingScope: 'One real UI append per isolated database, outside repeated read-only post-import samples.' };
     assert.deepEqual(session.pageErrors, []); assert.deepEqual(session.blockedRequests, []);
   } finally { await session.close(); }
 }
@@ -659,7 +670,7 @@ export function validateBrowserEvidence(report, manifest) {
     });
   }
   check('import', () => {
-    assert.equal(report.import.status, 'collected'); assert.equal(report.import.count, 1); assert.equal(report.import.inputSha256, manifest.import.sha256);
+    assert.equal(report.import.status, 'collected'); assert.equal(report.import.responseObservation, 'genuine-fetch-response-clone-bound-to-POST-wire-event'); assert.equal(report.import.count, 1); assert.equal(report.import.inputSha256, manifest.import.sha256);
     assert.equal(report.import.addedCount, 1); assert.equal(report.import.expectedTotal, manifest.import.expectedTotal);
     assert.equal(report.import.preview.hasPreviewToken, true); assert.equal(report.import.result.mode, 'append');
     assert.equal(report.import.result.addedCount, 1); assert.equal(report.import.result.listeningCount, manifest.import.addedCount); assert.equal(report.import.reloadedOnClose, true);

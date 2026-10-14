@@ -57,7 +57,7 @@ test('actual incomplete collection stays incomplete and rehashed report corrupti
 
 
 test('measurement identity binds execution and cleanup helpers independently of product changes', () => {
-  const helpers = ['scripts/lib/process.mjs', 'scripts/lib/verification-evidence.mjs', 'test-support/lifecycle.mjs'];
+  const helpers = ['scripts/lib/process.mjs', 'scripts/lib/verification-evidence.mjs', 'test-support/lifecycle.mjs', 'test-support/import-protocol-browser-observer.mjs'];
   const sources = Object.fromEntries([...helpers, 'scripts/collect-performance.mjs', 'server.mjs'].map(file => [file, 'a'.repeat(64)]));
   const baseline = performanceMeasurementDigest(sources);
   for (const helper of helpers) {

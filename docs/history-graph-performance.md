@@ -41,7 +41,7 @@ npm run performance:report -- verification-evidence/performance/run-XXXX --relea
 
 后端七阶段：历史第一页/第二页、A/B 记录详情、图谱 A、导入后历史及导入图谱。每次读取真实服务器及 SQLite，并核对响应状态、字节哈希、实体 ID、片段数、节点和关系数。完整响应内容按实际 SHA256 去重保存，每条样本保留对应哈希、字节数及全部原始计数，不删除慢样本。存储构造、服务器启动及导入准备不混入这些读取耗时。应用没有历史全文搜索，不能将分页查询称为全文搜索；图谱搜索单独实测。
 
-浏览器 21 阶段：历史首屏/下一页、详情/下一页、图谱首次端到端、已预取图谱激活、A→B→A、全屏、放大/缩小/适配/重新布局、搜索/类型筛选/节点详情、真实指针平移/拖点/滚轮、恢复总览、导入后历史/图谱。每个样本新建非持久 context、禁用 HTTP cache；同一 browser 进程复用。页面初始化作为设置步骤，不计入历史点击的首屏时间，也不声称冷 OS 文件缓存。滚轮输入先只读等待锁定 Cytoscape renderer 的 `scrollingPage` 抑制状态结束，再发送一次真实 mouse wheel；不靠固定休眠、重复滚轮或修改 renderer。该输入准备仍计入该阶段 wall 时间。导入 POST 响应在到达时立即读取正文，避免 UI 操作结束或导航后才读取已被 Chromium 回收的响应。
+浏览器 21 阶段：历史首屏/下一页、详情/下一页、图谱首次端到端、已预取图谱激活、A→B→A、全屏、放大/缩小/适配/重新布局、搜索/类型筛选/节点详情、真实指针平移/拖点/滚轮、恢复总览、导入后历史/图谱。每个样本新建非持久 context、禁用 HTTP cache；同一 browser 进程复用。页面初始化作为设置步骤，不计入历史点击的首屏时间，也不声称冷 OS 文件缓存。滚轮输入先只读等待锁定 Cytoscape renderer 的 `scrollingPage` 抑制状态结束，再发送一次真实 mouse wheel；不靠固定休眠、重复滚轮或修改 renderer。该输入准备仍计入该阶段 wall 时间。导入 POST 的 DevTools 正文缓存即使提前读取仍可能不可用，因此仅在导入专用 context 复用已验证的 `observeImportFetch`：只读 clone 应用实际收到的 Response，不等待 clone、不替换原 Response、不重发请求。真实 Playwright POST 事件的完整 URL/status 与唯一、完成的 clone 观测绑定，缺正文/读取失败/重复或错配均拒绝；这一直接测量依赖纳入 measurementDigest。导入动作处于重复性能样本之外。
 
 图谱在详情加载后会预取。首次图谱从没有该记录数据的 context 中的历史选择开始，核对真实 detail+graph 响应及节点、边和两次渲染帧；已预取 tab 激活是另一阶段。small 恰好只有 20 条历史、主记录 56 段，对两个不存在的下一页控件按精确域报告 `not_applicable`；medium/large 实际执行分页。
 

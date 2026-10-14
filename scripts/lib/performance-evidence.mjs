@@ -17,7 +17,7 @@ const exited = execution => execution && execution.code === 0 && execution.signa
 const safePath = file => typeof file === 'string' && file && !path.isAbsolute(file) && !file.split(/[\\/]/).includes('..') && !file.includes('\\');
 // Bind generic execution, atomic reporting and cleanup too. Product code stays
 // in sourceDigests, but can legitimately change between baseline and candidate.
-const measurementHelpers = ['scripts/lib/process.mjs', 'scripts/lib/verification-evidence.mjs', 'test-support/lifecycle.mjs'];
+const measurementHelpers = ['scripts/lib/process.mjs', 'scripts/lib/verification-evidence.mjs', 'test-support/lifecycle.mjs', 'test-support/import-protocol-browser-observer.mjs'];
 export function performanceMeasurementDigest(sources) {
   for (const file of measurementHelpers) assert.ok(hash(sources[file]), `Missing measurement dependency: ${file}`);
   return policyDigest(Object.fromEntries(Object.entries(sources).filter(([file]) => measurementHelpers.includes(file) ||
