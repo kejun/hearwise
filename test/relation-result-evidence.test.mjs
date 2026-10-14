@@ -4,21 +4,22 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runProcess } from '../scripts/lib/process.mjs';
+import { nestedProfileDeadlineMs, nestedProfileTestDeadlineMs } from '../scripts/lib/test-schedule.mjs';
+import { profileEvidenceDirectory } from '../test-support/profile-test-evidence.mjs';
 import { relationResultProfile } from '../verification/relation-result-properties.mjs';
 import { validateResult, checkArtifacts, metadata } from '../scripts/lib/verification-evidence.mjs';
 
-test('node-only relation result evidence cannot turn missing browser coverage into a pass', { timeout: 40000 }, async t => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'relation-result-report-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+test('node-only relation result evidence cannot turn missing browser coverage into a pass', { timeout: nestedProfileTestDeadlineMs }, async t => {
+  const directory = await profileEvidenceDirectory('relation-result');
   const execution = await runProcess(process.execPath, ['scripts/verify-relation-result-browser.mjs', '--node-only'], {
-    env: { ...process.env, RELATION_RESULT_EVIDENCE_DIR: directory }, timeoutMs: 35000
+    env: { ...process.env, RELATION_RESULT_EVIDENCE_DIR: directory }, timeoutMs: nestedProfileDeadlineMs
   });
   assert.equal(execution.code, 1, execution.tail);
-  assert.equal(execution.timedOut, false);
+  assert.equal(execution.timedOut, false, JSON.stringify(execution));
   const children = await readdir(directory); assert.equal(children.length, 1);
   const evidence = path.join(directory, children[0]);
   const report = JSON.parse(await readFile(path.join(evidence, 'report.json'), 'utf8'));
-  assert.equal(report.ok, false); assert.equal(report.complete, true);
+  assert.equal(report.ok, false); assert.equal(report.complete, true, JSON.stringify(report));
   const observations = JSON.parse(await readFile(path.join(evidence, 'observations.json'), 'utf8'));
   assert.deepEqual(observations.checks.map(check => check.name), ['source-integrity', 'http-results']);
   assert.ok(observations.checks[0].execution.testCount >= 80, 'Existing source regressions must actually run');

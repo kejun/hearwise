@@ -1,0 +1,49 @@
+{
+  "status": "incomplete_backend_error",
+  "notPassed": true,
+  "quint": "0.33.0",
+  "apalache": "0.62.1",
+  "java": "OpenJDK 21.0.12.1+1-1-deb13u1-Debian",
+  "depth": 4,
+  "exitCode": 1,
+  "signal": null,
+  "timedOut": false,
+  "error": "key not found: $C$54",
+  "sourceHashes": {
+    "verification/scheduler-protocol/translation.qnt": "aaaffc23a73a62b2071f7febc8b4b7719f8d43a5ea198d5767100239334c202b",
+    "verification/scheduler-protocol/configurations.qnt": "d443dace6ea26338b46abad1582fb08abb26a0028cb1971eb78eaab555fc4e75",
+    "verification/scheduler-protocol/toolchain.json": "b35c9c3587681cef8df31d71f88899c30be3f834b610ca396714452c49aedff8"
+  },
+  "command": [
+    "node",
+    "node_modules/.bin/quint",
+    "verify",
+    "verification/scheduler-protocol/configurations.qnt",
+    "--main",
+    "translation_small",
+    "--init",
+    "Init",
+    "--step",
+    "Step",
+    "--invariant",
+    "Safety",
+    "--max-steps",
+    "4",
+    "--backend",
+    "apalache",
+    "--server-endpoint",
+    "localhost:8907",
+    "--apalache-version",
+    "0.62.1",
+    "--verbosity",
+    "3"
+  ],
+  "workingDirectory": "A dedicated temporary directory, with absolute specification/CLI paths resolved from the checkout.",
+  "environment": {
+    "QUINT_HOME": "/tmp/hearwise-quint",
+    "JVM_ARGS": "-Xmx1536m"
+  },
+  "rawLog": "verification/scheduler-protocol/diagnostics/apalache-0.62.1-depth4.log",
+  "rawLogSha256": "54457a362d17db4c73f39c8264892118da56e17c6133d46643e8915839dff08f",
+  "interpretation": "Backend error during SMT execution after equivalent batch-pump expression simplification; no counterexample and no bounded proof. The same source is independently enumerated by TLC and replayed against the real server."
+}
