@@ -8,3 +8,10 @@ name = "Revision"
 [[lean_exe]]
 name = "revision_oracle"
 root = "Main"
+
+[[lean_lib]]
+name = "NameInterval"
+
+[[lean_exe]]
+name = "name_interval_oracle"
+root = "NameIntervalMain"
