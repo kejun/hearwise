@@ -20,17 +20,27 @@ test('automatic ASR can supersede a manual caption; pausing only the producer pr
   time = 3000; ws.send(Buffer.alloc(3200));
   await waitFor(() => fixture.stats.automaticSentences === 1 && events.filter(event => event.type === 'translation-updated').length === 2);
   assert.doesNotMatch(events.filter(event => event.type === 'translation-updated').at(-1).segment.translation_text, /99/);
-  fixture.setAutoSentences(false);
-  fixture.final('Sentence 777.'); await waitFor(() => events.some(event => event.type === 'translation-updated' && event.segment.translation_text.includes('777')));
-  const frames = fixture.stats.audioFrames;
-  time = 6000; ws.send(Buffer.alloc(3200)); await waitFor(() => fixture.stats.audioFrames === frames + 1);
-  assert.equal(fixture.stats.automaticSentences, 1);
-  assert.match(events.filter(event => event.type === 'translation-updated').at(-1).segment.translation_text, /777/);
-  assert.equal(fixture.stats.mtRequests.some(text => text.includes('777')), true);
-  fixture.setAutoSentences(true); time = 9000; ws.send(Buffer.alloc(3200));
+  await fixture.withAutoSentencesPaused(async () => {
+    fixture.final('Sentence 777.'); await waitFor(() => events.some(event => event.type === 'translation-updated' && event.segment.translation_text.includes('777')));
+    const frames = fixture.stats.audioFrames;
+    time = 6000; ws.send(Buffer.alloc(3200)); await waitFor(() => fixture.stats.audioFrames === frames + 1);
+    assert.equal(fixture.stats.automaticSentences, 1);
+    assert.match(events.filter(event => event.type === 'translation-updated').at(-1).segment.translation_text, /777/);
+    assert.equal(fixture.stats.mtRequests.some(text => text.includes('777')), true);
+  });
+  time = 9000; ws.send(Buffer.alloc(3200));
   await waitFor(() => fixture.stats.automaticSentences === 2 && events.filter(event => event.type === 'translation-updated').length === 4);
   assert.doesNotMatch(events.filter(event => event.type === 'translation-updated').at(-1).segment.translation_text, /777/);
-  assert.throws(() => fixture.setAutoSentences('false'), /boolean/);
+  await assert.rejects(fixture.withAutoSentencesPaused(async () => {
+    await fixture.withAutoSentencesPaused(async () => {});
+    const before = fixture.stats.audioFrames; time = 12000; ws.send(Buffer.alloc(3200));
+    await waitFor(() => fixture.stats.audioFrames === before + 1);
+    assert.equal(fixture.stats.automaticSentences, 2, 'Nested scope must restore the outer paused state');
+    throw new Error('Synthetic caption assertion failure');
+  }), /Synthetic caption assertion failure/);
+  time = 15000; ws.send(Buffer.alloc(3200));
+  await waitFor(() => fixture.stats.automaticSentences === 3 && events.filter(event => event.type === 'translation-updated').length === 5);
+  await assert.rejects(fixture.withAutoSentencesPaused(null), /operation/);
   assert.equal(fixture.stats.connections, 0);
   const ready = events.find(event => event.type === 'listening-ready');
   const detail = await (await fetch(`${fixture.base}/api/listenings/${ready.listeningId}`)).json();

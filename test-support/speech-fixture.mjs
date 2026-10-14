@@ -130,9 +130,10 @@ export async function speechFixture({ autoSentences = false, autoNow = () => Dat
   } finally {
     child.stdout.removeListener('data', onData); child.removeListener('error', onError); child.removeListener('exit', onExit);
   }
-  return { base, stats, final, setAutoSentences(enabled) {
-    if (typeof enabled !== 'boolean') throw new TypeError('Automatic sentence control requires a boolean');
-    autoSentences = enabled;
+  return { base, stats, final, async withAutoSentencesPaused(operation) {
+    if (typeof operation !== 'function') throw new TypeError('Automatic sentence scope requires an operation');
+    const previous = autoSentences; autoSentences = false;
+    try { return await operation(); } finally { autoSentences = previous; }
   }, seeded, logs: () => logs, close };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
