@@ -1,0 +1,72 @@
+{
+  "id": "negative-mutant_revision",
+  "kind": "negative",
+  "main": "mutant_revision",
+  "startedAt": "2026-10-14T16:33:52.591Z",
+  "finishedAt": "2026-10-14T16:34:09.103Z",
+  "source": {
+    "sha": "78822025515be6adc074e0e144408f90ce32cd6e",
+    "dirty": true
+  },
+  "filesBefore": {
+    "config.json": "ef580b8e571eb2153d2c845c493578c6d5c5524d7813a50ad66818b26967ee3f",
+    "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+    "properties.mjs": "5e27b07768c879bafb0b15261125f89fb81fb7d025f08856922907438eaca10b",
+    "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+    "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec",
+    "trace-contract.json": "39ed00f1af0a2d29e3848cb9e38912a2e2a6bf6ca256d20f2fd9806391b3263e",
+    "witnesses.qnt": "f99fa7af8a3adece295073d0fb368df17aef06e4fd8ad6a966cea127480ebd45"
+  },
+  "filesAfter": {
+    "config.json": "ef580b8e571eb2153d2c845c493578c6d5c5524d7813a50ad66818b26967ee3f",
+    "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+    "properties.mjs": "5e27b07768c879bafb0b15261125f89fb81fb7d025f08856922907438eaca10b",
+    "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+    "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec",
+    "trace-contract.json": "39ed00f1af0a2d29e3848cb9e38912a2e2a6bf6ca256d20f2fd9806391b3263e",
+    "witnesses.qnt": "f99fa7af8a3adece295073d0fb368df17aef06e4fd8ad6a966cea127480ebd45"
+  },
+  "argv": [
+    "/workspace/scratch/826e8d4c7b66/hearwise-kej71-model/node_modules/@informalsystems/quint/dist/src/cli.js",
+    "verify",
+    "/workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/configurations.qnt",
+    "--main",
+    "mutant_revision",
+    "--init",
+    "Init",
+    "--step",
+    "Step",
+    "--invariant",
+    "Safety",
+    "--backend",
+    "apalache",
+    "--apalache-version",
+    "0.62.1",
+    "--server-endpoint",
+    "127.0.0.1:45423",
+    "--verbosity",
+    "3",
+    "--max-steps",
+    "4",
+    "--out-itf",
+    "/workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification-evidence/name-model-prefreeze/negative-mutant_revision.itf.json"
+  ],
+  "timeoutMs": 120000,
+  "execution": {
+    "code": 1,
+    "signal": null,
+    "timedOut": false,
+    "interrupted": false,
+    "durationMs": 16506,
+    "ok": false
+  },
+  "complete": true,
+  "ok": true,
+  "status": "passed",
+  "detail": {
+    "trace": "negative-mutant_revision.itf.json",
+    "steps": 4,
+    "violation": "revisionRechecked",
+    "firstViolation": 4
+  }
+}

@@ -1,0 +1,71 @@
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:58:7
+  58:       mark("prepare", a, choice),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:71:54
+  71:     validActor(a), state.phase.get(a) == "prepared", mark("send", a, ""),
+                                                           ^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:67:54
+  67:     validActor(a), state.phase.get(a) == "prepared", mark("cancel", a, ""),
+                                                           ^^^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:94:69
+  94:       Set("ok", "associated_fail", "receipt_fail").contains(fault), mark("transaction", a, fault),
+                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:117:86
+  117:     validActor(a), state.phase.get(a) == "pending", state.txResult.get(a) != "none", mark("deliver", a, ""),
+                                                                                            ^^^^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:126:47
+  126:     Set("lost", "proxy502").contains(reason), mark("lose_response", a, reason),
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:130:99
+  130:     validActor(a), state.phase.get(a) == "recovering", Set("ok", "unavailable").contains(result), mark("lookup", a, result),
+                                                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:138:109
+  138:     validActor(a), Set("saved", "unknown", "conflict", "failed", "cancelled").contains(state.phase.get(a)), mark("refresh", a, ""),
+                                                                                                                   ^^^^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:142:75
+  142:     state.background == "none", Set("revision", "anchor").contains(kind), mark("background_change", -1, kind),
+                                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+ Error [QNT409]: Action independent::name_protocol::mark is used both for init and for step, and therefore can't be converted into TLA+. You can duplicate this with a different name to use on init. Sorry Quint can't do it for you yet.
+
+  at /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/verification/name-protocol/protocol.qnt:146:26
+  146:   action stutter = all { mark("stutter", -1, ""), state' = state }
+                                ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Failed to convert init to predicate
