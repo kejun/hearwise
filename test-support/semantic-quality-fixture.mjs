@@ -55,3 +55,34 @@ export function semanticFixtureResponse(mutation = 'none') {
       { ...row, polarity: 'positive', modality: mutation === 'condition' ? 'asserted' : 'planned', conditions: mutation === 'condition' ? null : 'If approved' }]);
   };
 }
+
+// Deliberate, predetermined annotation inputs for exercising the review reader.
+// This function is NOT a semantic judge and MUST NOT annotate real model output.
+export const semanticFixtureReviewers = ['synthetic contract oracle (not a human reviewer)'];
+export async function semanticFixtureReview(capture, mutation = 'none') {
+  const { createSemanticReviewTemplate, semanticSevereErrorTypes } = await import('../scripts/lib/semantic-quality-review.mjs');
+  const review = createSemanticReviewTemplate(capture, { reviewers: semanticFixtureReviewers });
+  review.reviewer = semanticFixtureReviewers[0]; review.reviewedAt = new Date().toISOString(); review.selectedVariantId = 'expected';
+  for (const row of review.rows) {
+    const output = row.output;
+    const name = output.kind === 'entity' ? output.value.canonical_name : output.kind === 'fact' ? output.owner.canonical_name : null;
+    row.goldId = output.kind === 'entity' ? name.toLowerCase() : output.kind === 'fact' ? `${name.toLowerCase()}-fact`
+      : output.value.modality === 'planned' || output.value.polarity === 'positive' && mutation !== 'negation' ? 'conditional-plan' : 'denied-payment';
+    row.severe = Object.fromEntries(semanticSevereErrorTypes.map(type => [type, false]));
+    row.reviewer = review.reviewer; row.reviewedAt = review.reviewedAt;
+    row.notes = 'Predetermined synthetic annotation input; this is not human approval or automatic semantic scoring.';
+    if (mutation === 'number' && output.kind === 'fact' && name === 'Atlas') row.severe.number = true;
+    if (mutation === 'negation' && output.kind === 'relation' && output.value.modality === 'asserted') row.severe.negation = true;
+    if (mutation === 'condition' && output.kind === 'relation' && output.value.polarity === 'positive') row.severe.condition = true;
+    if (mutation === 'attribution' && output.kind === 'relation') row.severe.attribution = true;
+    if (mutation === 'merge' && output.kind === 'entity' && name === 'Atlas') row.severe.merge = true;
+    if (mutation === 'unsupported' && output.kind === 'relation') { row.goldId = null; row.severe.unsupported = true; }
+    if (mutation === 'duplicate' && output.kind === 'fact' && output.value.content.includes('fifteen')) {
+      row.goldId = null; row.severe.duplicate = true;
+      row.duplicateOf = capture.units.find(other => other.kind === 'fact' && other.value.item_id === output.value.item_id && other.id !== output.id).id;
+    }
+  }
+  const matched = new Set(review.rows.map(row => row.goldId));
+  review.missingGoldIds = capture.sample.gold.variants[0].units.filter(unit => !matched.has(unit.id)).map(unit => unit.id);
+  return review;
+}

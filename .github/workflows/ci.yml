@@ -37,6 +37,8 @@ jobs:
         run: npm run verify:security -- --node-only --release
       - name: Check offline ASR and MT evaluation plumbing (no quality scores or paid calls)
         run: npm run quality:asr-mt -- offline --release
+      - name: Check offline semantic review plumbing (no human or model quality approval)
+        run: npm run quality:semantic -- offline --release
       - name: Verify relation property and evidence contract
         run: npm run verify -- --release
       - name: Preserve test progress and watchdog diagnostics

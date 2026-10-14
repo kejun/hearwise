@@ -12,6 +12,7 @@ import { KNOWLEDGE_MODEL, CONTRACT_REVISION } from '../../knowledge.mjs';
 import { RELATION_MODEL, RELATION_CONTRACT_VERSION } from '../../relations.mjs';
 import { closeServer, deadline } from '../../test-support/lifecycle.mjs';
 import { hashBytes, contractDigest } from './quality-contract.mjs';
+import { qualitySources } from './quality-collector.mjs';
 import { writeJson } from './verification-evidence.mjs';
 
 export function semanticDatabase(filename) {
@@ -42,6 +43,7 @@ export function semanticUnits(snapshot) {
 }
 
 export async function captureSemanticOffline({ directory, sample, response, signal }) {
+  const sourceStart = await qualitySources();
   await mkdir(directory, { recursive: false, mode: 0o700 });
   const filename = path.join(directory, 'store.sqlite'), startedAt = new Date().toISOString();
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000);
@@ -67,7 +69,7 @@ export async function captureSemanticOffline({ directory, sample, response, sign
         else assert.ok(reservation.parts.some(part => part.phase === (kind === 'repair' ? 'repair_inflight' : 'extract_inflight')));
         const output = response({ kind, input, sample, calls });
         const row = { kind, jobId: active.id, mode: 'offline', endpoint: `http://127.0.0.1:${server.address().port}`,
-          request: body, requestBytes: length, requestSha256: hashBytes(wire), response: output, reservation, at: new Date().toISOString() };
+          request: body, requestWire: wire, requestBytes: length, requestSha256: hashBytes(wire), response: output, reservation, at: new Date().toISOString() };
         calls.push(row);
         reply.writeHead(200, { 'content-type': 'application/json' });
         reply.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
@@ -126,11 +128,17 @@ export async function captureSemanticOffline({ directory, sample, response, sign
     const clean = await Promise.allSettled([server && closeServer(server, 'semantic provider'), Promise.resolve().then(() => store?.close())]);
     cleanup = clean.every(row => row.status === 'fulfilled');
   }
+  let sourceEnd = null;
+  try { sourceEnd = await qualitySources(); } catch { errorCode = 'SEMANTIC_SOURCE_UNREADABLE'; }
+  if (sourceEnd && contractDigest(sourceStart) !== contractDigest(sourceEnd)) errorCode = 'SEMANTIC_SOURCE_CHANGED';
+  const artifacts = [];
+  try { artifacts.push({ path: 'store.sqlite', sha256: hashBytes(await readFile(filename)) }); }
+  catch { errorCode ||= 'SEMANTIC_DATABASE_MISSING'; }
   const report = { schemaVersion: 1, kind: 'offline-semantic-capture', mode: 'offline', evidenceKind: 'synthetic-provider-output',
     pipeline: 'knowledge-then-relation-cascade', sample, sampleDigest: contractDigest(sample), startedAt, finishedAt: new Date().toISOString(),
-    complete: !errorCode && cleanup, cleanup, errorCode, qualityEvaluated: false, qualityStatus: 'not_run', liveCalls: 0,
+    complete: !errorCode && cleanup, cleanup, errorCode, qualityEvaluated: false, fullQualityAcceptance: false, qualityStatus: 'not_run', liveCalls: 0,
     models: { knowledge: KNOWLEDGE_MODEL, relation: RELATION_MODEL, knowledgeContract: CONTRACT_REVISION, relationContract: RELATION_CONTRACT_VERSION },
-    clock: 'offline workflow logical time; no latency measurement', run, calls, results, errors, visible, before, after,
-    units: after ? semanticUnits(after) : [], artifacts: [{ path: 'store.sqlite', sha256: hashBytes(await readFile(filename)) }] };
+    clock: 'offline workflow logical time; no latency measurement', sourceStart, sourceEnd, run, calls, results, errors, visible, before, after,
+    units: after ? semanticUnits(after) : [], artifacts };
   await writeJson(path.join(directory, 'capture.json'), report); return report;
 }
