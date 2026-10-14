@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixedTrace } from '../test-support/generation-trace-fixture.mjs';
+import { fixedTrace, generationDeadlineFactory } from '../test-support/generation-trace-fixture.mjs';
 import { createGenerationProtocolAdapter } from '../test-support/generation-protocol-adapter.mjs';
 import { replayGenerationTrace } from '../scripts/lib/generation-protocol-replay.mjs';
 import { validateGenerationReplayEvidence } from '../scripts/lib/generation-protocol-evidence.mjs';
@@ -81,13 +81,14 @@ for (const protocol of ['knowledge', 'relation']) test(`${protocol} restart evid
   // Two native witnesses share one 30s pool including both actual replays; the
   // final 5s belongs to cleanup. Each tool invocation still has its 10s cap.
   const deadlineAt = performance.now() + 30000;
+  const createBoundedAdapter = generationDeadlineFactory(createGenerationProtocolAdapter, { deadlineAt, signal: t.signal });
   const withinDeadline = () => assert.ok(performance.now() < deadlineAt, 'Restart evidence exceeded its shared deadline');
   const trace = await fixedTrace(t, protocol, 1, 1, 'deleteRestartLateTest', true, { deadlineAt });
-  const actual = await replayGenerationTrace(trace, createGenerationProtocolAdapter);
+  const actual = await replayGenerationTrace(trace, createBoundedAdapter);
   assert.equal(actual.ok, true); assert.deepEqual(validateGenerationReplayEvidence(trace, actual), { ok: true, reasons: [] });
   withinDeadline();
   const retainedTrace = await fixedTrace(t, protocol, 1, 1, 'successfulRestartTest', true, { deadlineAt });
-  const retained = await replayGenerationTrace(retainedTrace, createGenerationProtocolAdapter);
+  const retained = await replayGenerationTrace(retainedTrace, createBoundedAdapter);
   withinDeadline();
   const serialized = JSON.parse(JSON.stringify(retained));
   assert.equal(retained.ok, true);

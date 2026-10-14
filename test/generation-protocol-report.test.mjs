@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, access } from 'node:fs/promises';
+import * as traceFixture from '../test-support/generation-trace-fixture.mjs';
+import { deadline } from '../test-support/lifecycle.mjs';
 import { fixedTrace, runGenerationWitness } from '../test-support/generation-trace-fixture.mjs';
 import { createGenerationProtocolAdapter } from '../test-support/generation-protocol-adapter.mjs';
 import { replayGenerationTrace } from '../scripts/lib/generation-protocol-replay.mjs';
@@ -109,4 +111,89 @@ test('a shared witness deadline never resets between calls and records real chil
   });
   await assert.rejects(fixedTrace(t, 'knowledge', 1, 1, 'successfulRestartTest', true, { deadlineAt: expired }),
     error => error.code === 'GENERATION_WITNESS_BUDGET_EXHAUSTED');
+});
+
+for (const mode of ['deadline', 'parent-abort']) test(`shared restart ${mode} closes the real adapter and blocks later actions`, { timeout: 15000 }, async t => {
+  const adapter = await createGenerationProtocolAdapter({ protocol: 'knowledge', actors: 1, capacity: 1, refinement: 'fixed-ready-provider-permit-v1' });
+  const database = adapter.observe().raw.database.file;
+  let release, entered, starts = 0, closes = 0;
+  const holding = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
+  let cleaned = false;
+  const close = async () => { if (!cleaned) { cleaned = true; closes++; await adapter.close(); release(); } };
+  t.after(close);
+  const controller = new AbortController();
+  const factory = traceFixture.generationDeadlineFactory(async () => ({ ...adapter,
+    async act(step) { starts++; await adapter.act(step); entered(); await holding; }, close }),
+  { deadlineAt: performance.now() + (mode === 'deadline' ? 1000 : 10000), signal: controller.signal });
+  const bounded = await factory({});
+  const action = bounded.act({ action: 'permit', actor: -1, response: '' }); action.catch(() => {});
+  await started;
+  if (mode === 'parent-abort') controller.abort();
+  await assert.rejects(deadline(() => action, 3000, 'deadline cancellation observation'), /Generation replay (deadline|aborted)/);
+  await bounded.close();
+  assert.equal(closes, 1); assert.equal(starts, 1);
+  await assert.rejects(bounded.act({ action: 'permit', actor: -1, response: '' }), /Generation replay/);
+  assert.equal(starts, 1); await assert.rejects(access(database), { code: 'ENOENT' });
+});
+
+test('parent abort closes an adapter that finishes initialization after cancellation', { timeout: 15000 }, async t => {
+  const adapter = await createGenerationProtocolAdapter({ protocol: 'knowledge', actors: 1, capacity: 1, refinement: 'fixed-ready-provider-permit-v1' });
+  const database = adapter.observe().raw.database.file;
+  let release, entered, closes = 0;
+  const holding = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
+  t.after(() => adapter.close());
+  const controller = new AbortController();
+  const factory = traceFixture.generationDeadlineFactory(async () => { entered(); await holding; return { ...adapter,
+    async close() { closes++; await adapter.close(); } }; }, { deadlineAt: performance.now() + 10000, signal: controller.signal });
+  const creating = factory({}); creating.catch(() => {});
+  await started; controller.abort(); release();
+  await assert.rejects(creating, /Generation replay aborted/);
+  assert.equal(closes, 1); await assert.rejects(access(database), { code: 'ENOENT' });
+});
+
+test('parent abort waits for an active real restart before closing the reopened owner', { timeout: 15000 }, async t => {
+  const adapter = await createGenerationProtocolAdapter({ protocol: 'knowledge', actors: 1, capacity: 1, refinement: 'fixed-ready-provider-permit-v1' });
+  const database = adapter.observe().raw.database.file;
+  let release, entered, closes = 0, starts = 0;
+  const holding = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
+  t.after(async () => { release(); await adapter.close(); });
+  const controller = new AbortController();
+  const factory = traceFixture.generationDeadlineFactory(async () => ({ ...adapter,
+    async act(step) { starts++; await adapter.act(step); entered(); await holding; },
+    async close() { closes++; await adapter.close(); } }), { deadlineAt: performance.now() + 10000, signal: controller.signal });
+  const bounded = await factory({});
+  const action = bounded.act({ action: 'restart', actor: -1, response: '' }); action.catch(() => {});
+  await started; controller.abort();
+  await assert.rejects(action, /Generation replay aborted/);
+  assert.equal(closes, 0, 'the in-flight close/reopen operation retains ownership until it settles');
+  release(); await bounded.close();
+  assert.equal(closes, 1); assert.equal(starts, 1);
+  await assert.rejects(bounded.act({ action: 'restart', actor: -1, response: '' }), /Generation replay aborted/);
+  assert.equal(starts, 1); await assert.rejects(access(database), { code: 'ENOENT' });
+});
+
+test('expired or already aborted replay factories never create resources', async () => {
+  let starts = 0;
+  const create = async () => { starts++; return { close() {} }; };
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(traceFixture.generationDeadlineFactory(create, { deadlineAt: performance.now() + 1000, signal: controller.signal })({}), /Generation replay aborted/);
+  await assert.rejects(traceFixture.generationDeadlineFactory(create, { deadlineAt: performance.now() - 1 })({}), /Generation replay deadline exceeded/);
+  const active = new AbortController();
+  const queued = traceFixture.generationDeadlineFactory(create, { deadlineAt: performance.now() + 1000, signal: active.signal })({});
+  active.abort(); await assert.rejects(queued, /Generation replay aborted/);
+  assert.equal(starts, 0);
+});
+
+test('parent abort between action enqueue and execution does not start actual work', { timeout: 15000 }, async t => {
+  const adapter = await createGenerationProtocolAdapter({ protocol: 'knowledge', actors: 1, capacity: 1, refinement: 'fixed-ready-provider-permit-v1' });
+  const database = adapter.observe().raw.database.file;
+  let starts = 0, closes = 0;
+  t.after(() => adapter.close());
+  const controller = new AbortController();
+  const bounded = await traceFixture.generationDeadlineFactory(async () => ({ ...adapter,
+    async act(step) { starts++; await adapter.act(step); }, async close() { closes++; await adapter.close(); } }),
+  { deadlineAt: performance.now() + 10000, signal: controller.signal })({});
+  const action = bounded.act({ action: 'permit', actor: -1, response: '' });
+  controller.abort(); await assert.rejects(action, /Generation replay aborted/); await bounded.close();
+  assert.equal(starts, 0); assert.equal(closes, 1); await assert.rejects(access(database), { code: 'ENOENT' });
 });
