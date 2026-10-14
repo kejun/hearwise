@@ -1,0 +1,37 @@
+{
+  "id": "independent-tlc-depth0",
+  "startedAt": "2026-10-14T15:27:32.230Z",
+  "finishedAt": "2026-10-14T15:27:32.297Z",
+  "argv": [
+    "node_modules/@informalsystems/quint/dist/src/cli.js",
+    "verify",
+    "verification/name-protocol/configurations.qnt",
+    "--main",
+    "independent",
+    "--init",
+    "Init",
+    "--step",
+    "Step",
+    "--invariant",
+    "Safety",
+    "--backend",
+    "tlc",
+    "--apalache-version",
+    "0.62.1",
+    "--server-endpoint",
+    "127.0.0.1:18471",
+    "--verbosity",
+    "3",
+    "--tlc-config",
+    "verification/name-protocol/tlc.json"
+  ],
+  "execution": {
+    "code": 1,
+    "signal": null,
+    "timedOut": false,
+    "interrupted": false,
+    "durationMs": 66,
+    "tail": "node:internal/modules/cjs/loader:1520\n  throw err;\n  ^\n\nError: Cannot find module '/workspace/scratch/826e8d4c7b66/hearwise-kej71-model/docs/name-protocol-cost-probes/node_modules/@informalsystems/quint/dist/src/cli.js'\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1517:15)\n    at wrapResolveFilename (node:internal/modules/cjs/loader:1071:27)\n    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1095:10)\n    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1122:12)\n    at Module._load (node:internal/modules/cjs/loader:1294:5)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47 {\n  code: 'MODULE_NOT_FOUND',\n  requireStack: []\n}\n\nNode.js v24.19.0\n",
+    "ok": false
+  }
+}
