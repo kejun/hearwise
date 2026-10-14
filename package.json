@@ -24,7 +24,9 @@
     "check:format": "node scripts/check-text-format.mjs",
     "preverify": "npm run build",
     "verify": "node scripts/verify.mjs",
-    "verify:report": "node scripts/verify-report.mjs"
+    "verify:report": "node scripts/verify-report.mjs",
+    "preverify:revision": "npm run build",
+    "verify:revision": "node scripts/verify-revision.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
