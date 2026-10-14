@@ -357,6 +357,14 @@ function queueTranslation(segment, listeningId, target, kind = 'background') {
   if (segment.translation_state === 'complete') return;
   if (translations.enqueue({ segment, listeningId, target, kind })) pumpTranslations();
 }
+function notifyTranslation(callback) {
+  try { callback(); return true; }
+  catch {
+    // Delivery and its diagnostic sink cannot change a committed result or leak its slot.
+    try { console.info('translation_notification_failed'); } catch { /* Best-effort diagnostic only. */ }
+    return false;
+  }
+}
 function pumpTranslations() {
   while (translating + interimTranslating < translations.concurrency) {
     const task = translations.next();
@@ -385,13 +393,12 @@ function pumpTranslations() {
         else updated = store.setTranslation(task.segment.id, null, true, task.segment.original_text);
         logModelError('translation', error);
       } finally {
-        if (updated) broadcast(task.listeningId, { type: 'translation-updated', runId: updated.run_id, segment: updated });
-        if (updated) context.event('notification_sent');
-        speech.notify(task.listeningId);
+        if (updated && notifyTranslation(() => broadcast(task.listeningId, { type: 'translation-updated', runId: updated.run_id, segment: updated }))) context.event('notification_sent');
+        notifyTranslation(() => speech.notify(task.listeningId));
         translating--;
         activeTranslations.set(task.listeningId, activeTranslations.get(task.listeningId) - 1);
         if (!activeTranslations.get(task.listeningId)) activeTranslations.delete(task.listeningId);
-        publishProcessing(task.listeningId);
+        notifyTranslation(() => publishProcessing(task.listeningId));
         pumpTranslations(); knowledgeScheduler.pump(); maybeReleaseKey(task.listeningId);
       }
       return { outcome: failed ? 'failed' : updated || task.done ? 'ok' : 'discarded' };
