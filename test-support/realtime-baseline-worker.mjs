@@ -26,7 +26,19 @@ async function until(check, label, timeout = config.phaseTimeoutMs) {
 }
 const resourcesFile = path.join(directory, 'resources.jsonl');
 let fixture, sequence = 0, epoch = 0, phase = 'warmup';
-const sockets = [], records = new Map();
+const sockets = [], records = new Map(), switchingHolds = new Map();
+function holdSwitchingResponse(runId) {
+  let release;
+  const promise = new Promise(resolve => { release = resolve; });
+  const hold = { promise, waiting: false, released: false, expired: false };
+  const timer = setTimeout(() => { hold.expired = true; hold.release('deadline'); }, config.phaseTimeoutMs); timer.unref();
+  hold.release = reason => {
+    if (hold.released) return;
+    clearTimeout(timer); hold.released = true; release(); raw('switch-hold', { runId, action: 'release', reason });
+  };
+  switchingHolds.set(runId, hold); raw('switch-hold', { runId, action: 'create' });
+  return hold;
+}
 raw('runtime', { tools: { node: process.version, sqlite: process.versions.sqlite }, environment: { platform: process.platform, arch: process.arch, release: os.release(), cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() } });
 try {
   fixture = await speechFixture({ directoryRoot: path.join(directory, 'temporary-database'), translationDelay: plan.input.translationDelayMs,
@@ -35,9 +47,14 @@ try {
       HEARWISE_BASELINE_RESOURCES: resourcesFile, HEARWISE_BASELINE_SAMPLE_MS: String(config.sampleMs), HEARWISE_BASELINE_NEGATIVE: negative },
     serverImports: [path.resolve('test-support/realtime-resource-preload.mjs')],
     seed: store => ({ filename: store.db.prepare('PRAGMA database_list').get().file }),
-    modelResponse: body => {
+    modelResponse: async body => {
       if (body.model === 'qwen-mt-flash') return undefined;
       const input = JSON.parse(body.messages.at(-1).content);
+      const runIds = new Set(input.focus_segments.map(segment => records.get(segment.text.match(/Probe\d+/)?.[0])?.runId));
+      for (const runId of runIds) {
+        const hold = switchingHolds.get(runId);
+        if (hold && !hold.released) { hold.waiting = true; raw('switch-hold', { runId, action: 'await' }); await hold.promise; }
+      }
       return { items: input.focus_segments.map(segment => ({ action: 'create', type: 'other', display_label: 'product', canonical_name: segment.text.match(/Probe\d+/)[0],
         role: '核心系统', reason: '合成测试对象', existing_item_id: null, observed_candidate_id: null, correction_reason: null,
         aliases: [], short_description: '合成测试系统。', new_information: '仅用于本地负载测量。', certainty: 'clear',
@@ -146,12 +163,15 @@ try {
     await until(() => fixture.stats.asrClients.size === 0, 'ASR upstream retained after stop', config.cleanupObservationMs);
     raw('consumer-stopped', { runId: client.run.runId, consumerClosed: client.ws.readyState === 3 && client.tts.readyState === 3, providerAsrConnections: fixture.stats.asrClients.size });
     if (!drainWork) return;
-    await drain(client.run.listeningId); raw('drained', { listeningId: client.run.listeningId });
+    await drainAndCheckpoint(client.run.listeningId);
+  }
+  async function drainAndCheckpoint(listeningId) {
+    await drain(listeningId); raw('drained', { phase, listeningId });
     await wait(config.sampleMs * 2);
     const readStartedAt = new Date().toISOString();
     const samples = readFileSync(resourcesFile, 'utf8').trim().split('\n').map(JSON.parse);
     const readFinishedAt = new Date().toISOString();
-    const checkpoint = { readStartedAt, readFinishedAt, phase, listeningId: client.run.listeningId, resource: samples.at(-1), providerAsrConnections: fixture.stats.asrClients.size };
+    const checkpoint = { readStartedAt, readFinishedAt, phase, listeningId, resource: samples.at(-1), providerAsrConnections: fixture.stats.asrClients.size };
     result.quiescent.push(checkpoint); raw('quiescent', { checkpoint });
   }
   async function stage(name, operation) {
@@ -171,15 +191,29 @@ try {
   });
   await stage('stop-start', async () => { for (let i = 0; i < config.restartCycles; i++) { const client = await start(primary); await send(client); await stop(client); } });
   await stage('switching', async () => {
-    const switched = new Set();
+    const switched = new Set(); let previous;
+    async function pending(client, type, next) {
+      const processing = (await (await request(`/api/listenings/${client.run.listeningId}`)).json()).processing;
+      raw(type, { runId: client.run.runId, listeningId: client.run.listeningId, processing,
+        ...(next ? { nextRunId: next.run.runId, nextListeningId: next.run.listeningId } : {}) });
+      assert.ok(processing.pendingTranslations || processing.knowledge.bufferedSegments || processing.knowledge.pendingJobs || processing.knowledge.runningJobs, 'switching observes actual pending work');
+    }
     for (let i = 0; i < config.switchCycles; i++) {
       const client = await start(i % 2 ? primary : undefined); switched.add(client.run.listeningId);
+      // Verify old work still exists after the new record is actually open.
+      if (previous) {
+        await pending(previous, 'switch-overlap', client);
+        const old = switchingHolds.get(previous.run.runId); assert.equal(old.expired, false); old.release('overlap-observed');
+      }
+      const hold = holdSwitchingResponse(client.run.runId);
       await send(client); await send(client);
-      raw('switch-pending', { listeningId: client.run.listeningId, processing: (await (await request(`/api/listenings/${client.run.listeningId}`)).json()).processing });
-      // Close old capture/playback, but let its real queued work overlap the next record.
+      await until(() => Number.isFinite(client.run.startToFirstPcmMs), 'first PCM');
+      await pending(client, 'switch-pending');
       await stop(client, { drainWork: false });
+      await until(() => hold.waiting, 'switching knowledge request reaches fixture'); assert.equal(hold.expired, false); previous = client;
     }
-    for (const id of switched) await drain(id);
+    switchingHolds.get(previous.run.runId).release('final-drain');
+    for (const id of switched) await drainAndCheckpoint(id);
   });
   await stage('background', async () => {
     const client = await start(primary);
@@ -205,6 +239,7 @@ try {
   result.complete = true;
 } catch (error) { result.error = error.message; result.failure = { error: error.message, phase, providerAsrConnections: fixture?.stats.asrClients.size ?? null }; raw('failure', result.failure); }
 finally {
+  for (const hold of switchingHolds.values()) hold.release('cleanup');
   for (const ws of sockets) ws.terminate();
   try {
     if (fixture) {

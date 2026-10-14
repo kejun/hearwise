@@ -18,8 +18,14 @@ export function resourceSummary(resources) {
 
 // Independently replay observations, not derived latency or resource summaries.
 export function auditRawRun(result, events, resources, config, { negative = false } = {}) {
-  const samples = [], records = new Map(), runs = [], byRun = new Map(), phases = [], quiescent = [], stopped = new Set();
-  let last = -1, cleanup, durable, active; const readyRuns = new Map(), drains = new Map(), stimuli = new Map();
+  const samples = [], records = new Map(), runs = [], byRun = new Map(), phases = [], quiescent = [], stopped = new Map(), checkpointed = new Set(), switchPending = new Set(), switchOverlap = new Set();
+  let last = -1, cleanup, durable, active; const readyRuns = new Map(), drains = new Map(), stimuli = new Map(), processing = new Map(), holds = new Map();
+  function hasPendingWork(value) {
+    const k = value?.knowledge;
+    assert.ok(value && k && [value.pendingTranslations, value.failedTranslations, k.pendingJobs, k.runningJobs, k.bufferedSegments, k.failedJobs].every(count), 'complete processing counters');
+    assert.equal(value.failedTranslations, 0); assert.equal(k.failedJobs, 0);
+    return Boolean(value.pendingTranslations || k.pendingJobs || k.runningJobs || k.bufferedSegments);
+  }
   const begun = Date.parse(result.startedAt), finished = Date.parse(result.finishedAt);
   assert.ok(Number.isFinite(begun) && Number.isFinite(finished) && finished >= begun);
   for (const row of events) {
@@ -86,13 +92,61 @@ export function auditRawRun(result, events, resources, config, { negative = fals
       const phase = phases.at(-1); assert.equal(phase.complete, false); assert.equal(phase.name, row.name); assert.equal(phase.startedMs, row.startedMs);
       assert.ok(row.finishedMs >= phase.startedMs && row.finishedMs <= row.monoMs); Object.assign(phase, { finishedMs: row.finishedMs, complete: true });
     }
-    if (row.type === 'consumer-stopped') { assert.ok(row.consumerClosed && row.providerAsrConnections === 0); stopped.add(row.runId); }
+    if (row.type === 'consumer-stopped') {
+      const run = byRun.get(row.runId); assert.ok(run && active && !active.complete && run.phase === active.name && !stopped.has(row.runId));
+      assert.ok(row.consumerClosed && row.providerAsrConnections === 0); stopped.set(row.runId, row.monoMs);
+    }
+    if (row.type === 'switch-hold') {
+      const run = byRun.get(row.runId); assert.ok(active?.name === 'switching' && !active.complete && run?.phase === 'switching');
+      if (row.action === 'create') {
+        assert.ok(!holds.has(row.runId)); assert.equal(samples.filter(sample => sample.runId === row.runId).length, 0);
+        holds.set(row.runId, { created: row.monoMs, waited: false, released: false });
+      } else {
+        const hold = holds.get(row.runId); assert.ok(hold && !hold.released);
+        if (row.action === 'await') hold.waited = true;
+        else {
+          assert.equal(row.action, 'release'); assert.ok(hold.waited && row.monoMs - hold.created <= config.phaseTimeoutMs);
+          const switching = runs.filter(run => run.phase === 'switching');
+          if (row.reason === 'overlap-observed') assert.ok(switchOverlap.has(switching.at(-1).runId) && switching.at(-2).runId === row.runId);
+          else { assert.equal(row.reason, 'final-drain'); assert.equal(switching.length, config.switchCycles); assert.equal(switching.at(-1).runId, row.runId); }
+          hold.released = true;
+        }
+      }
+    }
+    if (row.type === 'switch-pending' || row.type === 'switch-overlap') {
+      assert.ok(active?.name === 'switching' && !active.complete);
+      const run = byRun.get(row.runId), switching = runs.filter(run => run.phase === 'switching');
+      assert.ok(run?.phase === 'switching'); assert.equal(row.listeningId, run.listeningId);
+      assert.ok(hasPendingWork(row.processing), 'switch must observe actual pending work');
+      if (row.type === 'switch-pending') {
+        assert.equal(switching.at(-1).runId, run.runId); assert.ok(!stopped.has(run.runId) && !switchPending.has(run.runId));
+        assert.equal(samples.filter(sample => sample.runId === run.runId).length, 2); switchPending.add(run.runId);
+      } else {
+        const next = byRun.get(row.nextRunId);
+        assert.equal(switching.at(-2)?.runId, run.runId); assert.equal(switching.at(-1)?.runId, next?.runId);
+        assert.equal(row.nextListeningId, next.listeningId); assert.notEqual(run.listeningId, next.listeningId);
+        assert.ok(stopped.has(run.runId) && !stopped.has(next.runId) && !switchOverlap.has(next.runId));
+        assert.ok(holds.get(run.runId)?.waited && !holds.get(run.runId).released, 'real old knowledge response remains held during overlap');
+        assert.equal(samples.filter(sample => sample.runId === next.runId).length, 0); switchOverlap.add(next.runId);
+      }
+    }
+    if (row.type === 'processing') { hasPendingWork(row.processing); processing.set(row.listeningId, { value: row.processing, phase: active?.name, monoMs: row.monoMs }); }
     if (row.type === 'durable') { assert.equal(durable, undefined); durable = row.counts; }
-    if (row.type === 'drained') drains.set(row.listeningId, Date.parse(row.at));
+    if (row.type === 'drained') {
+      assert.ok(active && !active.complete && row.phase === active.name);
+      const matching = runs.filter(run => run.phase === row.phase && run.listeningId === row.listeningId);
+      assert.ok(matching.length && matching.every(run => stopped.has(run.runId)));
+      const observed = processing.get(row.listeningId); assert.equal(observed?.phase, row.phase); assert.equal(hasPendingWork(observed.value), false, 'drain has an actual idle processing observation');
+      assert.ok(observed.monoMs >= Math.max(...matching.map(run => stopped.get(run.runId))), 'idle processing is observed after the latest stop, not reused from an earlier cycle');
+      drains.set(row.listeningId, { at: Date.parse(row.at), phase: row.phase });
+    }
     if (row.type === 'quiescent') {
       const checkpoint = row.checkpoint, observed = Date.parse(checkpoint.resource.at), begin = Date.parse(checkpoint.readStartedAt), end = Date.parse(checkpoint.readFinishedAt);
-      assert.equal(checkpoint.providerAsrConnections, 0); assert.ok(drains.has(checkpoint.listeningId));
-      assert.ok(observed >= drains.get(checkpoint.listeningId) && observed <= end && begin <= end && end <= Date.parse(row.at));
+      assert.ok(active && !active.complete && checkpoint.phase === active.name);
+      assert.equal(checkpoint.providerAsrConnections, 0); assert.equal(drains.get(checkpoint.listeningId)?.phase, checkpoint.phase);
+      const matching = runs.filter(run => run.phase === checkpoint.phase && run.listeningId === checkpoint.listeningId);
+      assert.ok(matching.length && matching.every(run => stopped.has(run.runId))); matching.forEach(run => checkpointed.add(run.runId));
+      assert.ok(observed >= drains.get(checkpoint.listeningId).at && observed <= end && begin <= end && end <= Date.parse(row.at));
       const index = resources.findIndex(resource => JSON.stringify(resource) === JSON.stringify(checkpoint.resource)); assert.ok(index >= 0);
       assert.ok(resources.slice(index + 1).every(resource => Date.parse(resource.at) >= begin), 'checkpoint uses latest sample available at snapshot start');
       quiescent.push(checkpoint);
@@ -141,6 +195,12 @@ export function auditRawRun(result, events, resources, config, { negative = fals
     }
     assert.equal(stimuli.size, 2); assert.ok(phases[0].elapsedMs >= config.warmupMs && phases[1].elapsedMs >= config.continuousMs);
     assert.ok(runs.every(run => stopped.has(run.runId)), 'each run really stopped');
+    assert.ok(runs.every(run => checkpointed.has(run.runId)), 'every stopped run has a phase-bound post-drain resource checkpoint');
+    const switching = runs.filter(run => run.phase === 'switching');
+    assert.equal(switching.length, config.switchCycles);
+    assert.equal(holds.size, config.switchCycles); assert.ok([...holds.values()].every(hold => hold.waited && hold.released), 'all switching response holds release before drain/cleanup');
+    assert.deepEqual([...switchPending], switching.map(run => run.runId), 'every switching run observes pending work');
+    assert.deepEqual([...switchOverlap], switching.slice(1).map(run => run.runId), 'old work overlaps each newly opened record');
   } else {
     const failure = events.find(row => row.type === 'failure');
     assert.ok(failure?.error.startsWith('ASR upstream retained after stop exceeded') && failure.providerAsrConnections > 0 && result.retainedCloseCalls > 0);

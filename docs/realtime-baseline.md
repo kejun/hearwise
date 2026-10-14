@@ -24,10 +24,10 @@ preload. The same production stop flow and same cleanup observation detect it.
 The outer process still terminates the server and removes the temporary SQLite.
 A timeout, missing result or unrelated failure cannot count as this negative.
 
-`verification/realtime-baseline.json` version 1 fixes measurement inputs before
+`verification/realtime-baseline.json` version 2 fixes measurement inputs before
 candidate collection: baseline has three independent runs, 2 s warmup, a 30 s
 continuous phase at four 3200-byte PCM frames/s, four stop/start cycles, four
-record switches with old background work still pending, a 12-sentence background burst, and export/replace-import then
+switching runs with old background work still pending, a 12-sentence background burst, and export/replace-import then
 continued use. Smoke uses a distinct abbreviated profile and is not comparable.
 Each profile has per-operation, cleanup-observation and worker deadlines. The
 3 s cleanup deadline is a measurement observation window, not an approved product
@@ -68,7 +68,18 @@ scheduler container instrumentation. Server logs retain Trace task lifecycles.
 This is four synthetic 100 ms PCM frames per second, not continuous microphone
 audio at full sample-rate throughput. ASR provider sockets are observed directly in the existing fixture. Quiescent
 samples follow every stop/drain; all consumer sockets must close and the ASR
-provider must have zero connections within the observation window.
+provider must have zero connections within the observation window. Every switching
+run must observe pending work before stop, and every adjacent new record must
+observe the previous record still pending after its own run opens. Each record
+involved in switching gets its own post-drain resource checkpoint; readback binds
+these observations to the actual phase, listening and run rather than accepting
+checkpoints from unrelated phases. Version 2 uses the existing asynchronous model
+fixture hook to hold each switching knowledge response until the next record is
+open and the old pending work is observed; the final response releases before
+drain. Each hold is bounded by the unchanged phase timeout and released in final
+cleanup. This controlled provider scheduling is recorded raw and is not a real
+vendor latency measurement. Version 1 reports remain historical and are not
+comparable candidate baselines.
 
 Reports live in `verification-evidence/realtime/<profile>-*/`; the integration
 regression retains them under `test-evidence/nested-profiles/` for existing CI

@@ -30,6 +30,37 @@ test('bounded real HTTP/WS/SQLite baseline measures all phases and catches retai
       const folder = path.join(root, directory, 'repeat-1');
       const lines = async name => (await readFile(path.join(folder, name), 'utf8')).trim().split('\n').map(JSON.parse);
       const events = await lines('events.jsonl'), resources = await lines('resources.jsonl');
+      const repeated = run.runs.filter(row => row.phase === 'stop-start').at(-1);
+      const stopAt = events.findIndex(row => row.type === 'consumer-stopped' && row.runId === repeated.runId);
+      const drainAt = events.findIndex((row, index) => index > stopAt && row.type === 'drained');
+      const staleProcessing = events.filter((row, index) => !(index > stopAt && index < drainAt && row.type === 'processing'));
+      assert.throws(() => auditRawRun(run, staleProcessing, resources, report.plan.profiles.smoke), 'a later stop cannot reuse an earlier idle processing snapshot');
+      const idleSwitch = structuredClone(events);
+      for (const row of idleSwitch.filter(row => row.type === 'switch-pending')) {
+        row.processing.pendingTranslations = 0;
+        for (const key of ['pendingJobs', 'runningJobs', 'bufferedSegments']) row.processing.knowledge[key] = 0;
+      }
+      assert.throws(() => auditRawRun(run, idleSwitch, resources, report.plan.profiles.smoke), 'switching must observe actual pending work for each run');
+      const switched = new Set(run.runs.filter(row => row.phase === 'switching').map(row => row.listeningId));
+      assert.equal(events.filter(row => row.type === 'switch-overlap').length, report.plan.profiles.smoke.switchCycles - 1);
+      for (const listeningId of switched) {
+        assert.ok(run.quiescent.some(row => row.phase === 'switching' && row.listeningId === listeningId));
+        const missing = row => row.phase === 'switching' && row.listeningId === listeningId;
+        const changed = structuredClone(run); changed.quiescent = changed.quiescent.filter(row => !missing(row));
+        assert.throws(() => auditRawRun(changed, events.filter(row => row.type !== 'quiescent' || !missing(row.checkpoint)), resources, report.plan.profiles.smoke), 'each switched listening needs its own post-drain checkpoint');
+      }
+      for (const type of ['switch-pending', 'switch-overlap']) {
+        const index = events.findIndex(row => row.type === type);
+        assert.throws(() => auditRawRun(run, events.filter((_, i) => i !== index), resources, report.plan.profiles.smoke), 'no switching witness may be omitted');
+        const foreign = structuredClone(events); foreign[index].runId = 'foreign-run';
+        assert.throws(() => auditRawRun(run, foreign, resources, report.plan.profiles.smoke), 'pending work belongs to the actual switching run');
+      }
+      const idleOverlap = structuredClone(events);
+      for (const row of idleOverlap.filter(row => row.type === 'switch-overlap')) {
+        row.processing.pendingTranslations = 0;
+        for (const key of ['pendingJobs', 'runningJobs', 'bufferedSegments']) row.processing.knowledge[key] = 0;
+      }
+      assert.throws(() => auditRawRun(run, idleOverlap, resources, report.plan.profiles.smoke), 'old work must remain pending after the new record opens');
       for (const mutate of [
         row => { row.samples[0].audioToCaptionMs = -100; },
         row => { row.samples = row.samples.slice(0, 1); },
