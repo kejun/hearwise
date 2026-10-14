@@ -10,6 +10,7 @@
 
 - 最多一次全进程崩溃；`generation` 从 0 到 1。实际 PID、退出信号、握手记录另存实现证据，PID 不进入模型。
 - 关系单 actor，最大累计请求数 3，全部原有响应、预留失败、一次性提交失败及通知失败选择。
+- 真实关系 scheduler 使用现有可注入选项 quietMs=0、minStartIntervalMs=0、maxConcurrent=声明CAP，以隔离请求/恢复协议；本profile不证明关系准入间隔、前台优先与一般公平性。知识 scheduler 保留现有2000毫秒派发间隔。
 - 关系三 actors：0 为 session0/window0，1 为 session1/window0，2 为 session0/window1；分别检查容量 1 和 2。actor0 第一次预留后的响应为 protocol，后续为 ok；actor1 第一次为 transient，后续为 empty；actor2 为 filtered。穷举这些脚本的合法交错，不宣称三任务任意响应组合。
 - 知识一个或两个顺序分片、一个自动周期；所有合法初始/纠正响应和错误选择、一次性预留/提交故障与通知故障保持开放，无多分片固定响应脚本。所有分片共享额外抽取上限 2、协议重试上限 1；各分片独立纠正预留上限 1。
 - 每个知识分片最多两个抽象 sourceIndex。ok 接受 slot0，partial 接受 slot0 并留下带锚点 slot1，rejected 留下带锚点 slot0，unrepairable 留下无锚点 slot0。纠正成功只接受当前有锚点的未解槽。
@@ -73,7 +74,9 @@
 
 ## SQLite 故障与诊断的边界
 
-模型的 reserve_fail/commit_fail 是一次性故障，假设后续失败状态能够写入数据库；notify_fail 是已捕获的回调异常。它们不能证明持续 SQLITE_BUSY、磁盘写满或持续终结写入失败时任务一定安全终结。
+模型的 reserve_fail/commit_fail 是一次性故障，假设后续失败状态能够写入数据库；notify_fail 是已捕获的回调异常。真实HTTP夹具将 unexpected 映射为非重试、非全任务配置故障的 418；401/auth 仍停止全部知识分片。两片回归分别验证后片可继续与配置失败全停，不能把422配置错误假装成普通 unexpected。
+
+它们不能证明持续 SQLITE_BUSY、磁盘写满或持续终结写入失败时任务一定安全终结。
 
 真实 SQLite 锁/写失败检查必须分别记录：请求是否发出、预留与已接受数据是否保留、实际 SQLite 错误码与诊断、失败终结是否真正落库、恢复锁释放后的可继续操作性。若持续锁暴露缺口，必须报告缺口，不得把失败状态保存失败改写成完成，也不能用只会抛一次错误的桩替代持续锁。
 

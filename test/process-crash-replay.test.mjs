@@ -255,3 +255,27 @@ for (const protocol of ['knowledge', 'relation']) {
     assert.deepEqual(adapter.check(), []);
   });
 }
+
+for (const response of ['unexpected', 'auth']) test(`two-part knowledge ${response} keeps the actual provider failure classification`, async t => {
+  const adapter = await createProcessProtocolAdapter({ protocol: 'knowledge', parts: 2 });
+  t.after(() => adapter.close());
+  for (const action of ['admit', 'send']) await adapter.act({ action, actor: 0 });
+  await adapter.act({ action: 'response', actor: 0, response });
+  assert.equal(adapter.project().phase[0], 'done');
+  assert.equal(adapter.observe().ledger.length, 1);
+  if (response === 'auth') {
+    assert.equal(adapter.project().phase[1], 'done');
+    assert.equal(adapter.project().outcome, 'invalid');
+    assert.equal(adapter.project().stage, 'done');
+  } else {
+    assert.equal(adapter.project().phase[1], 'extract_pending');
+    assert.equal(adapter.project().stage, 'idle');
+    await adapter.act({ action: 'advance_time' });
+    for (const action of ['admit', 'send']) await adapter.act({ action, actor: 1 });
+    await adapter.act({ action: 'response', actor: 1, response: 'ok' });
+    for (const action of ['commit', 'notify']) await adapter.act({ action, actor: 1 });
+    assert.equal(adapter.project().outcome, 'partial');
+    assert.equal(adapter.observe().ledger.length, 2);
+  }
+  assert.deepEqual(adapter.check(), []);
+});

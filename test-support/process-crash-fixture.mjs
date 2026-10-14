@@ -49,7 +49,7 @@ export function providerResponse(input, response) {
   const repair = Array.isArray(input.rejected), actor = providerActor(input);
   if (response === 'protocol') return { body: { broken: true } };
   if (['transient', 'auth', 'rate_limit', 'rate_limit_long', 'unexpected'].includes(response)) return {
-    status: response === 'auth' ? 401 : response.startsWith('rate_limit') ? 429 : response === 'unexpected' ? 422 : 503,
+    status: response === 'auth' ? 401 : response.startsWith('rate_limit') ? 429 : response === 'unexpected' ? 418 : 503,
     retryAfter: response === 'rate_limit' ? '7' : response === 'rate_limit_long' ? '301' : null,
     body: { error: { message: 'Synthetic provider failure' } }
   };

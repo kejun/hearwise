@@ -7,6 +7,7 @@ import { normalizeITFStates } from './protocol-replay.mjs';
 import { normalizeProcessTrace, validateProcessTrace } from './process-crash-replay.mjs';
 import { formalPlan, validateFormalEvidence } from './formal-protocol-evidence.mjs';
 import { properties } from '../../verification/process-crash/properties.mjs';
+import processConfig from '../../verification/process-crash/config.json' with { type: 'json' };
 
 export const processModelRoot = path.resolve('verification/process-crash');
 export const processModelFiles = ['protocol.qnt', 'relation-protocol.qnt', 'knowledge-protocol.qnt', 'configurations.qnt',
@@ -60,6 +61,8 @@ const select = (row, keys) => Object.fromEntries(keys.map(key => [key, row[key]]
 const ledgerIdentity = row => select(row, ['id', 'generation', 'actor', 'kind', 'receivedAt']);
 const journalIdentity = row => select(row, ['job_id', 'attempt', 'started_at']);
 const boundaryNames = ['reserved', 'inflight', 'received', 'committed'];
+const providerResponses = { relation: processConfig.relation.responses, ...processConfig.knowledge.responses };
+const validProviderResponse = call => call.response === null || providerResponses[call.kind]?.includes(call.response);
 
 // Deliberately independent of adapter.project()/check(): derive the projection
 // again from the recorded read-only SQLite rows and the external HTTP ledger.
@@ -85,7 +88,7 @@ export function projectProcessObservation(raw, config) {
     anchored: map(part => part.unresolved.filter(target => target.anchor).map(target => target.sourceIndex).sort((a, b) => a - b)),
     replies: map(part => raw.replies[part.part_no]) };
 }
-function validateRelation(raw, previous, config, expect, negative) {
+function validateRelation(raw, previous, config, expect, negative, action) {
   const rows = raw.durable.actors;
   expect(rows.length === config.actors && equal(rows.map(row => row.actor), Array.from({ length: config.actors }, (_, i) => i)), 'actor_domain');
   expect(Array.isArray(raw.tasks) && raw.tasks.length === config.actors, 'task_domain');
@@ -100,6 +103,7 @@ function validateRelation(raw, previous, config, expect, negative) {
       expect(equal(select(row, ['actor', 'session', 'windowId', 'listeningId', 'nodes', 'names']), select(before, ['actor', 'session', 'windowId', 'listeningId', 'nodes', 'names'])), 'relation_identity_changed');
       expect(equal(row.knowledge, before.knowledge), 'baseline_knowledge_changed');
       if (!negative) expect(row.budget >= before.budget && before.journal.every((value, i) => row.journal[i] && equal(journalIdentity(value), journalIdentity(row.journal[i]))), 'reservation_history_lost');
+      if (action === 'recover' && !negative) expect(row.budget === before.budget && equal(row.journal, before.journal), 'recovery_reservation_journal_changed');
       expect(before.relations.every(value => equal(value, row.relations.find(relation => relation.id === value.id))), 'committed_graph_changed');
     }
     for (const relation of row.relations) {
@@ -149,6 +153,12 @@ function validateKnowledge(raw, previous, config, expect, action) {
       expect(equal(part.focus_refs, before.focus_refs) && part.initial_requests >= before.initial_requests && part.repair_reserved >= before.repair_reserved, 'part_reservation_history_lost');
       expect(before.results.every(result => equal(result, part.results.find(value => value.sourceIndex === result.sourceIndex))), 'accepted_checkpoint_lost');
       if (action === 'recover') {
+        const interruptedRepair = before.phase === 'repair_inflight';
+        const expectedStats = interruptedRepair ? { ...before.stats, repair_error: 'REPAIR_INTERRUPTED' } : before.stats;
+        const expectedUnresolved = interruptedRepair ? before.unresolved.map(target => ({ ...target,
+          issues: [...(target.issues || []), { code: 'REPAIR_INTERRUPTED', path: '', details: {} }] })) : before.unresolved;
+        expect(equal(part.input_snapshot, before.input_snapshot) && equal(part.stats, expectedStats) &&
+          equal(part.unresolved, expectedUnresolved), 'recovery_part_payload_changed');
         expect(part.initial_requests === before.initial_requests && part.repair_reserved === before.repair_reserved && equal(part.results, before.results) &&
           part.ready_at === before.ready_at && part.stats.retry_kind === before.stats.retry_kind && part.stats.initial_complete === before.stats.initial_complete, 'recovery_checkpoint_changed');
         if (before.phase === 'repair_inflight') expect(part.phase === 'done' && part.stats.repair_error === 'REPAIR_INTERRUPTED' &&
@@ -199,7 +209,7 @@ export function validateProcessReplayEvidence(trace, replay, { negative = false 
         raw.launches[exit.generation]?.pid === exit.pid && Date.parse(exit.at) >= Date.parse(raw.launches[exit.generation].startedAt)), 'unconfirmed_sigkill_exit');
       expect(raw.ledger.every((call, i) => call.id === i + 1 && integer(call.generation) && call.generation <= raw.generation && integer(call.actor) &&
         call.actor < (trace.config.actors || trace.config.parts) && (trace.config.protocol === 'relation' ? call.kind === 'relation' : ['extract', 'repair'].includes(call.kind)) &&
-        timestamp(call.receivedAt) && typeof call.closed === 'boolean' && (call.response === null || typeof call.response === 'string')), 'invalid_provider_ledger');
+        timestamp(call.receivedAt) && typeof call.closed === 'boolean' && validProviderResponse(call)), 'invalid_provider_ledger');
       if (!previous) {
         expect(action === 'init' && raw.processState === 'up' && raw.generation === 0 && raw.crashes === 0 && raw.ledger.length === 0 && raw.exits.length === 0 && raw.history.length === 0, 'invalid_process_initialization');
       } else {
@@ -209,9 +219,13 @@ export function validateProcessReplayEvidence(trace, replay, { negative = false 
           equal(raw.history.slice(0, previous.history.length), previous.history), 'rewritten_process_history');
         expect(raw.ledger.length === previous.ledger.length + (action === 'send' ? 1 : 0), 'provider_ledger_reset_or_extra_call');
         expect(previous.ledger.every((call, i) => raw.ledger[i] && equal(ledgerIdentity(call), ledgerIdentity(raw.ledger[i])) &&
-          (call.response === raw.ledger[i].response || (call.response === null && action === 'response' && call.actor === trace.steps[step].actor && call.generation === raw.generation)) &&
+          (call.response === raw.ledger[i].response || (call.response === null && !call.closed && action === 'response' && call.actor === trace.steps[step].actor &&
+            call.generation === raw.generation && raw.ledger[i].response === trace.steps[step].response)) &&
           (!call.closed || raw.ledger[i].closed)), 'provider_ledger_rewritten');
-        if (action === 'send') expect(raw.ledger.at(-1)?.generation === raw.generation && raw.ledger.at(-1)?.actor === trace.steps[step].actor, 'wrong_provider_request');
+        const changedResponses = previous.ledger.filter((call, i) => call.response !== raw.ledger[i]?.response);
+        expect(changedResponses.length === (action === 'response' ? 1 : 0), 'provider_response_count_mismatch');
+        if (action === 'send') expect(raw.ledger.at(-1)?.generation === raw.generation && raw.ledger.at(-1)?.actor === trace.steps[step].actor &&
+          raw.ledger.at(-1)?.response === null, 'wrong_provider_request');
         const history = raw.history.at(-1);
         expect(raw.history.length === previous.history.length + (['commit', 'crash', 'recover'].includes(action) ? 1 : 0), 'missing_or_extra_process_event');
         if (action === 'crash') {
@@ -250,7 +264,7 @@ export function validateProcessReplayEvidence(trace, replay, { negative = false 
         const failures = trace.config.protocol === 'relation' ? raw.tasks[trace.steps[step].actor]?.notificationFailures : raw.notificationFailures;
         expect(Number.isSafeInteger(failures) && failures > 0, 'notification_failure_not_injected');
       }
-      if (trace.config.protocol === 'relation') validateRelation(raw, previous, trace.config, expect, mutation);
+      if (trace.config.protocol === 'relation') validateRelation(raw, previous, trace.config, expect, mutation, action);
       else validateKnowledge(raw, previous, trace.config, expect, action);
       previous = raw;
     }

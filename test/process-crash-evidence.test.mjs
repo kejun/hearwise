@@ -78,7 +78,7 @@ function synthetic(config, { boundary = 'reserved', repair = false, noCrash = fa
         for (const part of raw.durable.checkpoint.parts) {
           if (part.phase === 'extract_inflight') part.phase = 'extract_pending';
           if (part.phase === 'repair_inflight') { part.phase = 'done'; part.stats.repair_error = 'REPAIR_INTERRUPTED';
-            part.unresolved.forEach(target => { target.issues = [{ code: 'REPAIR_INTERRUPTED' }]; }); }
+            part.unresolved.forEach(target => { target.issues = [...(target.issues || []), { code: 'REPAIR_INTERRUPTED', path: '', details: {} }]; }); }
         }
       }
       sync(); raw.history.push({ action, generation: raw.generation, pid: raw.pid, before, after: clone(raw.durable) }); actor = -1;
@@ -335,4 +335,81 @@ test('formal process gate retains common source, toolchain, completion and domai
     ['missing property', f => { f.report.propertyCoverage.pop(); }],
     ['relabeled deep', f => { f.report.profile = 'deep'; }]
   ]) await t.test(name, async sub => { const f = await fixture(sub); mutate(f); rejected(await f.check()); });
+});
+
+function walkLedgers(value, mutate) {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value.ledger)) mutate(value.ledger);
+  for (const child of Object.values(value)) walkLedgers(child, mutate);
+}
+function appendObservation(base, action, mutate, actor = 0, response = '') {
+  const raw = clone(base.replay.observations.at(-1).durable);
+  mutate(raw);
+  const expected = projectProcessObservation(raw, base.trace.config);
+  base.trace.steps.push({ action, actor, response, expected });
+  base.replay.observations.push({ step: base.trace.steps.length - 1, actual: clone(expected), durable: raw, durableViolations: [] });
+}
+function concurrentResponse() {
+  const base = synthetic({ protocol: 'relation', actors: 3, capacity: 2 }, { global: 'two-inflight', boundary: 'inflight' });
+  base.trace.steps.splice(-2); base.replay.observations.splice(-2);
+  appendObservation(base, 'response', raw => { raw.ledger[0].response = 'ok'; raw.tasks[0].reply = 'ok'; raw.tasks[0].phase = 'received'; }, 0, 'ok');
+  return base;
+}
+function responseAfterRecovery() {
+  const base = synthetic({ protocol: 'relation', actors: 1, capacity: 1 }, { boundary: 'inflight' });
+  appendObservation(base, 'admit', raw => {
+    const row = raw.durable.actors[0]; row.budget++; row.jobs[0].request_count++; row.jobs[0].state = 'running';
+    row.journal.push({ job_id: 'job-0', attempt: 2, started_at: raw.clock, outcome: null }); raw.tasks[0].phase = 'reserved';
+  });
+  appendObservation(base, 'send', raw => {
+    raw.ledger.push({ id: 2, generation: 1, actor: 0, kind: 'relation', receivedAt: stamp, response: null, closed: false }); raw.tasks[0].phase = 'inflight';
+  });
+  appendObservation(base, 'response', raw => { raw.ledger[1].response = 'ok'; raw.tasks[0].reply = 'ok'; raw.tasks[0].phase = 'received'; }, 0, 'ok');
+  return base;
+}
+test('external response binds exactly one pending request to the ITF response and protocol enumeration', async t => {
+  for (const protocol of ['relation', 'knowledge']) for (const wrong of ['empty', 'auth', 'rate_limit']) await t.test(`${protocol}: legal but wrong ${wrong}`, () => {
+    const base = synthetic(protocol === 'relation' ? { protocol, actors: 1, capacity: 1 } : { protocol, parts: 1 }, { boundary: 'committed' });
+    assert.equal(validateProcessReplayEvidence(base.trace, base.replay).ok, true);
+    walkLedgers(base.replay, ledger => { for (const call of ledger) if (call.response === 'ok') call.response = wrong; });
+    const result = validateProcessReplayEvidence(base.trace, base.replay); rejected(result);
+    assert.ok(result.reasons.some(reason => reason.endsWith('provider_ledger_rewritten')));
+  });
+  for (const [name, build, mutate] of [
+    ['two requests receive one response', concurrentResponse, raw => { raw.ledger[1].response = 'ok'; }],
+    ['response assigned to another actor', concurrentResponse, raw => { raw.ledger[0].response = null; raw.ledger[1].response = 'ok'; }],
+    ['response assigned to the killed generation', responseAfterRecovery, raw => { raw.ledger[1].response = null; raw.ledger[0].response = 'ok'; }],
+    ['response absent from external ledger', concurrentResponse, raw => { raw.ledger[0].response = null; }],
+    ['unknown relation response', concurrentResponse, raw => { raw.ledger[0].response = 'partial'; }]
+  ]) await t.test(name, () => {
+    const base = build(); assert.equal(validateProcessReplayEvidence(base.trace, base.replay).ok, true);
+    mutate(base.replay.observations.at(-1).durable); rejected(validateProcessReplayEvidence(base.trace, base.replay));
+  });
+  const repair = synthetic({ protocol: 'knowledge', parts: 1 }, { repair: true, boundary: 'committed' });
+  walkLedgers(repair.replay, ledger => { for (const call of ledger) if (call.kind === 'repair' && call.response === 'ok') call.response = 'partial'; });
+  assert.ok(validateProcessReplayEvidence(repair.trace, repair.replay).reasons.some(reason => reason.endsWith('invalid_provider_ledger')));
+});
+test('recovery preserves full unresolved targets, input snapshot, stats and relation journal payloads', async t => {
+  for (const [name, protocol, repair, mutate] of [
+    ['unresolved rawItem', 'knowledge', true, raw => { raw.checkpoint.parts[0].unresolved[0].rawItem = { canonical_name: 'tampered' }; }],
+    ['unresolved anchor', 'knowledge', true, raw => { raw.checkpoint.parts[0].unresolved[0].anchor.itemId = 'wrong-anchor'; }],
+    ['unresolved issue payload', 'knowledge', true, raw => { raw.checkpoint.parts[0].unresolved[0].issues[0].details = { tampered: true }; }],
+    ['input snapshot', 'knowledge', false, raw => { raw.checkpoint.parts[0].input_snapshot = { existing_candidates: [] }; }],
+    ['full initial stats', 'knowledge', false, raw => { raw.checkpoint.parts[0].stats.failure_message = 'tampered'; }],
+    ['full repair stats', 'knowledge', true, raw => { raw.checkpoint.parts[0].stats.accepted_initial_count = 99; }],
+    ['relation journal outcome', 'relation', false, raw => { raw.actors[0].journal[0].outcome = 'complete'; }],
+    ['relation journal usage', 'relation', false, raw => { raw.actors[0].journal[0].usage_json = '{"tokens":999}'; }]
+  ]) await t.test(name, () => {
+    const base = synthetic(protocol === 'relation' ? { protocol, actors: 1, capacity: 1 } : { protocol, parts: 1 }, { repair, boundary: 'received' });
+    assert.equal(validateProcessReplayEvidence(base.trace, base.replay).ok, true);
+    const raw = base.replay.observations.at(-1).durable;
+    mutate(raw.durable); raw.history.at(-1).after = clone(raw.durable);
+    rejected(validateProcessReplayEvidence(base.trace, base.replay));
+  });
+});
+test('full gate rejects globally consistent wrong ledger replies after artifact rehashing', async t => {
+  const f = await fixture(t), data = f.row('replay-witnesses').data, replays = JSON.parse(f.files.get(data));
+  const replay = replays.find(row => row.sourceTrace.includes('knowledgeCommittedBeforeNotifyCrashTest'));
+  walkLedgers(replay, ledger => { for (const call of ledger) if (call.response === 'ok') call.response = 'empty'; });
+  await f.put(data, json(replays)); rejected(await f.check());
 });
