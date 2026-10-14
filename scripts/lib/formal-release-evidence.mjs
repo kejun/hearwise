@@ -82,7 +82,7 @@ export async function formalCommandContract(kind, report, definitionOverride, re
     } else if (row.kind === 'implementation-regression') expected = ['--test', '--test-reporter=tap', '--test-timeout=30000', ...regression.files.map(file => path.join(context.repositoryRoot, file))];
     else throw new Error('Unexpected formal command kind');
     assert.deepEqual(row.argv, row.kind === 'implementation-regression' ? expected : [context.quintCli, ...expected]);
-    if (kind === 'import-protocol' || definitionOverride) assert.equal(row.cwd, row.kind === 'implementation-regression' ? context.repositoryRoot : context.evidenceDirectory);
+    if (kind === 'import-protocol' || definitionOverride) assert.equal(row.cwd, row.kind === 'implementation-regression' && regression.cwd !== 'evidence' ? context.repositoryRoot : context.evidenceDirectory);
     assert.equal(row.timeoutMs, timeout); assert.equal(row.bound, bound); assert.equal(row.expectedFailure, expectedFailure);
   }
   return true;

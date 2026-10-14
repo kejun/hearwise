@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { digest, sourceVersion } from './verification-evidence.mjs';
 
-export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency'];
+export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business'];
 export async function findNodeTests(directory = 'test') {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(entries.map(entry => entry.isDirectory() ? findNodeTests(path.join(directory, entry.name)) :
@@ -23,6 +23,7 @@ export const rootScreenshots = {
     [`CAPTION_SIZE_${size.replaceAll('-', '_').toUpperCase()}_${bound.toUpperCase()}_SCREENSHOT`, `caption-size-${size}-${bound}.png`])))
 };
 export const browserScreenshots = {
+  'trace-business': ['trace-business-desktop.png', 'trace-business-mobile.png', 'trace-business-incomplete.png'],
   speech: Object.values(rootScreenshots),
   'speech-seek': [1280, 390].map(width => `speech-seek-${width}.png`),
   graph: ['history-loading-desktop', 'history-loading-mobile', 'graph-desktop-node', 'graph-desktop-fullscreen', 'graph-desktop-overview',

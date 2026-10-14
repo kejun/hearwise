@@ -1,3 +1,5 @@
+import { validateProcessReleaseEvidence } from './process-release-evidence.mjs';
+import { validateQualityInfrastructureEvidence } from './quality-release-evidence.mjs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { purposes, technicalSuites, fullRequirements, externalRequirements } from '../../verification/release/policy.mjs';
@@ -13,6 +15,8 @@ export async function readTechnicalEvidence(suite, directory, { release = true, 
   if (!technicalSuites.includes(suite)) throw new Error('Unregistered technical evidence suite');
   if (suite === 'node') return validateNodeEvidence(directory, { release });
   if (suite === 'browser') return validateBrowserEvidence(directory, { release });
+  if (suite === 'process-crash') return validateProcessReleaseEvidence(directory, { release, requireProfile: profile });
+  if (suite === 'quality-offline') return validateQualityInfrastructureEvidence(directory, { release });
   if (suite === 'pilot') return validatePilotEvidence(directory, { release });
   if (suite.endsWith('-protocol')) return validateFormalReleaseEvidence(suite, directory, { release, requireProfile: profile });
   return validateLeanEvidence(suite, directory, { release });

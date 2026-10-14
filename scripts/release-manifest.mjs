@@ -8,14 +8,14 @@ const source = sourceVersion().sha;
 if (args.source && args.source !== source) throw new Error('Artifact source must match the current checkout');
 const root = path.resolve(args['artifact-root']);
 const artifact = name => path.join(root, `${name}-evidence-${source}`);
-async function reports(directory) {
+async function reports(directory, filename = 'report.json') {
   const files = [];
   try {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isSymbolicLink()) throw new Error('Artifact symlinks are forbidden');
-      if (entry.isDirectory()) files.push(...await reports(file));
-      else if (entry.isFile() && entry.name === 'report.json') files.push(file);
+      if (entry.isDirectory()) files.push(...await reports(file, filename));
+      else if (entry.isFile() && entry.name === filename) files.push(file);
     }
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   return files;
@@ -23,9 +23,9 @@ async function reports(directory) {
 const evidence = [];
 for (const suite of technicalSuites) {
   if (suite === 'node' || suite === 'browser') { evidence.push({ suite, directory: suite === 'node' ? path.join(artifact('test'), 'test-evidence') : artifact('browser') }); continue; }
-  const directory = suite === 'pilot' ? path.join(artifact('test'), 'verification-evidence') : artifact(suite);
+  const directory = suite === 'quality-offline' ? path.join(artifact('test'), 'verification-evidence', 'asr-translation-quality') : suite === 'pilot' ? path.join(artifact('test'), 'verification-evidence') : artifact(suite);
   const candidates = [];
-  for (const file of await reports(directory)) {
+  for (const file of await reports(directory, suite === 'quality-offline' ? 'offline-summary.json' : 'report.json')) {
     let report; try { report = JSON.parse(await readFile(file, 'utf8')); } catch { continue; }
     if (suite !== 'pilot' || report.profile === 'pilot') candidates.push(path.dirname(file));
   }

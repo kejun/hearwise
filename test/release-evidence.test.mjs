@@ -46,13 +46,13 @@ test('historical reader rejects unsupported and absent evidence and binds its co
   assert.deepEqual(Object.keys(fast).sort(), ['configuration', 'corpus', 'environment', 'model', 'policy', 'thresholds', 'tools']);
   assert.ok(Object.values(fast).every(value => /^[0-9a-f]{64}$/.test(value))); assert.notEqual(fast.configuration, deep.configuration);
 });
-test('artifact discovery records all nine missing obligations and rejects a wrong requested source', async t => {
+test('artifact discovery records all eleven missing obligations and rejects a wrong requested source', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'release-manifest-missing-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'manifest.json');
   const execution = await runProcess(process.execPath, ['scripts/release-manifest.mjs', `--artifact-root=${directory}`, `--output=${file}`], { timeoutMs: 10000 });
   assert.equal(execution.code, 0, execution.tail);
   const manifest = JSON.parse(await readFile(file, 'utf8')); assert.deepEqual(manifest.evidence.map(row => row.suite), technicalSuites);
-  assert.equal(manifest.evidence.filter(row => row.discoveryError === 'missing_report_artifact').length, 7);
+  assert.equal(manifest.evidence.filter(row => row.discoveryError === 'missing_report_artifact').length, 9);
   const invalid = await runProcess(process.execPath, ['scripts/release-manifest.mjs', `--artifact-root=${directory}`, `--output=${file}`, `--source=${'0'.repeat(40)}`], { timeoutMs: 10000 });
   assert.equal(invalid.code, 1);
 });

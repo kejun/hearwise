@@ -322,7 +322,7 @@ jobs:
   release-evidence:
     name: Current-source technical evidence gate
     if: always()
-    needs: [test, relation-protocol, knowledge-protocol, browser, revision]
+    needs: [test, relation-protocol, knowledge-protocol, import-protocol, edit-protocol, process-crash, browser, revision]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
