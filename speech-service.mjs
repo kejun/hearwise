@@ -23,7 +23,10 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
     let sessionTrace;
     const unitTraces = new Map();
     const completedSamples = new Map();
-    const metric = (event, extra = {}) => onMetric({ event, consumer: owner, run: consumer?.runId, provider, model, ...extra });
+    const metric = (event, extra = {}) => {
+      try { onMetric({ event, consumer: owner, run: consumer?.runId, provider, model, ...extra }); }
+      catch { /* Diagnostics cannot fail playback or interrupt resource cleanup. */ }
+    };
     const send = data => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ ...data, epoch })); };
     const dispose = (graceful = false) => {
       if (closed) return;
