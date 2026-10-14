@@ -44,6 +44,12 @@ function validateData(row) {
     assert.deepEqual(snapshot(row, 'repeat-no-op'), after);
   } else {
     assert.deepEqual(snapshot(row, 'rejected'), before);
+    const imported = row.importedSource; assert.equal(imported.integrity, 'ok');
+    if (row.kind === 'primary-key') assert.ok(imported.rows.knowledge_facts.some(value => before.rows.knowledge_facts.some(local => local.id === value.id && local.item_id !== value.item_id)));
+    else if (row.kind === 'ownership') assert.ok(imported.rows.segments.some(segment => imported.rows.listening_runs.some(run => run.id === segment.run_id && run.listening_id !== segment.listening_id)));
+    else if (row.kind === 'restore-foreign-key') assert.ok(imported.foreignKeyErrors.some(value => value.table === 'segments'));
+    else assert.ok(imported.schema.some(value => value.name === 'segments' && value.sql.includes('unexpected_column')));
+
     assert.equal(row.errorObserved?.code, { 'primary-key': 'APPEND_FAILED', ownership: 'IMPORT_CROSS_LISTENING_REFERENCE', schema: 'DATABASE_SCHEMA_MISMATCH', 'restore-schema': 'RESTORE_FAILED', 'restore-foreign-key': 'FOREIGN_KEY_CHECK_FAILED' }[row.kind]);
     if (row.kind === 'primary-key' || row.kind.startsWith('restore-')) assert.deepEqual(snapshot(row, 'safety-backup'), before);
     const edited = structuredClone(before), target = edited.rows.listenings.find(value => value.id === row.usable.id);

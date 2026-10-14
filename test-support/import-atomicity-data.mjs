@@ -75,6 +75,7 @@ export async function dataScenario(kind, observation = {}) {
         source.db.prepare('UPDATE segments SET run_id=? WHERE id=?').run('missing-parent-run', incoming.segment.id);
       } else source.db.exec('ALTER TABLE segments ADD COLUMN unexpected_column TEXT');
       exportDatabase(source, imported);
+      observation.importedSource = databaseSnapshot(imported);
       let error;
       try {
         if (kind.startsWith('restore-')) restoreDatabase(current, imported, backup, { prepared: true });

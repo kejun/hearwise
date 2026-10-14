@@ -21,7 +21,7 @@ for (const name of selected.length ? selected : checks) {
       GRAPH_EVIDENCE_DIR: evidenceDirectory, DATA_TRANSFER_EVIDENCE_DIR: evidenceDirectory, TRACE_EVIDENCE_DIR: evidenceDirectory,
       TRANSCRIPT_EVIDENCE_DIR: evidenceDirectory, KNOWLEDGE_NAME_EVIDENCE_DIR: evidenceDirectory,
       KNOWLEDGE_REVISION_EVIDENCE_DIR: evidenceDirectory, SESSION_EVIDENCE_DIR: evidenceDirectory, RELATION_RESULT_EVIDENCE_DIR: evidenceDirectory,
-      EDIT_CONSISTENCY_EVIDENCE_DIR: evidenceDirectory, IMPORT_PROTOCOL_BROWSER_EVIDENCE_DIR: evidenceDirectory, TRACE_BUSINESS_EVIDENCE_DIR: evidenceDirectory, SECURITY_EVIDENCE_DIR: evidenceDirectory }
+      EDIT_CONSISTENCY_EVIDENCE_DIR: evidenceDirectory, IMPORT_PROTOCOL_BROWSER_EVIDENCE_DIR: evidenceDirectory, IMPORT_ATOMICITY_EVIDENCE_DIR: evidenceDirectory, TRACE_BUSINESS_EVIDENCE_DIR: evidenceDirectory, SECURITY_EVIDENCE_DIR: evidenceDirectory }
   });
   results.push({ name, log: `${evidenceDirectory}/${name}.log`, ...result });
   await writeFile(`${directory}/results.json`, JSON.stringify({ sha, dirty, evidenceDirectory,
