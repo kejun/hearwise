@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises'; import path from 'node:path';
 import { contractDigest, hashBytes, qualityProperties } from './quality-contract.mjs';
 import { asrParameters } from './quality-collector.mjs';
-import { validateQualityObservations } from './quality-observations.mjs';
+import { validateQualityObservations, validateAsrResult } from './quality-observations.mjs';
 const same = (a,b) => assert.equal(contractDigest(a), contractDigest(b));
 export async function inspectOfflineQualityEvidence(directory, targetSource, { release = false } = {}) {
   const properties = Object.values(qualityProperties).map(propertyId => ({ propertyId, status: 'not_run', complete: false, reason: 'Offline stubs have no ASR/MT quality score.' }));
@@ -32,7 +32,8 @@ export async function inspectOfflineQualityEvidence(directory, targetSource, { r
       assert.equal(artifact.path, `trial-${index}/trial.json`); const filename = `collection/${artifact.path}`;
       const bytes = await readFile(path.join(directory, filename)); assert.equal(hashBytes(bytes), artifact.sha256); const trial = JSON.parse(bytes);
       assert.equal(trial.schemaVersion, 1); assert.equal(trial.mode, 'offline'); assert.equal(trial.evidenceKind, 'offline-provider-stub');
-      assert.equal(trial.complete, true); assert.equal(trial.cleanup, true); assert.equal(trial.logTruncated, false);
+      assert.equal(trial.complete, true); assert.equal(trial.status, 'collected'); assert.ok(!trial.errorCode);
+      assert.equal(trial.role, 'candidate'); assert.equal(trial.sampleId, 'synthetic-plumbing'); assert.equal(trial.cleanup, true); assert.equal(trial.logTruncated, false);
       assert.equal(trial.kind, index < 2 ? 'asr' : 'mt'); assert.equal(trial.repetition, index % 2); assert.equal(trial.outputSha256, hashBytes(trial.result.output));
       assert.equal(trial.provider.filter(row => row.attemptId).length, 1);
       assert.deepEqual(trial.config, expectedConfig); assert.equal(trial.trialId, `candidate:synthetic-plumbing:${trial.kind}:${index % 2}`);
@@ -45,6 +46,11 @@ export async function inspectOfflineQualityEvidence(directory, targetSource, { r
       const logPath = `collection/trial-${index}/application.log`, log = await readFile(path.join(directory, logPath)); assert.equal(hashBytes(log), trial.artifacts[0].sha256);
       assert.equal(trial.traceBuilds.length, 1); assert.equal(trial.traceBuilds[0].git_sha, targetSource.sha); assert.equal(trial.traceBuilds[0].build_dirty, targetSource.dirty);
       if (trial.kind === 'asr') {
+        validateAsrResult(trial.result, upstream);
+        const ready = trial.result.events.filter(row => row.event.type === 'listening-ready'); assert.equal(ready.length, 1);
+        assert.equal(ready[0].event.listeningId, trial.result.listeningId); assert.equal(ready[0].event.runId, trial.result.runId);
+        assert.equal(trial.result.events.at(-1).event.type, 'finished');
+        assert.deepEqual(upstream.outputs, [{ text: 'Do not pay 15.', sentence_id: 'synthetic-1', sentence_end: true, begin_time: 0, end_time: 20 }]);
         const request = ledger[index * 2], id = request.body?.header?.task_id;
         assert.match(id, /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/); assert.equal(taskIds.has(id), false); taskIds.add(id);
         const parameters = asrParameters(expectedConfig, 'en')[0];

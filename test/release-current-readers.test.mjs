@@ -72,6 +72,27 @@ test('offline quality infrastructure validates real loopback artifacts but can n
     assert.equal((await validateQualityInfrastructureEvidence(directory, { release: false })).ok, false, name);
   }
   await json(path.join(directory, 'offline-summary.json'), summary);
+  const originalCollection = await readFile(path.join(directory, 'collection/collection.json'));
+  const originalTrial = await readFile(path.join(directory, 'collection/trial-0/trial.json'));
+  await json(path.join(directory, 'provider-ledger.json'), collection.actualStubRequests);
+  for (const [name, mutate] of [
+    ['provider ASR output changed', trial => { trial.provider.find(row => row.attemptId).outputs[0].text = 'Pay 15 now.'; }],
+    ['persisted ASR text changed', trial => { trial.result.segments[0].original_text = 'Pay 15 now.'; }],
+    ['public ASR events missing', trial => { trial.result.events = []; }],
+    ['failed trial marked complete', trial => { trial.status = 'failed'; }],
+    ['wrong trial role', trial => { trial.role = 'baseline'; }],
+    ['wrong trial sample', trial => { trial.sampleId = 'unrelated'; }]
+  ]) {
+    const trial = JSON.parse(originalTrial), report = JSON.parse(originalCollection); mutate(trial);
+    await json(path.join(directory, 'collection/trial-0/trial.json'), trial);
+    report.trials[0].sha256 = digest(await readFile(path.join(directory, 'collection/trial-0/trial.json')));
+    await json(path.join(directory, 'collection/collection.json'), report);
+    await json(path.join(directory, 'offline-summary.json'), await inspectOfflineQualityEvidence(directory, await qualitySources()));
+    assert.equal((await validateQualityInfrastructureEvidence(directory, { release: false })).ok, false, name);
+  }
+  await writeFile(path.join(directory, 'collection/collection.json'), originalCollection);
+  await writeFile(path.join(directory, 'collection/trial-0/trial.json'), originalTrial);
+  await json(path.join(directory, 'offline-summary.json'), summary);
   const ledger = structuredClone(collection.actualStubRequests); ledger.find(row => row.kind === 'audio').bytes = 1;
   await json(path.join(directory, 'provider-ledger.json'), ledger);
   assert.equal((await validateQualityInfrastructureEvidence(directory, { release: false })).ok, false);
