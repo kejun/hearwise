@@ -97,6 +97,21 @@ export function validateGenerationReplayEvidence(trace, replay) {
         ['listenings', 'listening_runs', 'segments', 'relation_rounds', 'relation_windows', 'relation_jobs', 'relation_requests', 'knowledge_items', 'knowledge_facts', 'knowledge_aliases', 'knowledge_mentions', 'knowledge_revisions', 'relations', 'relation_assertions', 'relation_supports', 'relation_revisions', 'foreignKeys'];
       expect(equal(Object.keys(raw.durable).sort(), durableTables.sort()) && durableTables.every(table => Array.isArray(raw.durable[table])), 'durable_table_roster');
       expect(Array.isArray(raw.durable.foreignKeys) && raw.durable.foreignKeys.length === 0, 'foreign_key_violation');
+      const runs = raw.durable.listening_runs;
+      expect(runs.length === raw.durable.listenings.length && raw.durable.listenings.every(listening => runs.filter(run => run.listening_id === listening.id).length === 1) &&
+        runs.every(run => run.run_no === 1 && run.audio_source === 'microphone' && run.source_lang === 'en' && run.target_lang === 'Chinese' &&
+          time(run.started_at) && Date.parse(run.started_at) >= Date.parse(replay.startedAt) && Date.parse(run.started_at) <= Date.parse(replay.finishedAt)) &&
+        raw.durable.segments.every(segment => runs.some(run => run.id === segment.run_id && run.listening_id === segment.listening_id)), 'listening_run_identity');
+      if (previous) {
+        const retained = previous.raw.durable.listening_runs.filter(run => raw.durable.listenings.some(listening => listening.id === run.listening_id));
+        expect(runs.length === retained.length && retained.every(before => {
+          const after = runs.find(run => run.id === before.id);
+          if (step.action === 'restart' && before.state === 'active') return after?.state === 'interrupted' && time(after.ended_at) &&
+            Date.parse(after.ended_at) >= Date.parse(before.started_at) && Date.parse(after.ended_at) <= Date.parse(replay.finishedAt) &&
+            equal(after, { ...before, state: 'interrupted', ended_at: after.ended_at });
+          return equal(after, before);
+        }), 'listening_run_changed');
+      } else expect(runs.every(run => run.state === 'active' && run.ended_at === null), 'initial_listening_run');
       for (const segment of raw.durable.segments) {
         expect(!knownSegments.has(segment.id) || equal(knownSegments.get(segment.id), segment), 'source_segment_rewritten');
         knownSegments.set(segment.id, segment);

@@ -22,6 +22,8 @@ for (const control of config.implementationControls) test(`raw negative-control 
     value => { value.control = { ...value.control, mutation: 'none' }; },
     value => { value.broken.observations.at(-1).durable.raw.queries = {}; },
     value => { value.broken.observations.at(-1).durable.raw.ledger = []; },
+    value => { value.broken.observations.at(-1).durable.raw.durable.listening_runs = []; },
+    value => { value.broken.observations.at(-1).durable.raw.durable.listening_runs[0].run_no = 99; },
     value => { value.broken.observations.at(-1).durable.raw.durable.segments[0].original_text = 'FORGED'; }];
   if (control.mutation === 'omit_transaction_guard') corruptions.push(
     value => { value.broken.observations.at(-1).durable.boundaryTrials[0].metadata.originalSha256 = 'a'.repeat(64); },

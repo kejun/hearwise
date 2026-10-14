@@ -13,6 +13,8 @@ for (const protocol of ['knowledge', 'relation']) test(`${protocol} raw generati
     value => { value.observations.pop(); },
     value => { value.observations.at(-1).durable.raw.durable = {}; },
     value => { value.observations.at(-1).durable.raw.calls = []; },
+    value => { value.observations.at(-1).durable.raw.durable.listening_runs = []; },
+    value => { value.observations.at(-1).durable.raw.durable.listening_runs[0].state = 'complete'; },
     value => { value.observations.at(-1).durable.raw.calls[0].response = 'empty'; },
     value => { value.observations.at(-1).durable.raw.calls[0].name = 'Forged actor'; },
     value => { value.observations.at(-1).durable.raw.calls[0].listeningId = 'different'; },
