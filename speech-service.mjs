@@ -35,7 +35,9 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
       unitTraces.clear(); sessionTrace?.cancel('consumer_closed');
       tts?.close(graceful); tts = null;
       phraseRequest?.abort(); ledger?.close();
-      consumers.delete(consumer); onDispose(consumer?.listeningId); setHead(owner, null); units = []; activeKey = null;
+      consumers.delete(consumer);
+      try { onDispose(consumer?.listeningId); } catch { /* Notification cannot interrupt this consumer's cleanup. */ }
+      setHead(owner, null); units = []; activeKey = null;
     };
     const finish = (type, message, error) => {
       if (type === 'speech.finished') sessionTrace?.succeed();

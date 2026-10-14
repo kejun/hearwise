@@ -99,12 +99,13 @@ test('speech disposal notification cannot retain the pending translation head or
   const service = createSpeechService({ store, taskRuntime: runtime,
     setHead: (owner, id) => id ? heads.set(owner, id) : heads.delete(owner),
     onDispose: () => { notifications++; throw new Error('Synthetic disposal notification'); },
-    createTts: () => ({ synthesize: async () => { calls++; }, close: () => { closes++; } }) });
+    createTts: () => ({ synthesize: async (_text, audio) => { calls++; audio(Buffer.alloc(480)); }, close: () => { closes++; } }) });
   client = new Client(); service.accept(client);
   client.message({ type: 'speech.start', epoch: 41, ...run, config: { key: 'test-only', region: 'beijing', voice: 'Cherry', rate: 1 } });
   const segment = store.addSegment(run.listeningId, run.runId, { id: 'pending', text: 'Pending translation.' }).segment;
   service.notify(run.listeningId); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual([...heads.values()], [segment.id]); assert.equal(service.hasConsumers(run.listeningId), true);
+  const firstOwner = [...heads.keys()][0];
   const before = store.detail(run.listeningId);
   assert.doesNotThrow(() => client.message({ type: 'speech.stop', epoch: 41 }));
   await new Promise(resolve => setImmediate(resolve));
@@ -112,4 +113,25 @@ test('speech disposal notification cannot retain the pending translation head or
   assert.equal(runtime.activeCount, 0); assert.equal(closes, 1); assert.equal(notifications, 1); assert.equal(calls, 0);
   assert.deepEqual(store.detail(run.listeningId), before);
   assert.equal(traceReport(runtime.diagnostics()).spans.find(span => span.step === 'speech.session').state, 'cancelled');
+
+  // A fresh owner can acquire its own head and generate exactly one unit after
+  // the failed notification. The old pending segment stays unchanged.
+  client = new Client(); service.accept(client);
+  client.message({ type: 'speech.start', epoch: 42, ...run, config: { key: 'test-only', region: 'beijing', voice: 'Cherry', rate: 1 } });
+  const next = store.addSegment(run.listeningId, run.runId, { id: 'next', text: 'Next translation.' }).segment;
+  service.notify(run.listeningId); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([...heads.values()], [next.id]); assert.notEqual([...heads.keys()][0], firstOwner);
+  store.setTranslation(next.id, '下一句。', false); service.notify(run.listeningId);
+  await until(() => client.events.some(event => event.type === 'speech.unit-end'));
+  const end = client.events.find(event => event.type === 'speech.unit-end');
+  assert.equal(calls, 1); assert.equal(end.samples, 240); assert.equal(heads.size, 0);
+  client.message({ type: 'speech.progress', epoch: 42, playedUnit: end.unit, consumedSamples: end.samples });
+  assert.doesNotThrow(() => client.message({ type: 'speech.stop', epoch: 42 }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(client.readyState, 3); assert.equal(service.hasConsumers(run.listeningId), false); assert.equal(runtime.activeCount, 0);
+  assert.equal(closes, 2); assert.equal(notifications, 2); assert.equal(calls, 1); assert.equal(heads.size, 0);
+  assert.deepEqual(store.detail(run.listeningId).segments.find(row => row.id === segment.id), before.segments.find(row => row.id === segment.id));
+  const after = traceReport(runtime.diagnostics());
+  assert.equal(after.spans.filter(span => span.step === 'speech.session' && span.state === 'cancelled').length, 2);
+  assert.equal(after.spans.filter(span => span.step === 'speech.unit' && span.state === 'succeeded').length, 1);
 });
