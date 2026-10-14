@@ -25,6 +25,8 @@ const resourceShape = state => Array.isArray(state?.contexts) && state.contexts.
   state.contextIds.length === state.contexts.length && new Set(state.contextIds).size === state.contextIds.length && state.contextIds.every(id => Number.isSafeInteger(id) && id > 0) &&
   state.contexts.every(value => ['running', 'suspended', 'closed'].includes(value)) && Array.isArray(state.sockets) && state.sockets.length > 0 &&
   new Set(state.sockets.map(socket => socket.id)).size === state.sockets.length && state.sockets.every(socket => Number.isSafeInteger(socket.id) && socket.id > 0 && [0, 1, 2, 3].includes(socket.readyState));
+const activeResources = (state, contextState) => resourceShape(state) && state.contexts.at(-1) === contextState && state.contexts.slice(0, -1).every(value => value === 'closed') &&
+  state.sockets.at(-1).readyState === 1 && state.sockets.slice(0, -1).every(socket => socket.readyState === 3);
 const closedResources = state => resourceShape(state) && state.enabled === false && state.contexts.every(value => value === 'closed') && state.sockets.every(socket => socket.readyState === 3);
 const sameResources = (before, after) => resourceShape(before) && resourceShape(after) && isDeepStrictEqual(before.contextIds, after.contextIds) &&
   isDeepStrictEqual(before.contexts, after.contexts) && isDeepStrictEqual(before.sockets.map(socket => [socket.id, socket.readyState]), after.sockets.map(socket => [socket.id, socket.readyState]));
@@ -34,6 +36,7 @@ export function checkPlaybackFrames(socket, requests, samplesPerUnit = 6000) {
     const epoch = starts[0].epoch; if (!Number.isInteger(epoch) || epoch < 1 || epoch > 0xffffffff) return false;
     let active = 0, count = 0, frame = 0, samples = 0, total = 0, ends = 0, finished = 0;
     for (const event of socket.received) {
+      if (event.type === 'speech.error') return false;
       if (event.type === 'speech.unit') {
         if (active || finished || event.epoch !== epoch || event.unit !== count + 1 || event.text !== requests[count]) return false;
         active = ++count; frame = samples = 0;
@@ -70,10 +73,10 @@ export function checkPlaybackBrowser(browser, provenance) {
       if (seek.paused?.enabled !== true || seek.paused.paused !== true || seek.paused.sockets?.length !== 2 ||
         seek.paused.sockets[1].sent[0]?.paused !== true || seek.paused.sockets[1].sent[0]?.startPosition !== 2 ||
         seek.afterLate?.enabled !== true || seek.afterLate.paused !== true || seek.afterLate.status !== seek.paused.status ||
-        !sameResources(seek.paused, seek.afterLate) || !isDeepStrictEqual(seek.commitsWhilePaused, ['甲。']) || !isDeepStrictEqual(seek.commitsAfterLate, ['甲。']) ||
+        !activeResources(seek.paused, 'suspended') || !activeResources(seek.afterLate, 'suspended') || !sameResources(seek.paused, seek.afterLate) || !isDeepStrictEqual(seek.commitsWhilePaused, ['甲。']) || !isDeepStrictEqual(seek.commitsAfterLate, ['甲。']) ||
         !closedResources(seek.finished) || !isDeepStrictEqual(seek.commits, ['甲。', '乙。'])) return false;
-      if (unlock.before?.enabled !== true || unlock.before?.sockets?.length !== 1 || unlock.after?.sockets?.length !== 1 || unlock.after.enabled !== true || unlock.after.paused !== false ||
-        !sameResources(unlock.before, unlock.after) || !closedResources(unlock.stopped) || !isDeepStrictEqual(unlock.commits, ['丙。'])) return false;
+      if (unlock.before?.enabled !== true || unlock.before.paused !== false || unlock.before?.sockets?.length !== 1 || unlock.after?.sockets?.length !== 1 || unlock.after.enabled !== true || unlock.after.paused !== false ||
+        !activeResources(unlock.before, 'running') || !activeResources(unlock.after, 'running') || !sameResources(unlock.before, unlock.after) || !closedResources(unlock.stopped) || !isDeepStrictEqual(unlock.commits, ['丙。'])) return false;
     }
     const negative = browser.negative;
     return negative?.caught === true && negative.mutation === 'late-unlock' && negative.expectedSockets === 1 && negative.actualSockets === 2 &&

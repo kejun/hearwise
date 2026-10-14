@@ -115,6 +115,10 @@ test('playback browser contract rejects false completion, missing coverage and i
     b => { b.negative.served.responses.find(row => row.file === 'public/speech-controller.js').sha256 = provenance.normalControllerSha256; },
     b => { b.sourceEnd.digests['public/app.js'] = '0'.repeat(64); },
     b => { b.mutation.mutantControllerSha256 = b.mutation.normalControllerSha256; },
+    b => { b.widths[0].cases[1].paused.contexts[1] = 'running'; b.widths[0].cases[1].afterLate.contexts[1] = 'running'; },
+    b => { b.widths[0].cases[1].paused.sockets[1].readyState = 3; b.widths[0].cases[1].afterLate.sockets[1].readyState = 3; },
+    b => { b.widths[0].cases[2].before.contexts[1] = 'suspended'; b.widths[0].cases[2].after.contexts[1] = 'suspended'; },
+    b => { b.widths[0].cases[0].state.sockets[0].received.unshift({ type: 'speech.error', epoch: 1 }); },
     b => { b.negative.caught = false; }, b => { b.negative.after.sockets.pop(); }, b => { b.negative.errors.push('page crash'); }
   ];
   for (const mutate of mutations) { const browser = syntheticBrowser(provenance); mutate(browser); assert.equal(checkPlaybackBrowser(browser, provenance), false, mutate.toString()); }
