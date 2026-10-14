@@ -36,7 +36,8 @@ export function validateTraceBusinessObservations(value, { source, mutations }) 
     assert.equal(value.workflows.length, workflowScenarioNames.length);
     assert.deepEqual(value.workflows.map(row => row.name).sort(), [...workflowScenarioNames].sort());
     for (const row of value.workflows) {
-      assert.equal(row.complete, true); assert.equal(row.ok, true); assert.equal(row.cleanup, true); assert.ok(row.captures.length >= 2);
+      assert.equal(row.complete, true); assert.equal(row.ok, true); assert.equal(row.cleanup, true);
+      assert.equal(row.captures.length, ['knowledge-partial', 'knowledge-retry', 'knowledge-cancel-late', 'relation-retry', 'relation-old-generation-usage'].includes(row.name) ? 3 : 2);
       for (const c of row.captures) {
         assert.ok(c.query?.jobId && c.query?.listeningId); const report = traceReport(c.snapshot);
         sameJson(c.report, report); sameJson(c.business, buildBusinessOverview(report, c.query.listeningId)); safeReport(report, source);
@@ -45,14 +46,24 @@ export function validateTraceBusinessObservations(value, { source, mutations }) 
       if (row.name === 'knowledge-cancel-late') {
         assert.equal(row.captures.length, 3); const [before, late, recovered] = row.captures;
         assert.equal(before.business.tasks[0].state, 'cancelled'); assert.equal(before.query.checkpoint.parts[0].phase, 'extract_inflight');
+        assert.equal(before.query.checkpoint.job.state, 'running'); assert.equal(before.query.checkpoint.job.outcome, null);
+        assert.equal(before.activeCount, 0); assert.equal(before.query.detail.knowledge.length, 0);
         assert.deepEqual(before.snapshot, late.snapshot); assert.deepEqual(before.query, late.query);
         assert.equal(recovered.query.checkpoint.job.state, 'pending'); assert.equal(recovered.query.detail.knowledge.length, 0);
+        assert.equal(recovered.query.checkpoint.parts[0].phase, 'extract_pending'); assert.equal(recovered.query.checkpoint.parts[0].initial_requests, 1);
+        assert.equal(recovered.query.next.id, recovered.query.jobId);
         assert.equal(recovered.adapterCalls.length, 1); assert.equal(recovered.calls.length, 0); assert.equal(recovered.activeCount, 0);
       } else if (row.name === 'relation-old-generation-usage') {
         assert.equal(row.captures.length, 3); const [cancelled, late, complete] = row.captures;
         assert.equal(cancelled.query.processing.state, 'cancelled'); assert.equal(cancelled.business.tasks[0].state, 'cancelled');
         assert.equal(late.query.processing.usageLastHour.totalTokens, 71); assert.equal(late.query.processing.round.totalTokens, 0); assert.equal(late.activeCount, 1);
         assert.deepEqual(late.snapshot, late.beforeLate.snapshot); assert.deepEqual(late.query.job, late.beforeLate.query.job); assert.equal(late.beforeLate.activeCount, 1);
+        assert.equal(late.query.job.state, 'running');
+        for (const field of ['relations', 'assertions', 'supports']) {
+          assert.deepEqual(late.query.graph[field], []); assert.deepEqual(late.query.graph[field], late.beforeLate.query.graph[field]);
+          assert.deepEqual(complete.query.graph[field], []);
+        }
+        assert.deepEqual(late.query.graph.nodes, late.beforeLate.query.graph.nodes);
         assert.equal(late.oldLedger.length, 1); assert.equal(late.oldLedger[0].outcome, 'late_response'); assert.equal(JSON.parse(late.oldLedger[0].usage_json).total_tokens, 71);
         assert.equal(complete.query.processing.usageLastHour.totalTokens, 92); assert.equal(complete.query.processing.round.totalTokens, 21);
         assert.equal(complete.query.job.state, 'complete'); assert.equal(complete.query.ledger.length, 1); assert.equal(complete.adapterCalls.length, 2);
@@ -63,10 +74,14 @@ export function validateTraceBusinessObservations(value, { source, mutations }) 
         assert.equal(complete.business.tasks.find(task => task.job === complete.query.job.id).state, 'succeeded');
       } else {
         const terminal = finalCapture(row), partial = row.name.endsWith('partial'), retry = row.name.endsWith('retry'), fault = row.name.includes('notification');
-        checkWorkflowCapture(terminal, { domain, state: partial ? 'partial' : retry ? 'recovered' : 'succeeded', calls: retry || domain === 'knowledge' && partial ? 2 : 1,
+        const expected = { domain, state: partial ? 'partial' : retry ? 'recovered' : 'succeeded', calls: retry || domain === 'knowledge' && partial ? 2 : 1,
           items: domain === 'knowledge' && (partial || fault) ? 1 : 0, queryState: domain === 'relation' && partial ? 'partial' : 'complete',
-          outcome: partial ? 'partial' : fault ? 'ok' : 'empty', next: false, accepted: 0, rejected: row.name === 'relation-filtered' ? 1 : 0 });
-        if (retry || domain === 'knowledge' && partial) assert.equal(row.captures[0].business.tasks[0].state, 'waiting');
+          outcome: partial ? 'partial' : fault ? 'ok' : 'empty', next: false, accepted: 0, rejected: row.name === 'relation-filtered' ? 1 : 0 };
+        checkWorkflowCapture(terminal, expected); checkWorkflowCapture(row.captures.at(-1), expected);
+        if (domain === 'knowledge') assert.deepEqual(row.captures.at(-1).query.detail.knowledge, terminal.query.detail.knowledge);
+        else assert.deepEqual(row.captures.at(-1).query.ledger, terminal.query.ledger);
+        if (retry || domain === 'knowledge' && partial) checkWorkflowCapture(row.captures[0], { domain, state: 'waiting', calls: 1,
+          items: partial ? 1 : 0, queryState: 'pending', outcome: null, next: domain === 'knowledge', accepted: null, rejected: 0 });
         if (fault) {
           assert.equal(terminal.notifications.delivered, 0); assert.ok(terminal.notifications.attempted >= 2);
           assert.equal(terminal.snapshot.events.filter(event => event.event === 'notification_sent').length, 0);
@@ -95,9 +110,13 @@ export function validateTraceBusinessObservations(value, { source, mutations }) 
     }
     const translated = value.boundaries.find(row => row.name === 'translation-failure-retry');
     assert.equal(translated.failed.query.items[0].translation_state, 'failed'); assert.equal(translated.recovered.query.items[0].translation_state, 'complete');
+    assert.equal(translated.failed.query.items[0].id, translated.segmentId); assert.equal(translated.recovered.query.items[0].id, translated.segmentId);
+    assert.equal(translated.failed.query.items[0].original_text, translated.recovered.query.items[0].original_text);
     for (const capture of [translated.failed, translated.recovered]) { sameJson(capture.report, traceReport(capture.rawInput)); safeReport(capture.report, source); }
     const task = buildBusinessOverview(translated.recovered.report, translated.listeningId).tasks.filter(row => row.domain === 'translation');
     assert.equal(task.length, 1); assert.equal(task[0].state, 'recovered'); assert.equal(task[0].calls, 2); assert.equal(translated.calls, 2);
+    const failed = buildBusinessOverview(translated.failed.report, translated.listeningId).tasks.filter(row => row.domain === 'translation');
+    assert.equal(failed.length, 1); assert.equal(failed[0].state, 'failed'); assert.equal(failed[0].calls, 1); assert.equal(failed[0].job, translated.segmentId);
     assert.equal(value.negative.complete, true); assert.equal(value.negative.ok, true); assert.equal(value.negative.cleanup, true);
     const normal = value.negative.normal; assert.equal(normal.name, 'knowledge-retry'); assert.equal(normal.complete, true); assert.equal(normal.ok, true); assert.equal(normal.cleanup, true);
     assert.equal(normal.captures.length, 3);
@@ -178,6 +197,8 @@ export const cleanTraceExecution = execution => execution && execution.timedOut 
 export const traceRegressionFiles = ['test/business-trace.test.mjs', 'test/trace-report.test.mjs', 'test/effect-runtime.test.mjs', 'test/trace-business-workflow.test.mjs',
   'test/trace-notification-boundary.test.mjs', 'test/trace-business-negative.test.mjs', 'test/trace-business-evidence.test.mjs'];
 export const traceRegressionCount = 47;
+export const traceEvidenceScope = property => ({ description: property.domain, scenario: 'trace-business-fixed-boundaries', samples: 1, seed: null,
+  ...(property.id === 'HW-15-02' ? { scenarioCases: 15 } : {}) });
 export function tracePropertyState(id, { checks, observationsValid, artifactsValid, browserValid, sourceStable, cleanupOk, nodeOnly }) {
   if (id === 'HW-15-04' && nodeOnly) return { complete: false, status: 'not_run' };
   const names = id === 'HW-15-03' ? ['regressions'] : id === 'HW-15-04' ? ['workflows', 'browser'] : ['workflows', 'regressions'];

@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { collectTraceBusinessEvidence } from '../test-support/trace-business-worker.mjs';
 import { expectedTraceMutations } from '../test-support/trace-business-negative.mjs';
 import { validateTraceBusinessObservations, tracePropertyState, validTraceBrowser, sameTraceSources, checkTraceArtifacts,
-  traceSourceSnapshot, traceBrowserChecks, traceStateLabels, traceRegressionFiles } from '../test-support/trace-business-evidence.mjs';
-import { digest } from '../scripts/lib/verification-evidence.mjs';
+  traceSourceSnapshot, traceBrowserChecks, traceStateLabels, traceRegressionFiles, traceEvidenceScope } from '../test-support/trace-business-evidence.mjs';
+import { digest, metadata, validateResult } from '../scripts/lib/verification-evidence.mjs';
+import { traceBusinessProperties } from '../verification/trace-business-properties.mjs';
 
 let baseline, target;
 before(async () => {
@@ -19,16 +20,24 @@ const options = () => ({ checks: ['workflows', 'regressions'].map(name => ({ nam
   observationsValid: true, artifactsValid: true, browserValid: false, sourceStable: true, cleanupOk: true, nodeOnly: true });
 const reject = change => { const value = structuredClone(baseline); change(value); assert.equal(validateTraceBusinessObservations(value, target).ok, false); };
 
-test('actual workflow, boundary, build and mutation evidence validates its complete declared scope', () => {
+test('actual workflow, boundary, build and mutation evidence validates its complete declared scope', async () => {
   assert.deepEqual(validateTraceBusinessObservations(baseline, target), { ok: true, workflowCases: 11, boundaryCases: 4, mutants: 2 });
   assert.deepEqual(tracePropertyState('HW-15-02', options()), { complete: true, status: 'passed' });
   assert.deepEqual(tracePropertyState('HW-15-04', options()), { complete: false, status: 'not_run' });
+  const context = await metadata(), now = new Date().toISOString();
+  for (const property of traceBusinessProperties) assert.equal(validateResult({ ...context, property: { id: property.id, version: property.version },
+    startedAt: now, finishedAt: now, complete: true, status: 'passed', scope: traceEvidenceScope(property),
+    artifacts: ['observations.json', 'worker.log'].map(path => ({ path, sha256: 'a'.repeat(64) })) }), true);
 });
 test('missing business snapshots, cases and wrong durable terminal state fail closed', () => {
   reject(value => delete value.workflows[0].captures[0].query);
   reject(value => value.workflows.pop()); reject(value => value.boundaries.pop());
   reject(value => value.workflows[0].captures[0].query.checkpoint.job.state = 'failed');
   reject(value => value.workflows[0].captures[0].calls.length = 0);
+  reject(value => value.workflows.find(row => row.name === 'knowledge-retry').captures[0].query.checkpoint.job.state = 'complete');
+  reject(value => value.workflows.find(row => row.name === 'knowledge-empty').captures.at(-1).query.checkpoint.job.state = 'failed');
+  reject(value => value.workflows.find(row => row.name === 'relation-old-generation-usage').captures[1].query.graph.relations.push({ id: 'unexpected' }));
+  reject(value => { const row = value.boundaries.find(row => row.name === 'translation-failure-retry'); row.failed.rawInput = row.recovered.rawInput; row.failed.report = row.recovered.report; });
 });
 test('old source, old instrumentation, incomplete captures and tampered report views cannot pass', () => {
   reject(value => value.source.sha = '0'.repeat(40)); reject(value => value.complete = false);

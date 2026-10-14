@@ -18,6 +18,8 @@ npm run test:browser -- trace-business
 
 运行目录为 `verification-evidence/trace-business/trace-business-*`；浏览器总入口通过 `TRACE_BUSINESS_EVIDENCE_DIR` 分配独立目录。开始先写 `complete:false/ok:false`；结果包含当前源码、锁文件、Node/SQLite/系统版本、性质版本、实际命令、时间与退出状态。两个主附件是 `observations.json` 和 `worker.log`，其中引用带 SHA-256 的原始业务观察、8 份实际生成的离线 HTML、3 张截图及脱敏导出。摘要只用于完整性校验，不作密码学无碰撞证明。
 
+沿用 M0 的 `samples:1` 表示一次固定配置运行；HW-15-02 的 15 个场景另记为 `scenarioCases:15`，原始附件逐条列出 11 个工作流与 4 个公共接口场景，不修改公共证据 schema。
+
 单项上限：业务观察 40 秒、回归 45 秒、Chromium 60 秒；整个配置 150 秒，既有 browser parent 的 180 秒留下清理、哈希与落盘余量。所有 child process 使用既有进程组运行器；临时目录、HTTP/WS、SQLite、runtime 与浏览器有清理路径。实际未运行、超时、终止、缺文件或旧源码均不能通过。CI 保留原必需检查，Node 增加 node-only release，浏览器注册表增加完整配置。
 
 ## 固定范围及实际对应

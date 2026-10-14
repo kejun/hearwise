@@ -17,13 +17,18 @@ export function checkWorkflowCapture(capture, { domain, state, calls, items, acc
   assert.ok(report.spans.every(span => span.listening === query.listeningId && span.job === query.jobId));
   assert.equal(business.domains.find(row => row.key === domain).objectCount, 1);
   if (domain === 'knowledge') {
+    assert.equal(query.checkpoint.job.id, query.jobId); assert.equal(query.checkpoint.job.listening_id, query.listeningId);
+    assert.equal(query.detail.listening.id, query.listeningId);
+    const publicJob = query.detail.jobs.find(job => job.id === query.jobId); assert.ok(publicJob);
+    assert.equal(publicJob.state, queryState); assert.equal(publicJob.outcome, outcome);
     assert.equal(query.checkpoint.job.state, queryState); assert.equal(query.checkpoint.job.outcome, outcome);
     assert.equal(query.detail.knowledge.length, items); assert.equal(Boolean(query.next), next);
     assert.equal(query.checkpoint.parts.reduce((n, part) => n + (part.stats.request_count || 0), 0), calls);
   } else {
+    assert.equal(query.job.id, query.jobId); assert.equal(query.job.listening_id, query.listeningId); assert.equal(query.graph.listeningId, query.listeningId);
     assert.equal(query.job.state, queryState); assert.equal(query.job.accepted_count, accepted); assert.equal(query.job.rejected.length, rejected);
     assert.equal(query.ledger.length, calls); assert.equal(query.job.request_count, calls);
-    assert.equal(query.graph.relations.length, accepted);
+    assert.equal(query.graph.relations.length, accepted ?? 0);
   }
   return true;
 }

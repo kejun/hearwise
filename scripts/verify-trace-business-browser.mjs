@@ -5,7 +5,7 @@ import { tapSummary } from './lib/tap-summary.mjs';
 import { metadata, writeJson, digest, checkArtifacts, summarize } from './lib/verification-evidence.mjs';
 import { traceBusinessProperties, traceBusinessProfile, traceBusinessNodeProfile } from '../verification/trace-business-properties.mjs';
 import { traceSourceSnapshot, sameTraceSources, validateTraceBusinessObservations, validTraceBrowser, checkTraceArtifacts,
-  traceBrowserArtifacts, traceBrowserReportNames, traceBrowserDocuments, tracePropertyState, cleanTraceExecution, traceRegressionFiles } from '../test-support/trace-business-evidence.mjs';
+  traceBrowserArtifacts, traceBrowserReportNames, traceBrowserDocuments, tracePropertyState, cleanTraceExecution, traceRegressionFiles, traceEvidenceScope } from '../test-support/trace-business-evidence.mjs';
 import { expectedTraceMutations } from '../test-support/trace-business-negative.mjs';
 
 const args = process.argv.slice(2);
@@ -57,7 +57,7 @@ const rawValid = observations.businessArtifact && await checkTraceArtifacts(dire
 const finishedAt = new Date().toISOString();
 report.results = traceBusinessProperties.map(property => ({ ...context, property: { id: property.id, version: property.version }, startedAt, finishedAt,
   ...tracePropertyState(property.id, { checks, observationsValid: validation.ok, artifactsValid: Boolean(rawValid), browserValid, sourceStable, cleanupOk, nodeOnly }),
-  scope: { description: property.domain, scenario: 'trace-business-fixed-boundaries', samples: property.id === 'HW-15-02' ? 15 : 1, seed: null }, artifacts }));
+  scope: traceEvidenceScope(property), artifacts }));
 const required = nodeOnly ? traceBusinessNodeProfile : traceBusinessProfile, rows = [];
 for (const id of required) {
   const result = report.results.find(row => row.property.id === id);
@@ -67,7 +67,7 @@ for (const id of required) {
 }
 const complete = sourceStable && cleanupOk && checks.length === specifications.length && checks.every(row => cleanTraceExecution(row.execution));
 const ok = complete && checks.every(row => row.execution.ok) && rows.every(row => row.status === 'passed' && !row.stale && !row.reasons.length);
-Object.assign(report, { sourceEnd, finishedAt, complete, ok, summary: { required, rows, nodeOnly, fullTraceBusinessProfile: !nodeOnly, fullProjectAcceptance: false } });
+Object.assign(report, { sourceEnd, finishedAt, complete, ok, summary: { required, rows, nodeOnly, fullTraceBusinessProfile: !nodeOnly && ok, fullProjectAcceptance: false } });
 await writeJson(path.join(directory, 'report.json'), report);
-console.log(JSON.stringify({ directory, complete, ok, rows, nodeOnly, fullTraceBusinessProfile: !nodeOnly, fullProjectAcceptance: false }, null, 2));
+console.log(JSON.stringify({ directory, complete, ok, rows, nodeOnly, fullTraceBusinessProfile: !nodeOnly && ok, fullProjectAcceptance: false }, null, 2));
 process.exitCode = ok ? 0 : 1;
