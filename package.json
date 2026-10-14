@@ -47,7 +47,11 @@
     "verify:security": "node scripts/verify-security-browser.mjs",
     "preverify:import-protocol": "npm run build",
     "verify:import-protocol": "node scripts/verify-import-protocol.mjs",
-    "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs"
+    "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs",
+    "setup:edit-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:edit-protocol": "npm run build",
+    "verify:edit-protocol": "node scripts/verify-edit-protocol.mjs",
+    "verify:edit-protocol:report": "node scripts/verify-edit-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

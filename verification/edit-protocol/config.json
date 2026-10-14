@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "specification": "configurations.qnt",
+  "init": "Init",
+  "step": "Step",
+  "invariant": "Safety",
+  "configurations": [
+    {
+      "main": "two_current",
+      "clients": 2,
+      "codecs": {
+        "0": "v1",
+        "1": "v1"
+      },
+      "initialOverride": false,
+      "background": true,
+      "apalacheDepth": 6
+    },
+    {
+      "main": "two_legacy",
+      "clients": 2,
+      "codecs": {
+        "0": "v11",
+        "1": "v12"
+      },
+      "initialOverride": false,
+      "background": true,
+      "apalacheDepth": 6
+    },
+    {
+      "main": "v11_override",
+      "clients": 1,
+      "codecs": {
+        "0": "v11"
+      },
+      "initialOverride": true,
+      "background": true,
+      "apalacheDepth": 6
+    }
+  ],
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "mains": [
+      "current_witnesses",
+      "legacy_witnesses",
+      "override_witnesses"
+    ],
+    "seed": "69",
+    "maxSamples": 1,
+    "counts": {
+      "current_witnesses": 11,
+      "legacy_witnesses": 2,
+      "override_witnesses": 1
+    },
+    "expectedTestCount": 14
+  },
+  "mutants": [
+    {
+      "main": "mutant_bypass_revision",
+      "expectedViolation": "revisionCheckedInTransaction",
+      "maxSteps": 5
+    },
+    {
+      "main": "mutant_auto_revision_resend",
+      "expectedViolation": "noAutomaticOverwrite",
+      "maxSteps": 8
+    }
+  ],
+  "simulation": {
+    "seed": "2026101469",
+    "samples": 100,
+    "maximumSteps": 24,
+    "selectedTraces": 3
+  },
+  "limits": {
+    "overallMs": 480000,
+    "tlcMs": 60000,
+    "boundedMs": 120000,
+    "simulationMs": 30000,
+    "witnessMs": 30000,
+    "mutationMs": 120000
+  },
+  "toolchainSource": "verification/relation-protocol/toolchain.json",
+  "costStatus": "Fast depth6 frozen after current two-client probe completed in 51.0 seconds; complete TLC domain unchanged. Two candidate depth8 probes timed out at 120 seconds and remain incomplete. See docs/edit-protocol-verification.md and preserved cost-probe logs.",
+  "scope": {
+    "savesPerClient": 1,
+    "backgroundChanges": 1,
+    "noOpEdits": true,
+    "lateResponses": "Delay delivery across another completed client operation; no post-abort callback fiction.",
+    "exclusions": [
+      "Unbounded sessions or retries",
+      "Browser persistent draft storage",
+      "Paid provider semantics",
+      "Power loss or process-crash recovery",
+      "Liveness under unavailable network"
+    ],
+    "liveness": "Safety and finite reachable witnesses only. Eventual completion would additionally require fair transaction/response scheduling and successful recovery reads."
+  },
+  "driverRegressions": {
+    "expectedTestCount": 8
+  }
+}
