@@ -54,6 +54,7 @@ export async function validateFormalEvidence(directory, definition, { release = 
   if (!profile || (requireProfile && requireProfile !== report.profile)) reasons.push('invalid_profile');
   if (report.schemaVersion !== 1 || report.specificationVersion !== target.specificationVersion || report.modelVersion !== target.modelVersion) reasons.push('invalid_contract');
   if (report.source?.sha !== target.source.sha || report.modelDigest !== target.modelDigest || report.lockDigest !== target.lockDigest) reasons.push('stale');
+  if (target.sourceDigests && !isDeepStrictEqual(report.sourceDigests, target.sourceDigests)) reasons.push('stale_source_digests');
   if (release && (report.source?.dirty !== false || target.source.dirty !== false)) reasons.push('uncommitted_source');
   if (report.complete !== true || report.execution?.complete !== true || report.execution?.code !== 0 || report.execution?.signal !== null || report.execution?.timedOut !== false || report.execution?.interrupted !== false) reasons.push('incomplete_execution');
   if (!validInterval(report)) reasons.push('invalid_timestamps');
@@ -104,7 +105,7 @@ export async function validateFormalEvidence(directory, definition, { release = 
           const replays = JSON.parse(artifacts.get(result.data));
           const expectedKind = entry.id === 'replay-witnesses' ? 'model-witness' : 'simulation';
           const sourceTraces = (report.results || []).filter(row => row.kind === expectedKind).flatMap(row => row.traces || []);
-          const expectedTraces = entry.kind === 'implementation-negative' ? (report.results || []).filter(row => row.kind === 'model-witness').flatMap(row => row.traces || []).filter(file => file.includes('normalSuccessTest-')) : sourceTraces;
+          const expectedTraces = entry.kind === 'implementation-negative' ? (report.results || []).filter(row => row.kind === 'model-witness').flatMap(row => row.traces || []).filter(file => file.includes(`${definition.implementationNegativeWitness ?? 'normalSuccessTest'}-`)) : sourceTraces;
           const expectedCount = entry.id === 'replay-witnesses' ? config.witnesses.expectedTestCount : entry.id === 'replay-simulation' ? config.simulation.selectedTraces * (config.multiple.mains.length + 1) : 1;
           if (!isDeepStrictEqual(replays.map(replay => replay.sourceTrace).sort(), [...expectedTraces].sort()) || new Set(replays.map(replay => replay.sourceTrace)).size !== expectedCount) row.reasons.push('wrong_replay_sources');
           for (const replay of replays) {
