@@ -24,7 +24,7 @@ const stopped = status => ['paused', 'cancelled'].includes(status?.state) ||
 // HTTP call and must not reset when the scheduler/process restarts.
 export function createRelationWorkflow({ store, endpoint, extract = extractRelations, provider,
   now = () => Date.now(), onChange = () => {}, onError = () => {}, requestTimeoutMs = RELATION_REQUEST_TIMEOUT_MS }) {
-  const notify = (fn, ...args) => { try { fn(...args); } catch { /* Committed state is authoritative. */ } };
+  const notify = (fn, ...args) => { try { fn(...args); return true; } catch { return false; /* Committed state is authoritative. */ } };
   async function execute(job, key, signal, context) {
     const step = (name, operation) => context ? context.step(name, operation) : operation();
     if (!job || !store.hasListening(job.listening_id) || signal?.aborted) return { kind: 'discarded' };
@@ -101,8 +101,7 @@ export function createRelationWorkflow({ store, endpoint, extract = extractRelat
       });
       if (result?.stale) return { kind: 'discarded', reason: 'stale' };
       context?.event('checkpoint_committed', { accepted_count: result?.accepted || 0, rejected_count: parsed.rejected?.length || 0, returned_count: parsed.returnedCount });
-      notify(onChange, id, result);
-      context?.event('notification_sent');
+      if (notify(onChange, id, result)) context?.event('notification_sent');
       return { kind: 'terminal', outcome: result?.state === 'partial' ? 'partial' :
         result?.accepted ? 'ok' : 'empty', ...result };
     } catch (error) {

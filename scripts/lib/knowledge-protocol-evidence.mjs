@@ -9,7 +9,7 @@ import { formalPlan, validateFormalEvidence } from './formal-protocol-evidence.m
 import { properties } from '../../verification/knowledge-protocol/properties.mjs';
 
 export const knowledgeModelRoot = path.resolve('verification/knowledge-protocol');
-export const knowledgeModelFiles = ['protocol.qnt', 'configurations.qnt', 'witnesses.qnt', 'config.json', 'tlc.json', 'toolchain.json', 'properties.mjs'];
+export const knowledgeModelFiles = ['protocol.qnt', 'actor-guards.qnt', 'configurations.qnt', 'witnesses.qnt', 'config.json', 'tlc.json', 'toolchain.json', 'properties.mjs'];
 export async function knowledgeMetadata() {
   const contents = await Promise.all(knowledgeModelFiles.map(async file => [file, await readFile(path.join(knowledgeModelRoot, file), 'utf8')]));
   return { schemaVersion: 1, source: sourceVersion(), specificationVersion: '1.0', modelVersion: 1,
