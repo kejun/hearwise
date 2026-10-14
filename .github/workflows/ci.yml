@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      performance_baseline:
+        description: 'Collect the full history/graph baseline (does not freeze performance targets)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -14,6 +19,78 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  performance-smoke:
+    name: History and graph measurement collector smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run setup:browser
+      - run: npm run preflight:browser
+      - name: Prepare frozen real SQLite and collect actual UI measurements
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run performance:prepare -- verification-evidence/performance smoke
+          prepared="$(find verification-evidence/performance -name prepared.json -type f)"
+          test "$(printf '%s\n' "$prepared" | wc -l)" -eq 1
+          npm run performance:collect -- "$prepared" smoke
+          report="$(find verification-evidence/performance -maxdepth 2 -name report.json -type f)"
+          test "$(printf '%s\n' "$report" | wc -l)" -eq 1
+          npm run performance:report -- "$(dirname "$report")" --clean
+      - name: Preserve measurements including incomplete browser attempts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: performance-smoke-evidence-${{ github.sha }}
+          path: verification-evidence/performance/
+          retention-days: 14
+          if-no-files-found: warn
+
+  performance-baseline:
+    if: github.event_name == 'workflow_dispatch' && inputs.performance_baseline
+    name: Full history and graph baseline collection (targets not frozen)
+    runs-on: ubuntu-24.04
+    # Separate 30-minute preparation and 40-minute collection watchdogs plus setup.
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run setup:browser
+      - run: npm run preflight:browser
+      - name: Collect all declared tiers and network profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run performance:prepare -- verification-evidence/performance baseline
+          prepared="$(find verification-evidence/performance -name prepared.json -type f)"
+          test "$(printf '%s\n' "$prepared" | wc -l)" -eq 1
+          npm run performance:collect -- "$prepared" baseline
+          report="$(find verification-evidence/performance -maxdepth 2 -name report.json -type f)"
+          test "$(printf '%s\n' "$report" | wc -l)" -eq 1
+          npm run performance:report -- "$(dirname "$report")" --release-collection
+      - name: Preserve exact workloads and full raw baseline evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: performance-baseline-evidence-${{ github.sha }}
+          path: verification-evidence/performance/
+          retention-days: 14
+          if-no-files-found: warn
+
   test:
     name: Node 24 deterministic tests
     runs-on: ubuntu-latest

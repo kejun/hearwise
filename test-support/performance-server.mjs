@@ -84,7 +84,10 @@ export async function measureBackendRequest(server, route, { controlledDelayMs =
           assert.equal(req.url, route); assert.equal(req.method, 'GET'); forwardedRequests++;
           const response = await fetch(`${server.base}${route}`, { signal: AbortSignal.timeout(timeoutMs) });
           const body = Buffer.from(await response.arrayBuffer()), started = performance.now();
-          await delay(controlledDelayMs); observedMs = performance.now() - started;
+          // Node timers can wake slightly early. Observe the fixed monotonic
+          // deadline rather than calling a 119.8ms wait a 120ms injected cost.
+          while (performance.now() < started + controlledDelayMs) await delay(Math.max(1, started + controlledDelayMs - performance.now()));
+          observedMs = performance.now() - started;
           res.writeHead(response.status, { 'Content-Type': 'application/json', 'Content-Length': body.length }); res.end(body);
         } catch (error) { res.writeHead(500); res.end(JSON.stringify({ error: error.message })); }
       });
