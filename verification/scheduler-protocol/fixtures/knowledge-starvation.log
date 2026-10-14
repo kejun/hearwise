@@ -1,0 +1,408 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /tmp/kej67-scheduler-probe/knowledge-ratelimit-failed/_apalache-out/server/2026-10-14T22-25-18_8057786922290741049
+# APALACHE version: 0.62.1 | build: a321771                       I@22:25:18.535
+Starting checker server on port 38947...                          I@22:25:18.538
+The Apalache server is running on port 38947. Press Ctrl-C to stop.
+Failed to find a usable hardware address from the network interfaces; using random bytes: 03:01:4e:30:b4:be:6a:33 W@22:25:19.120
+PASS #0: SanyParser                                               I@22:25:21.772
+[TLC] Running TLC model checker...
+
+TLC2 Version 2026.10.14.132523
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 63 and seed 6659143103047126982 with 1 worker on 9 cores with 1024MB heap and 64MB offheap memory [pid: 834] (Linux 6.18.44 amd64, Debian 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /tmp/quint-tlc-NM2jmX/mutant_knowledge_starvation.tla
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/Integers.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/Sequences.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/FiniteSets.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/TLC.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/Apalache.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/Variants.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/_TLCTrace.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/Naturals.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/quint-tlc-NM2jmX/tlc-8045809419689155818/TLCExt.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module mutant_knowledge_starvation
+Linting of module Apalache
+Linting of module Variants
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module mutant_knowledge_starvation
+Starting... (2026-10-14 22:25:23)
+Implied-temporal checking--satisfiability problem has 1 branches.
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-14 22:25:23.
+Checking temporal properties for the current state space with 1340 total distinct states at (2026-10-14 22:25:26)
+Finished checking temporal properties in 00s at 2026-10-14 22:25:26
+Progress(8) at 2026-10-14 22:25:26: 11,114 states generated (11,114 s/min), 1,839 distinct states found (1,839 ds/min), 755 states left on queue.
+Progress(23) at 2026-10-14 22:25:47: 100,819 states generated, 12,955 distinct states found, 0 states left on queue.
+Checking temporal properties for the complete state space with 12955 total distinct states at (2026-10-14 22:25:47)
+Error: Temporal property q_temporalProps was violated.
+
+Error: The following behavior constitutes a counter-example:
+
+State 1: <Initial predicate>
+/\ mutant_knowledge_starvation_knowledge_lastServed = -1
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 0
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> FALSE @@ 1 :> FALSE @@ 2 :> FALSE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "pending" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = -1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = ""
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "pending" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "init"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 2: <mutant_knowledge_starvation_knowledge_fairClock line 898, col 3 to line 899, col 56 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = -1
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 0
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "pending" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = -1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = "all_outstanding_deadlines"
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "pending" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "advance_time"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 3: <mutant_knowledge_starvation_knowledge_fairPump line 1174, col 3 to line 1175, col 49 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 0
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> FALSE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = -1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = ""
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<0>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {0}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "pump"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 4: <mutant_knowledge_starvation_knowledge_fairClock line 898, col 3 to line 899, col 56 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 0
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = -1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = "all_outstanding_deadlines"
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {0}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "advance_time"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 5: <mutant_knowledge_starvation_knowledge_fairFinish line 1212, col 3 to line 1213, col 51 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 0
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "complete" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> FALSE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = 0
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = "success"
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "complete" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<1>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {1}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "settle"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 6: <mutant_knowledge_starvation_knowledge_update line 703, col 3 to line 704, col 22 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 0
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "complete" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> FALSE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = -1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = ""
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "complete" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {1}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "stutter"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 7: <mutant_knowledge_starvation_knowledge_fairClock line 898, col 3 to line 899, col 56 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 0
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "complete" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = -1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = "all_outstanding_deadlines"
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "complete" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {1}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "advance_time"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 8: <mutant_knowledge_starvation_knowledge_fairEnvironment line 1196, col 3 to line 1206, col 95 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 2
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "complete" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = 1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = "2,0"
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "complete" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {1}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "set_translation"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 9: <mutant_knowledge_starvation_knowledge_fairEnvironment line 1196, col 3 to line 1206, col 95 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 2
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "pending" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = 0
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = ""
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "pending" @@ 1 :> "running" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {1}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "recycle"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 10: <mutant_knowledge_starvation_knowledge_fairFinish line 1212, col 3 to line 1213, col 51 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 2
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "running" @@ 1 :> "complete" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> FALSE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = 1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = "success"
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "running" @@ 1 :> "complete" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<0>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {0}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "settle"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 11: <mutant_knowledge_starvation_knowledge_fairEnvironment line 1196, col 3 to line 1206, col 95 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 2
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> FALSE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = 1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = ""
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {0}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "recycle"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 12: <mutant_knowledge_starvation_knowledge_fairClock line 898, col 3 to line 899, col 56 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 2
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = -1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = "all_outstanding_deadlines"
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {0}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "advance_time"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+State 13: <mutant_knowledge_starvation_knowledge_fairEnvironment line 1196, col 3 to line 1206, col 95 of module mutant_knowledge_starvation>
+/\ mutant_knowledge_starvation_knowledge_lastServed = 0
+/\ mutant_knowledge_starvation_knowledge_translationRunning = 0
+/\ mutant_knowledge_starvation_knowledge_closed = FALSE
+/\ mutant_knowledge_starvation_knowledge_graceReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_cooldownReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_phase = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_interim = 0
+/\ mutant_knowledge_starvation_knowledge_providerReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_started = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_intervalReady = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_listenings = {0, 1}
+/\ mutant_knowledge_starvation_knowledge_actor = 1
+/\ mutant_knowledge_starvation_knowledge_keyAvailable = (0 :> TRUE @@ 1 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_aborted = {}
+/\ mutant_knowledge_starvation_knowledge_legalAdmission = TRUE
+/\ mutant_knowledge_starvation_knowledge_translationWaiting = 1
+/\ mutant_knowledge_starvation_knowledge_argument = "0,0"
+/\ mutant_knowledge_starvation_knowledge_continued = {}
+/\ mutant_knowledge_starvation_knowledge_durable = (0 :> "running" @@ 1 :> "pending" @@ 2 :> "pending")
+/\ mutant_knowledge_starvation_knowledge_recentStarts = <<>>
+/\ mutant_knowledge_starvation_knowledge_retryReady = (0 :> TRUE @@ 1 :> TRUE @@ 2 :> TRUE)
+/\ mutant_knowledge_starvation_knowledge_running = {0}
+/\ mutant_knowledge_starvation_knowledge_lastAction = "set_translation"
+/\ mutant_knowledge_starvation_knowledge_retried = {}
+
+Back to state 5: <mutant_knowledge_starvation_knowledge_fairFinish line 1212, col 3 to line 1213, col 51 of module mutant_knowledge_starvation>
+
+Finished checking temporal properties in 00s at 2026-10-14 22:25:47
+100819 states generated, 12955 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 23.
+Finished in 24s at (2026-10-14 22:25:47)
+Trace exploration spec path: /tmp/quint-tlc-NM2jmX/mutant_knowledge_starvation_TTrace_1791984322.tla
+
+[violation] Found an issue (25122ms).
+
+Oct 14, 2026 10:25:21 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
+As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
+error: found a counterexample
+
+CLI_EXIT=1

@@ -70,3 +70,18 @@ test('内存清单超上限时丢弃最老后台任务并标记 dropped（DB pen
   assert.equal(s.has('b0'), false);
   assert.equal(s.has('b1'), true);
 });
+
+test('waiting ID snapshots preserve insertion order without exposing mutable queue state', () => {
+  const s = createTranslationScheduler({ now: () => 0 });
+  for (const id of ['b2', 'b0', 'b1']) s.enqueue(task(id, 'background'));
+  const snapshot = s.queuedIds;
+  assert.deepEqual(snapshot, ['b2', 'b0', 'b1']);
+  snapshot.reverse(); snapshot.push('invented');
+  assert.deepEqual(s.queuedIds, ['b2', 'b0', 'b1']);
+  assert.equal(s.cancel('b0'), true);
+  assert.deepEqual(s.queuedIds, ['b2', 'b1']);
+  assert.equal(s.next().segment.id, 'b2');
+  assert.deepEqual(s.queuedIds, ['b1']);
+  s.remove('l1');
+  assert.deepEqual(s.queuedIds, []);
+});

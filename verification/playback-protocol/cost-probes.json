@@ -1,0 +1,84 @@
+{
+  "purpose": "Development cost probes only. Uncommitted evolving source; not clean release evidence. Final evidence must rerun the frozen configuration.",
+  "baseSourceSha": "12b6a4a836df16c5dfe1b4b5a19b0e67062d8817",
+  "sourceDirty": true,
+  "notes": [
+    "TLC last progress is the last emitted progress line, not an exact timeout-state count. Wide probes emitted no later progress before the 60-second timeout.",
+    "Initial probes overlapped, so elapsed cost may include contention; final runner is serial.",
+    "Broader scopes remain incomplete. Splitting is explicit and cannot relabel them passed.",
+    "An exploratory single-owner Apalache depth9 run disconnected before NoError; deep profile remains unestablished.",
+    "Many instantiated modules in a single file exceeded the Apalache RPC JSON 20MB size bound; splitting files preserves the same imported protocol."
+  ],
+  "probes": [
+    {
+      "scope": "3 owners, 1 PCM per owner, all A/B position/paused-start/seek/switch choices, labelled",
+      "status": "incomplete",
+      "timeoutMs": 60000,
+      "log": "cost-probes/wide-three-owner.log",
+      "sha256": "70d2dcc43dfabc6ca9f5c2228b15b419558d6bf59059fb0eab79934da3d0b7fa",
+      "metrics": {
+        "lastProgressDepth": 6,
+        "generated": 121142,
+        "distinct": 39038,
+        "queue": 33885
+      },
+      "reproductionConfiguration": "cost-probes/wide-three-owner.qnt"
+    },
+    {
+      "scope": "same wide 3-owner/1-PCM domain, trace labels erased",
+      "status": "incomplete",
+      "timeoutMs": 60000,
+      "log": "cost-probes/wide-three-owner-quotient.log",
+      "sha256": "b3589c420f328f73f5f81212ccbc196b8e97a4dee71bac7e07cd64ed5c06e00e",
+      "metrics": {
+        "lastProgressDepth": 7,
+        "generated": 177910,
+        "distinct": 30797,
+        "queue": 23627
+      },
+      "reproductionConfiguration": "cost-probes/wide-three-owner-quotient.qnt"
+    },
+    {
+      "scope": "3 owners, no PCM, otherwise all A/B position/paused-start/seek/switch choices, trace labels erased",
+      "status": "incomplete",
+      "timeoutMs": 60000,
+      "log": "cost-probes/wide-three-owner-without-pcm.log",
+      "sha256": "fa45b244bdd068c373fbf1fe8928edfc846c6695a9ac11f16626afe733d3fc2a",
+      "metrics": {
+        "lastProgressDepth": 6,
+        "generated": 119205,
+        "distinct": 21307,
+        "queue": 16351
+      },
+      "reproductionConfiguration": "cost-probes/wide-three-owner-without-pcm.qnt"
+    },
+    {
+      "scope": "2 owners, 1 PCM per owner, all original A/B position/paused-start/seek/switch choices, trace labels erased",
+      "status": "passed",
+      "timeoutMs": 60000,
+      "log": "cost-probes/pair-initial.log",
+      "sha256": "25194e43123ae2a4f9108f456de59a61a9e83daa869bb2ff682df2a4984da017",
+      "metrics": {
+        "graphDepth": 18,
+        "generated": 3581949,
+        "distinct": 104610,
+        "queue": 0,
+        "checkerDurationMs": 46759
+      }
+    },
+    {
+      "scope": "3 owners, no PCM, A only, position1, unpaused starts, no seek/switch; pause/resume/stop/old callbacks remain",
+      "status": "passed",
+      "timeoutMs": 60000,
+      "log": "cost-probes/aba-control-initial.log",
+      "sha256": "48dd7b3212eaa9b99cd4b7746e37009387d56e7cac3ba4f1e184205aa4c59499",
+      "metrics": {
+        "graphDepth": 14,
+        "generated": 74604,
+        "distinct": 2658,
+        "queue": 0,
+        "checkerDurationMs": 1814
+      }
+    }
+  ]
+}
