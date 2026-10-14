@@ -21,7 +21,7 @@ test('impact policy retains every mandatory CI suite, maps sensitive change fami
 test('ordinary docs and CSS do not schedule all quality or physical-device evaluations', () => {
   for (const file of ['README.md', 'docs/maintainer-notes.md', 'LICENSE']) { const plan = selectImpact(change(file)); assert.deepEqual(plan.affectedDomains, []); assert.deepEqual(plan.externalRequirements, []); assert.deepEqual(plan.requiredTechnicalSuites, technicalSuites); }
   const style = selectImpact(change('public/styles.css'));
-  assert.deepEqual(style.affectedDomains, ['HW-11']); assert.ok(style.externalRequirements.every(row => row.automaticPrExecution === false));
+  assert.deepEqual(style.affectedDomains, ['HW-11', 'HW-12', 'HW-13']); assert.ok(style.externalRequirements.every(row => row.automaticPrExecution === false));
   assert.ok(style.externalRequirements.length < selectImpact(change('package-lock.json')).externalRequirements.length);
 });
 test('Git NUL parser preserves deletion and both rename paths including spaces and rejects malformed input', () => {

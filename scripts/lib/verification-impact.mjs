@@ -27,9 +27,10 @@ export function selectImpact(changes, { uncertain = false } = {}) {
     if (!Array.isArray(change.paths) || !change.paths.length || change.paths.some(file => !validPath(file))) throw new Error('Invalid change path');
     for (const file of change.paths) {
       // CSS is UI coverage, not a request to repeat every paid service/device run.
-      const matches = styleFile.test(file) ? [{ id: 'style', category: 'interaction-style', domains: ['HW-11'] }] : impactRules.filter(rule => rule.match.test(file));
-      if (!matches.length && safeDocumentation.test(file)) matches.push({ id: 'documentation', category: 'documentation', domains: [] });
-      if (!matches.length) matches.push({ id: 'unknown-conservative', category: 'unknown', domains: groups });
+      const matches = styleFile.test(file) ? [{ id: 'style', category: 'interaction-style', domains: ['HW-11', 'HW-12', 'HW-13'] }] : impactRules.filter(rule => rule.match.test(file));
+      const knownDomain = matches.some(rule => rule.id !== 'runtime-security-performance');
+      if (!knownDomain && safeDocumentation.test(file)) matches.push({ id: 'documentation', category: 'documentation', domains: [] });
+      else if (!knownDomain) matches.push({ id: 'unknown-conservative', category: 'unknown', domains: groups });
       files.push({ path: file, change: change.status, rules: matches.map(rule => rule.id), categories: sorted(matches.map(rule => rule.category)), domains: sorted(matches.flatMap(rule => rule.domains)) });
     }
   }

@@ -37,6 +37,7 @@ export const impactRules = [
   { id: 'dependency-environment', category: 'dependencies-support', match: /^(?:package(?:-lock)?\.json|\.github\/|\.agents\/|\.nvmrc$|\.node-version$|Dockerfile|.*(?:docker|runtime|platform|support-matrix|toolchain|setup-|preflight).*)/, domains: groups },
   { id: 'verification-infrastructure', category: 'evidence-rules', match: /^(?:scripts\/(?:lib\/(?:process|verification|formal-protocol|tap-|release|impact)|run-|verify(?:-report)?\.)|verification\/(?:properties|release)|AGENTS\.md$)/, domains: groups },
   { id: 'server-storage', category: 'identity-persistence', match: /^(?:server\.mjs|storage\.mjs|src\/server\/)/, domains: groups },
+  { id: 'runtime-security-performance', category: 'security-performance', match: /^(?:public\/.*\.(?:js|html)|[^/]+\.(?:mjs|js)|src\/)/, domains: ['HW-12', 'HW-13'] },
   { id: 'relation', category: 'rules-budget-protocol', match: /(?:^|\/)(?:relation[-.]|relations\.|identity-grounding)/, domains: ['HW-03', 'HW-04', 'HW-05', 'HW-10'] },
   { id: 'knowledge', category: 'rules-budget-identity', match: /(?:^|\/)(?:knowledge[-.]|knowledge\/)/, domains: ['HW-03', 'HW-04', 'HW-05', 'HW-06', 'HW-07', 'HW-10'] },
   { id: 'revision-proof', category: 'identity-text-coordinates', match: /(?:revision|NameInterval|name-interval|name-replacement|knowledge-edit|knowledge-name|AxiomAudit|verification\/lean)/, domains: ['HW-06', 'HW-07'] },
