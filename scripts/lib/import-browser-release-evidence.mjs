@@ -23,8 +23,22 @@ export function validateImportBrowserObservations(observations) {
     const stale = scenario.name === 'stale-review', expiry = scenario.name === 'expired-upload';
     assert.equal(validates.length, stale ? 1 : 2); assert.equal(previews.length, expiry ? 0 : 1); assert.equal(commits.length, 2);
     for (const row of [...validates, ...previews, ...commits]) { assert.equal(row.method, 'POST'); assert.ok(row.request && row.response); }
-    for (const row of validates) {
-      assert.equal(row.status, 200); assert.equal(row.request.mode, scenario.mode); assert.ok(row.request.uploadBytes > 0);
+    const urlCounts = new Map();
+    for (const [index, row] of scenario.http.filter(row => row.path.startsWith('/api/data/import/')).entries()) {
+      assert.equal(new URL(row.url).origin, scenario.origin); assert.equal(new URL(row.url).pathname, row.path);
+      assert.equal(row.fetch.index, index); assert.equal(row.fetch.url, row.url); assert.equal(row.fetch.method, row.method);
+      assert.equal(row.responseIndex, urlCounts.get(row.url) || 0); urlCounts.set(row.url, row.responseIndex + 1);
+    }
+    assert.equal(scenario.uploads.length, validates.length);
+    for (const [index, row] of validates.entries()) {
+      const selected = scenario.uploads[index], inputBody = row.fetch.requestBody;
+      assert.equal(selected.index, index); assert.ok(Number.isSafeInteger(selected.size) && selected.size > 0); assert.ok(hash(selected.sha256));
+      assert.equal(inputBody.kind, 'File'); assert.equal(inputBody.name, selected.name); assert.equal(inputBody.size, selected.size); assert.equal(typeof inputBody.type, 'string');
+      // Chromium may omit File-backed inspector bytes; preserve that raw fact.
+      // The genuine fetch argument and selected input file provide the size.
+      assert.ok(row.request.uploadBytes === null || row.request.uploadBytes === selected.size);
+      assert.equal(new URL(row.url).searchParams.get('mode'), scenario.mode);
+      assert.equal(row.status, 200); assert.equal(row.request.mode, scenario.mode);
       const body = row.response; assert.equal(body.mode, scenario.mode); assert.equal(body.databaseVersion, 12); assert.equal(body.listeningCount, 1); assert.equal(body.currentCount, 1);
       assert.ok(hash(body.tokenSha256) && hash(body.previewTokenSha256) && hash(body.revision));
     }

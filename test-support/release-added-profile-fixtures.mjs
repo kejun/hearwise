@@ -80,14 +80,21 @@ export async function syntheticImportBrowser() {
     const snapshots = [['before-upload', initial], ['after-upload', initial], ...(!expiry ? [['after-same-connection-child-write', changed]] : []), ...(stale ? [['after-cancel', initial], ['after-stale-rejection', base], ['before-second-confirmation', base]] : [[expiry ? 'after-expired-rejection' : 'after-stale-refresh-expiry', base], ['after-fresh-upload', base]]), ['committed', after], ['after-process-restart', after]].map(([label, database]) => ({ label, database }));
     const review = { mode, databaseVersion: 12, listeningCount: 1, currentCount: 1, tokenSha256: hash('token'), previewTokenSha256: hash('preview'), revision: hash('revision') };
     const refreshed = { ...review, tokenSha256: stale ? review.tokenSha256 : hash('token2'), previewTokenSha256: hash('preview2'), revision: hash('revision2') };
-    const http = [], request = (endpoint, status, response, body) => http.push({ index: http.length, path: `/api/data/import/${endpoint}`, method: 'POST', status, response, request: body });
-    request('validate', 200, review, { mode, uploadBytes: 100 }); request('commit', expiry ? 410 : 409, { code: expiry ? 'IMPORT_EXPIRED' : 'IMPORT_PREVIEW_STALE' }, review);
+    const origin = 'http://synthetic-fixture', uploads = [], http = [], indices = new Map();
+    const request = (endpoint, status, response, body) => {
+      const url = `${origin}/api/data/import/${endpoint}${endpoint === 'validate' ? '?mode=' + mode : ''}`;
+      const requestBody = endpoint === 'validate' ? { kind: 'File', size: 100, name: 'backup.sqlite', type: 'application/octet-stream' } : null;
+      if (requestBody) uploads.push({ index: uploads.length, name: 'backup.sqlite', size: 100, sha256: hash('synthetic backup') });
+      const responseIndex = indices.get(url) || 0; indices.set(url, responseIndex + 1);
+      http.push({ index: http.length, url, responseIndex, fetch: { index: http.length, url, method: 'POST', requestBody }, path: `/api/data/import/${endpoint}`, method: 'POST', status, response, request: body });
+    };
+    request('validate', 200, review, { mode, uploadBytes: null }); request('commit', expiry ? 410 : 409, { code: expiry ? 'IMPORT_EXPIRED' : 'IMPORT_PREVIEW_STALE' }, review);
     if (!expiry) request('preview', stale ? 200 : 410, stale ? refreshed : { code: 'IMPORT_EXPIRED' }, { mode });
-    if (!stale) request('validate', 200, refreshed, { mode, uploadBytes: 100 });
+    if (!stale) request('validate', 200, refreshed, { mode, uploadBytes: null });
     request('commit', 200, { mode, changed: true, addedCount: 1, skippedCount: 0, safetyBackup: 'before-import-test.sqlite' }, refreshed);
     const fields = [['translations', 'segments', ['id', 'translation_state']], ['extraction', 'extraction_jobs', ['id', 'state', 'last_error']], ['relations', 'relation_jobs', ['id', 'state', 'last_error']], ['rounds', 'relation_rounds', ['id', 'state', 'stop_reason']], ['edits', 'knowledge_edit_jobs', ['id', 'state']]];
     const work = { providerCalls: 0, ...Object.fromEntries(fields.map(([field, table, names]) => [field, after.rows[table].map(row => Object.fromEntries(names.map(key => [key, row[key]])))])) };
-    return { mode, name, backup: business(['imported']), complete: true, ok: true, pageErrors: [], providerCalls: [], routeErrors: [], snapshots, http, cancel: { requestsBefore: 1, requestsAfter: 1 },
+    return { mode, name, origin, uploads, backup: business(['imported']), complete: true, ok: true, pageErrors: [], providerCalls: [], routeErrors: [], snapshots, http, cancel: { requestsBefore: 1, requestsAfter: 1 },
       confirmations: (stale ? [false, true, true] : [true, true]).map(accepted => ({ accepted, type: 'confirm', message: mode === 'append' ? '将新增 1 条收听，跳过 0 条' : '完整替换' })),
       clock: [{ timers: [{ id: 0, active: true, requestedMilliseconds: 900000 }] }, { timers: [{ id: 0, active: false }] }],
       ui: { staleReview: { status: '预览已刷新', confirmDisabled: false }, expired: { status: '导入文件已过期' }, expiredRefresh: { status: '导入文件已过期', confirmDisabled: true }, committed: { status: mode === 'append' ? '追加完成：新增 1 条，跳过 0 条' : '数据覆盖完成', confirmDisabled: true, reviewHidden: true } },

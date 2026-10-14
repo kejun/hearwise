@@ -39,6 +39,14 @@ for (const kind of ['security', 'import-protocol', 'edit-consistency']) test(`${
     o => { o.sourceEnd.digests['public/app.js'] = '0'.repeat(64); }, o => { o.checks[0].command[4] = 'test/unrelated.test.mjs'; },
     o => { o.checks[0].execution.timedOut = true; }, o => { o.checks[1].configuredTimeoutMs *= 2; }, o => { o.browser.lateObservationFailure = true; }
   ] : kind === 'import-protocol' ? [
+    o => { o.scenarios[0].http[0].fetch.requestBody.size++; },
+    o => { o.scenarios[0].http[0].fetch.url += '&wrong=1'; },
+    o => { o.scenarios[0].http[0].fetch.method = 'GET'; },
+    o => { o.scenarios[0].http[0].fetch.index++; },
+    o => { o.scenarios[0].http[0].responseIndex++; },
+    o => { o.scenarios[0].http[0].request.uploadBytes = 1; },
+    o => { o.scenarios[0].uploads[0].size++; },
+    o => { o.scenarios[0].uploads = []; },
     o => { o.scenarios[0].http.find(row => row.path.endsWith('/commit')).status = 200; },
     o => { o.scenarios[0].snapshots.find(row => row.label === 'after-stale-rejection').database.rows.listenings.push({ id: 'unexpected' }); },
     o => { o.scenarios[0].http.find(row => row.path.endsWith('/preview')).response.previewTokenSha256 = o.scenarios[0].http[0].response.previewTokenSha256; },

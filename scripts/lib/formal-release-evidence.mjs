@@ -36,6 +36,22 @@ export async function importRegressionTree() {
   const names = (await Promise.all([...regressions['import-protocol'].files].sort().map(regressionNames))).flat();
   return names.map(name => ({ name, children: children.get(name) || [] }));
 }
+export async function validateFormalRegression(kind, log) {
+    const footer = parseTapFooter(log);
+    assert.equal(tapSummary(log).ok, true);
+    if (regressions[kind].count) assert.equal(footer.tests, regressions[kind].count);
+    const names = (await Promise.all([...regressions[kind].files].sort().map(async file => await regressionNames(file)))).flat();
+    if (kind === 'import-protocol') validateTapTree(log, await importRegressionTree());
+    else if (kind === 'relation-protocol') {
+      const parent = 'valid empty and fully filtered responses settle without extra calls; insufficient candidates make zero calls';
+      assert.equal(names.filter(name => name === parent).length, 1);
+      const source = await readFile(regressions[kind].files[0], 'utf8');
+      assert.ok(source.includes("for (const response of ['empty', 'filtered']) await t.test(response,"));
+      assert.ok(source.includes("await t.test('no candidates',"));
+      validateTapTree(log, names.map(name => ({ name, children: name === parent ? ['empty', 'filtered', 'no candidates'] : [] })));
+    } else validateFlatTap(log, names);
+    return true;
+}
 export async function formalCommandContract(kind, report, definitionOverride, regressionOverride) {
   const definition = definitionOverride ?? definitions[kind], regression = regressionOverride ?? regressions[kind];
   assert.ok(definition && regression?.files?.length);
@@ -108,12 +124,7 @@ export async function validateFormalReleaseEvidence(kind, directory, { release =
   await attempt('wrong_execution_contract', () => formalCommandContract(kind, report));
   await attempt('wrong_regression_roster', async () => {
     const row = report.results.find(row => row.id === 'implementation-regressions');
-    const log = await readFile(path.join(directory, row.log), 'utf8'), footer = parseTapFooter(log);
-    assert.equal(tapSummary(log).ok, true);
-    if (regressions[kind].count) assert.equal(footer.tests, regressions[kind].count);
-    const names = (await Promise.all([...regressions[kind].files].sort().map(async file => await regressionNames(file)))).flat();
-    if (kind === 'import-protocol') validateTapTree(log, await importRegressionTree());
-    else validateFlatTap(log, names);
+    await validateFormalRegression(kind, await readFile(path.join(directory, row.log), 'utf8'));
   });
   for (const id of ['replay-witnesses', 'replay-simulation', 'negative-replay']) await attempt(`invalid_durable_evidence:${id}`, async () => {
     const row = report.results.find(row => row.id === id), replays = await json(path.join(directory, row.data));

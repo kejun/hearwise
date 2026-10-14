@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createRelationProtocolAdapter } from '../test-support/relation-protocol-adapter.mjs';
 import { createKnowledgeProtocolAdapter } from '../test-support/knowledge-protocol-adapter.mjs';
 import { validateDurableReplay } from '../scripts/lib/formal-durable-evidence.mjs';
-import { formalCommandContract } from '../scripts/lib/formal-release-evidence.mjs';
+import { formalCommandContract, validateFormalRegression } from '../scripts/lib/formal-release-evidence.mjs';
 
 async function record(adapter, actions) {
   const observations = [], capture = () => observations.push(JSON.parse(JSON.stringify({ step: observations.length - 1, durable: adapter.observe(), actual: adapter.project(), durableViolations: adapter.check() })));
@@ -70,5 +70,16 @@ test('formal command binding preserves portable roots, fixed tools, depth, tests
     r => { r.results[2].argv[3] = '/other/test/relation-protocol-replay.test.mjs'; }, r => { r.results[0].argv.push('--ignored'); },
     r => { r.results[0].execution.error = 'contradictory spawn failure'; }, r => { r.tools.node = 'v99.0.0'; }, r => { r.results[0].expectedFailure = true; }]) {
     const changed = structuredClone(report); mutate(changed); await assert.rejects(formalCommandContract('relation-protocol', changed));
+  }
+});
+
+test('relation regression reader accepts the real 11-root/3-child TAP tree and rejects damaged body with intact footer', { timeout: 30000 }, async () => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+  const { stdout } = await promisify(execFile)(process.execPath, ['--test', '--test-reporter=tap', '--test-timeout=20000', 'test/relation-protocol-replay.test.mjs'], { env, timeout: 25000, maxBuffer: 2 * 1024 * 1024 });
+  assert.equal(await validateFormalRegression('relation-protocol', stdout), true);
+  for (const bad of [stdout.replace('    ok 1 - empty', '    not ok 1 - empty'), stdout.replace('    ok 2 - filtered', '    ok 2 - unrelated'), stdout.replace('    ok 3 - no candidates', ''), stdout.replace('    1..3', '    1..2'), stdout.replace('ok 6 - valid empty', 'ok 7 - valid empty')]) {
+    assert.notEqual(bad, stdout); await assert.rejects(validateFormalRegression('relation-protocol', bad));
   }
 });
