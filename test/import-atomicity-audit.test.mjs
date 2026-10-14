@@ -23,10 +23,20 @@ test('atomicity audit rejects erased crash boundary events', () => {
   for (const row of changed.scenarios.filter(row => row.kind === 'crash')) row.events = [];
   assert.equal(validateAtomicityObservations(changed).ok, false);
 });
-test('atomicity audit rejects a marker that contradicts real SQL', () => {
+test('atomicity audit rejects contradictory SQL and out-of-run boundary timestamps', () => {
   const changed = structuredClone(original), row = changed.scenarios.find(row => row.id === 'append/crash/after-commit');
   row.marker.sql = 'SELECT 1'; row.marker.mutations = 0;
   assert.equal(validateAtomicityObservations(changed).ok, false);
+  const times = original.scenarios.flatMap(value => [...(value.lifecycle || []), ...(value.events || [])]).map(value => Date.parse(value.at));
+  const window = { startedAt: new Date(Math.min(...times)).toISOString(), finishedAt: new Date(Math.max(...times)).toISOString() };
+  assert.equal(validateAtomicityObservations(original, window).ok, true);
+  for (const days of [-365, 365]) {
+    const shifted = structuredClone(original), target = shifted.scenarios.find(value => value.id === 'append/crash/after-commit');
+    for (const value of [...target.lifecycle, ...target.events, target.marker]) value.at = new Date(Date.parse(value.at) + days * 86400000).toISOString();
+    // Every local ordering and SQL/marker binding still matches the genuine trace.
+    assert.equal(validateAtomicityObservations(shifted).ok, true);
+    assert.equal(validateAtomicityObservations(shifted, window).ok, false);
+  }
 });
 test('atomicity audit rejects footer-only passing TAP', () => {
   const n = atomicityRegressionCount;

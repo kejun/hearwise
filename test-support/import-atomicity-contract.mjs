@@ -6,7 +6,7 @@ export const atomicityRegressionFiles = ['test/import-atomicity-crash.test.mjs',
   'test/import-atomicity-evidence.test.mjs', 'test/import-atomicity-audit.test.mjs'].sort();
 export const atomicityRegressionNames = [
   'atomicity audit rejects erased crash boundary events',
-  'atomicity audit rejects a marker that contradicts real SQL',
+  'atomicity audit rejects contradictory SQL and out-of-run boundary timestamps',
   'atomicity audit rejects footer-only passing TAP',
   ...atomicityCases.map(value => `real SQLite import atomicity: ${caseId(value)}`),
   ...dataCases.map(value => `import full business projection: ${value}`),
