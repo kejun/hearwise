@@ -28,7 +28,7 @@ node scripts/verify-session-browser.mjs --release
 
 ## 已固定的两个反例
 
-1. 原版本在 `task-finished` 后仍以 `started=true` 接收同批 ASR final，导致已结束 run 新增记录。红提交 `223a2f2` 中 `session-consistency.test.mjs` 可复现。修复检查 terminal 和 client transport 状态，同时保留终态前尾句。
+1. 原版本在 `task-finished` 后仍以 `started=true` 接收同批 ASR final，导致已结束 run 新增记录。红提交 `2f74f1a` 中 `session-consistency.test.mjs` 可复现。修复检查 terminal 和 client transport 状态，同时保留终态前尾句。
 2. 旧翻译成功返回时，仅按 segment ID 写入，不能识别原文已被合法纠正。固定轨迹：两个显式重试在途 → 后发空结果失败 → 使用当前修订改名 → 旧成功晚到 → 核对原文/译文 → 显式重试新原文。SQLite 重开、旧失败响应和已有新结果不被覆盖另有边界回归。
 
 初次红证据记录三条失败断言，随后最小修复绿；HTTP 整体重放额外验证服务端确实传入原文快照。原有预算、队列、首次 final 和名称纠正语义保持不变。完整本次测试状态以目标提交 CI 和证据报告为准。

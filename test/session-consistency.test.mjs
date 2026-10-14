@@ -150,4 +150,14 @@ for (const failed of [false, true]) test(`A→B→A retains the existing content
   const complete = h.row();
   assert.equal(h.store.setTranslation(h.segment.id, failed ? null : '重复旧译文', failed, source), undefined);
   h.reopen(); assert.deepEqual(h.row(), complete);
+
+  // A newer request can win before the old request resolves, including after ABA.
+  const newer = storeFixture(t), original = newer.row().original_text;
+  newer.store.setTranslation(newer.segment.id, null, true);
+  newer.rename('Tibo'); newer.rename('Deebo');
+  newer.store.setTranslation(newer.segment.id, 'NEW VALID RESPONSE', false, original);
+  const winner = newer.row();
+  assert.equal(newer.store.setTranslation(newer.segment.id, failed ? null : 'OLD RESPONSE', failed, original), undefined);
+  newer.reopen(); assert.deepEqual(newer.row(), winner);
+  assert.equal(newer.row().translation_text, 'NEW VALID RESPONSE');
 });
