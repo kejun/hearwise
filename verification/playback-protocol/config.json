@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 1,
+  "specification": "configurations.qnt",
+  "init": "Init",
+  "step": "Step",
+  "invariant": "Safety",
+  "single": {
+    "main": "single",
+    "owners": 1,
+    "maxPcm": 2,
+    "records": [
+      "A",
+      "B"
+    ],
+    "unitsPerRecord": 2
+  },
+  "multiple": {
+    "mains": [
+      {
+        "main": "pair",
+        "owners": 2,
+        "maxPcm": 1,
+        "records": [
+          "A",
+          "B"
+        ],
+        "startPositions": [
+          1,
+          2
+        ]
+      },
+      {
+        "main": "aba",
+        "owners": 3,
+        "maxPcm": 0,
+        "records": [
+          "A"
+        ],
+        "startPositions": [
+          1
+        ],
+        "startPaused": false,
+        "noSeekOrRecordSwitch": true
+      }
+    ],
+    "wireModulus": 2
+  },
+  "finiteEnvironment": {
+    "maximumExplicitResumesPerRun": 1,
+    "maximumInitialPausesPerRun": 1,
+    "cancelingPauseAllowed": true,
+    "startPositions": [
+      1,
+      2
+    ],
+    "maxFramesPerProviderUnit": 1,
+    "pcmSamplesPerFrame": 2,
+    "providerResult": "successful after one PCM frame; ignores cancel allowed",
+    "scheduling": "Every declared legal action is enabled freely; no scenario routing; no fairness or unbounded liveness claim."
+  },
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "mains": [
+      "single_witnesses",
+      "isolation_witnesses"
+    ],
+    "seed": "42",
+    "maxSamples": 1,
+    "expectedTestCount": 19,
+    "counts": {
+      "single_witnesses": 12,
+      "isolation_witnesses": 7
+    },
+    "domains": {
+      "single_witnesses": {
+        "owners": 1,
+        "maxPcm": 2
+      },
+      "isolation_witnesses": {
+        "owners": 3,
+        "maxPcm": 2
+      }
+    }
+  },
+  "mutants": [
+    {
+      "main": "mutant_old_callback",
+      "expectedViolation": "ownership",
+      "maxSteps": 4
+    },
+    {
+      "main": "mutant_accepted_loss",
+      "expectedViolation": "intervals",
+      "maxSteps": 4
+    },
+    {
+      "main": "mutant_seek_unpaused",
+      "expectedViolation": "pauseSafety",
+      "maxSteps": 3
+    },
+    {
+      "main": "mutant_wrong_frame",
+      "expectedViolation": "frameOwnership",
+      "maxSteps": 3
+    }
+  ],
+  "traceContract": {
+    "variables": [
+      "lastAction",
+      "actor",
+      "choice",
+      "created",
+      "active",
+      "selectedRecord",
+      "paused",
+      "resuming",
+      "record",
+      "position",
+      "epoch",
+      "unlocked",
+      "requested",
+      "accepted",
+      "emitted",
+      "returned",
+      "completed",
+      "frames",
+      "received",
+      "consumed",
+      "played",
+      "closed",
+      "playerPaused",
+      "providerClosed",
+      "finished",
+      "settling",
+      "pending"
+    ],
+    "projectionFields": [
+      "created",
+      "active",
+      "selectedRecord",
+      "paused",
+      "resuming",
+      "record",
+      "position",
+      "epoch",
+      "unlocked",
+      "requested",
+      "accepted",
+      "emitted",
+      "returned",
+      "completed",
+      "frames",
+      "received",
+      "consumed",
+      "played",
+      "closed",
+      "playerPaused",
+      "providerClosed",
+      "finished",
+      "settling",
+      "pending"
+    ],
+    "normalization": "Unique last-:: suffixes; exact fixed owner domain; safe integers only.",
+    "actual": "createSpeechController + SpeechPlayer + AudioWorklet processor + SpeechBuffer + createSpeechService + file-backed SQLite; controlled platform scheduling and provider only.",
+    "wireModulus": 2
+  },
+  "profiles": {
+    "fast": {
+      "default": true,
+      "apalacheDepth": {
+        "single": 6,
+        "pair": 6,
+        "aba": 6
+      },
+      "tlc": "Complete finite exploration of all three explicitly stated configurations.",
+      "claim": "Bounded Apalache to depth 6 for each labelled domain; complete TLC checks are independent."
+    },
+    "deep": {
+      "default": false,
+      "apalacheDepth": {
+        "single": 9,
+        "pair": 8,
+        "aba": 8
+      },
+      "tlc": "Same complete finite domains; bounded result is an independent deeper run.",
+      "claim": "Optional separate depth 9/8/8 run; initial deep exploratory run was incomplete, so no deep evidence is established by fast success."
+    }
+  },
+  "simulation": {
+    "seed": "20261014",
+    "samples": 100,
+    "maximumSteps": 24,
+    "selectedTraces": 5
+  },
+  "regression": {
+    "files": [
+      "test/playback-protocol-adapter.test.mjs",
+      "test/playback-protocol-replay.test.mjs",
+      "test/playback-protocol-evidence.test.mjs"
+    ],
+    "expectedTests": 23
+  },
+  "exclusions": [
+    "Unbounded starts, arbitrary records/text, arbitrary pause/resume repetition",
+    "The complete 2-owner domain permits one provider PCM per owner; the complete 3-owner ABA domain permits only A/startPosition1/start-unpaused, no PCM/seek/record switch. Wider 3-owner/2-PCM witnesses are fixed reachability plus implementation replay, not complete exploration.",
+    "Provider zero-audio/failure semantics, arbitrary sample rates, arbitrary network frame batching",
+    "Unicode, long text, normalization and rewrite boundaries use separate real implementation contracts",
+    "Actual uint32 and safe-integer numeric boundaries use separate implementation tests",
+    "Qwen response-ID binding/history bounds use separate real WebSocket tests; model covers browser frame ownership",
+    "No browser or audible quality, hardware/device latency, live provider quality, crash or durable recovery claim",
+    "No temporal liveness or fairness theorem; terminal witnesses require eventual unlock, successful provider delivery, render and settlement; indefinite pause is legal waiting"
+  ],
+  "completeSpecification": "complete.qnt",
+  "negativeSpecification": "mutants.qnt",
+  "profileRationale": "Measured initial single BMC depth6 14.2s, pair depth6 45.5s, ABA depth6 26.7s checker time. Pair complete TLC 46.8s under contention and same-record ABA 1.8s. Freeze fast BMC6, all three complete TLC scopes, parent480s and individual60s TLC limits. Wider three-owner audio probes remain incomplete; raw costs are retained in cost-probes.json. Deep9/8/8 remains optional and unestablished until its own complete report."
+}
