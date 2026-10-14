@@ -4,24 +4,28 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runProcess } from '../scripts/lib/process.mjs';
+import { tapSummary } from '../scripts/lib/tap-summary.mjs';
 import { sessionTapSummary } from '../test-support/session-evidence.mjs';
 import { relationTapSummary } from '../test-support/relation-result-evidence.mjs';
 
-const parsers = [sessionTapSummary, relationTapSummary];
+const parsers = [tapSummary, sessionTapSummary, relationTapSummary];
 const footer = '1..2\n# tests 2\n# suites 0\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1.25\n';
 
 test('real Node TAP logs cannot hide skipped coverage or a failing assertion', { timeout: 15000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'tap-footer-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
-  for (const [name, second, expected] of [
+  for (const [name, second, expected, log = "console.log('# pass 2'); console.log('# fail 0'); console.log('# skipped 0');"] of [
     ['skip', "test.skip('not exercised', () => {});", { testCount: 2, testComplete: false, ok: false }],
     ['failure', "test('failure', () => { throw new Error('fixed failing assertion'); });", { testCount: 2, testComplete: true, ok: false }],
     ['pass', "test('executed', () => {});", { testCount: 2, testComplete: true, ok: true }],
-    ['nested', "test('parent', async t => { await t.test('nested', () => {}); });", { testCount: 3, testComplete: true, ok: true }]
+    ['nested', "test('parent', async t => { await t.test('nested', () => {}); });", { testCount: 3, testComplete: true, ok: true }],
+    ['plain-metrics', "test.skip('not exercised', () => {});", { testCount: 0, testComplete: false, ok: false }, "console.log('pass 2'); console.log('skipped 0');"],
+    ['fake-footer', "test.skip('not exercised', () => {});", { testCount: 0, testComplete: false, ok: false },
+      `console.log(${JSON.stringify(footer.replaceAll('# ', '').trimEnd())});`]
   ]) {
     const file = path.join(directory, `${name}.test.mjs`);
-    await writeFile(file, `import { test } from 'node:test';\ntest('metric-like logs', () => { console.log('# pass 2'); console.log('# fail 0'); console.log('# skipped 0'); });\n${second}\n`);
+    await writeFile(file, `import { test } from 'node:test';\ntest('metric-like logs', () => { ${log} });\n${second}\n`);
     const execution = await runProcess(process.execPath, ['--test', '--test-reporter=tap', file], { env, timeoutMs: 4000 });
     assert.equal(execution.timedOut, false, execution.tail);
     assert.equal(execution.code, name === 'failure' ? 1 : 0, execution.tail);
