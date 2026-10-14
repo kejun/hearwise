@@ -8,7 +8,7 @@ import { isDeepStrictEqual as same } from 'node:util';
 import { digest, sourceVersion } from './verification-evidence.mjs';
 import { checkerConclusion } from './formal-protocol-evidence.mjs';
 import { parseTapFooter } from './tap-summary.mjs';
-import { quintCli, quintHome, toolchain, checkProtocolTools } from './relation-protocol-tools.mjs';
+import { quintCli, quintHome, toolchain, checkProtocolTools, protocolToolIdentity, validProtocolToolProbe } from './relation-protocol-tools.mjs';
 import { normalizeNameTrace, expectedNameMutationViolation, validateNameProjection } from './name-protocol-replay.mjs';
 import { inspectMatchedNameDurable, inspectNameNegativeDurable } from './name-protocol-durable.mjs';
 import { properties } from '../../verification/name-protocol/properties.mjs';
@@ -117,7 +117,7 @@ export async function nameProtocolMetadata() {
 }
 export const nameInputBinding = (context, config, tools) => ({ source: context.source, sourceDigest: context.sourceDigest,
   buildDigest: context.buildDigest, buildSource: context.buildSource, buildCurrent: context.buildCurrent,
-  modelDigest: context.modelDigest, lockDigest: context.lockDigest, configDigest: digest(JSON.stringify(config)), toolsDigest: digest(JSON.stringify(tools ?? null)) });
+  modelDigest: context.modelDigest, lockDigest: context.lockDigest, configDigest: digest(JSON.stringify(config)), toolsDigest: digest(JSON.stringify(protocolToolIdentity(tools))) });
 export function nameStageCommand(stage, config, directory, endpoint = null, origin = { repositoryRoot: process.cwd(), nodeExecutable: process.execPath, quintHome }) {
   const resolve = file => path.join(origin.repositoryRoot, file), modelRoot = resolve('verification/name-protocol');
   const cli = resolve('node_modules/@informalsystems/quint/dist/src/cli.js');
@@ -331,18 +331,24 @@ export async function validateNameProtocolEvidence(directory, { release = false 
   if (report.complete !== true || report.execution?.complete !== true || !completeExecution(report.execution) || report.execution.code !== 0 || report.overallTimeoutMs !== config.limits.overallMs) reasons.push('incomplete_execution');
   if (!validNameInterval(report) || Date.parse(report.finishedAt) - Date.parse(report.startedAt) > config.limits.overallMs + 1500) reasons.push('invalid_run_interval');
   if (!same(report.inputEnd, binding)) reasons.push('changed_inputs_at_end');
+  const validTools = value => validProtocolToolProbe(value) && same(protocolToolIdentity(value), protocolToolIdentity(tools)) &&
+    Date.parse(value.javaProbe.startedAt) >= Date.parse(report.startedAt) && Date.parse(value.javaProbe.finishedAt) <= Date.parse(report.finishedAt);
+  if (!validTools(tools) || !validTools(report.finalTools)) reasons.push('invalid_tool_probe');
   const artifacts = new Map();
   for (const item of report.artifacts) {
     if (typeof item.path !== 'string' || item.path.includes('\\') || path.isAbsolute(item.path) || path.posix.normalize(item.path) !== item.path || item.path.split('/').includes('..') || artifacts.has(item.path)) { reasons.push('invalid_artifact_path'); continue; }
     try { const filename = path.join(directory, item.path); assert.equal(await realpath(filename), path.join(await realpath(directory), item.path), 'Artifact symlink is forbidden'); const bytes = await readFile(filename); if (digest(bytes) !== item.sha256) reasons.push('changed_artifact'); else artifacts.set(item.path, bytes.toString('utf8')); } catch { reasons.push('missing_artifact'); }
   }
   if (!same(report.results.map(row => row.id), plan.map(row => row.id))) reasons.push('wrong_stage_plan');
-  const used = new Set(); let lastFinish = Date.parse(report.startedAt);
+  const used = new Set(); let lastFinish = Date.parse(report.startedAt), lastProbeFinish = Date.parse(tools?.javaProbe?.finishedAt);
   for (const [i, stage] of plan.entries()) {
     const row = rows[i], matches = report.results.filter(value => value.id === stage.id); if (matches.length !== 1) { row.reasons.push('missing_or_duplicate_result'); continue; }
     row.status = 'incomplete'; const result = matches[0];
     if (result.kind !== stage.kind || result.status !== 'passed' || result.complete !== true) row.reasons.push('not_passed');
     if (!validateNameCommand(result, stage, config, origin.evidenceDirectory, binding, origin)) row.reasons.push('wrong_command_or_input_binding');
+    if (!validTools(result.toolsStart) || !validTools(result.toolsEnd) ||
+      Date.parse(result.toolsStart.javaProbe.startedAt) < lastProbeFinish || Date.parse(result.toolsStart.javaProbe.finishedAt) > Date.parse(result.startedAt) || Date.parse(result.toolsEnd.javaProbe.startedAt) < Date.parse(result.finishedAt)) row.reasons.push('invalid_tool_probe');
+    lastProbeFinish = Date.parse(result.toolsEnd?.javaProbe?.finishedAt);
     if (Date.parse(result.startedAt) < lastFinish || Date.parse(result.finishedAt) > Date.parse(report.finishedAt)) row.reasons.push('wrong_stage_interval'); lastFinish = Date.parse(result.finishedAt);
     if (result.log !== `${stage.id}.log`) row.reasons.push('wrong_log_path'); used.add(result.log);
     const log = artifacts.get(result.log), conclusion = log == null ? null : nameStageConclusion(stage, result.execution, log, config);
@@ -383,6 +389,7 @@ export async function validateNameProtocolEvidence(directory, { release = false 
     }
     if (!row.reasons.length) row.status = 'passed';
   }
+  if (Date.parse(report.finalTools?.javaProbe?.startedAt) < lastProbeFinish) reasons.push('invalid_tool_probe_order');
   if (!same([...artifacts.keys()].sort(), [...used].sort())) reasons.push('wrong_artifact_inventory');
   const ok = !reasons.length && rows.every(row => row.status === 'passed');
   return { ok, release, reasons, rows, target, propertyRows: nameProtocolCoverage(config).map(property => ({ ...property, status: ok ? 'passed_for_declared_scope' : 'incomplete' })),

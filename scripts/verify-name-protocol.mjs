@@ -39,7 +39,7 @@ try {
   report.tools = await checkTools(); await save();
   for (const stage of plan) {
     if (interrupted || timedOut) throw new Error('Name verification interrupted');
-    const start = await nameProtocolMetadata(), inputStart = nameInputBinding(start, config, await checkTools());
+    const start = await nameProtocolMetadata(), toolsStart = await checkTools(), inputStart = nameInputBinding(start, config, toolsStart);
     if (!same(start, context)) throw new Error('Source/build content changed before stage');
     const endpoint = ['finite-state-complete', 'bounded-model-check', 'model-negative'].includes(stage.kind) ? await freePort() : null;
     const invocation = nameStageCommand(stage, config, directory, endpoint);
@@ -47,8 +47,9 @@ try {
     const execution = await runNameProtocolCommand(invocation, path.join(directory, log), { deadlineAt: overallDeadlineAt - 10000 });
     const { tail: _tail, ...processResult } = execution;
     const conclusion = nameStageConclusion(stage, execution, await readFile(path.join(directory, log), 'utf8'), config);
-    const result = { id: stage.id, kind: stage.kind, startedAt: execution.startedAt, finishedAt: new Date().toISOString(),
-      invocation, inputStart, inputEnd: nameInputBinding(await nameProtocolMetadata(), config, await checkTools()),
+    const finishedAt = new Date().toISOString(), end = await nameProtocolMetadata(), toolsEnd = await checkTools();
+    const result = { id: stage.id, kind: stage.kind, startedAt: execution.startedAt, finishedAt, toolsStart, toolsEnd,
+      invocation, inputStart, inputEnd: nameInputBinding(end, config, toolsEnd),
       execution: processResult, complete: conclusion.complete, status: conclusion.ok ? 'passed' : conclusion.complete ? 'failed' : 'incomplete',
       metrics: conclusion.metrics || null, log, traces: nameTracePaths(stage, config) };
     artifacts.add(log); for (const file of result.traces) artifacts.add(file);
@@ -70,13 +71,15 @@ try {
 } catch (error) { report.error = { name: error.name, message: error.message }; }
 finally {
   clearTimeout(overall); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
-  report.finishedAt = new Date().toISOString();
   report.complete = !timedOut && !interrupted && report.results.length === plan.length && report.results.every(row => row.complete);
   for (const file of artifacts) {
     try { report.artifacts.push({ path: file, sha256: digest(await readFile(path.join(directory, file))) }); }
     catch { report.complete = false; }
   }
-  report.inputEnd = nameInputBinding(await nameProtocolMetadata(), config, await checkTools().catch(() => null));
+  const end = await nameProtocolMetadata();
+  report.finalTools = await checkTools().catch(() => null);
+  report.inputEnd = nameInputBinding(end, config, report.finalTools);
+  report.finishedAt = new Date().toISOString();
   if (!same(report.inputEnd, nameInputBinding(context, config, report.tools))) { report.complete = false; report.error = { message: 'Source/build/config/tool inputs changed during execution' }; }
   report.execution = { complete: report.complete, timedOut, interrupted, code: !report.error && report.results.every(row => row.status === 'passed') ? 0 : 1, signal: null };
   await save();

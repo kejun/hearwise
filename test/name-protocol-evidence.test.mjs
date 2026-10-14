@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { probeJavaVersion, validProtocolToolProbe } from '../scripts/lib/relation-protocol-tools.mjs';
 import { runProcess } from '../scripts/lib/process.mjs';
 import { nameDeadlineAt, nameRemainingMs } from '../scripts/lib/name-protocol-budget.mjs';
 const fileDeadline = nameDeadlineAt(80000);
@@ -45,7 +46,21 @@ test(nameGateTests[0], () => {
   assert.equal(nameTracePaths(plan.find(row => row.id === 'replay-simulation'), config).length, 6);
   assert.equal(plan.filter(row => row.kind === 'model-negative').length, 5); assert.equal(nameNegatives.length, 4);
 });
-test(nameGateTests[1], () => {
+test(nameGateTests[1], async () => {
+  // Two real executions of the same Java must keep one immutable tool identity.
+  const first = await probeJavaVersion(), second = await probeJavaVersion();
+  const toolsA = { java: first.output, javaProbe: first.execution, jarSha256: 'same-pinned-binary' };
+  const toolsB = { java: second.output, javaProbe: second.execution, jarSha256: 'same-pinned-binary' };
+  assert.notDeepEqual(toolsA.javaProbe, toolsB.javaProbe);
+  assert.equal(validProtocolToolProbe(toolsA), true); assert.equal(validProtocolToolProbe(toolsB), true);
+  for (const change of [x => { x.javaProbe.code = 1; }, x => { x.javaProbe.timedOut = true; },
+    x => { x.javaProbe.tail = 'different version'; }, x => { x.javaProbe.durationMs += 60000; },
+    x => { x.javaProbe.command = '/tmp/other'; }, x => { x.javaProbe.finishedAt = '2000-01-01T00:00:00.000Z'; }]) {
+    const changed = structuredClone(toolsA); change(changed); assert.equal(validProtocolToolProbe(changed), false);
+  }
+  assert.deepEqual(nameInputBinding({}, config, toolsA), nameInputBinding({}, config, toolsB));
+  assert.notDeepEqual(nameInputBinding({}, config, toolsA), nameInputBinding({}, config, { ...toolsB, jarSha256: 'changed-binary' }));
+  assert.notDeepEqual(nameInputBinding({}, config, toolsA), nameInputBinding({}, config, { ...toolsB, java: 'different-version' }));
   const stage = plan[4], binding = { buildCurrent: true, sourceDigest: 'exact', source: { sha: 'a'.repeat(40), dirty: false } };
   const startedAt = '2026-10-14T00:00:00.000Z';
   const result = { invocation: nameStageCommand(stage, config, directory, '127.0.0.1:12345'), inputStart: binding, inputEnd: binding,
