@@ -45,14 +45,19 @@ test('actual HTTP receipt-boundary failure reports unsaved and allows the identi
 });
 
 test('browser-facing raw business gate supports a long Unicode replacement using actual HTTP and full table observations', async t => {
-  const { inspectNameBusinessTables } = await import('../scripts/lib/name-protocol-durable.mjs');
+  const { inspectNameBusinessTables, checkNameCommittedTables } = await import('../scripts/lib/name-protocol-durable.mjs');
+  for (const name of ['🧑‍🔬 Tibo Longer', 'Ｔｉｂｏ  Longer']) {
   const f = await createNameProtocolFixture(); t.after(() => f.close());
-  const baseline = f.tables(), name = '🧑‍🔬 Tibo Longer';
-  const response = await submit(f, randomUUID(), { name, revision: f.snapshot().revision }); assert.equal(response.status, 200);
+  const baseline = f.tables(), id = randomUUID(), input = { name, revision: f.snapshot().revision };
+  const response = await submit(f, id, input); assert.equal(response.status, 200);
   const { seeded } = f;
-  const checked = inspectNameBusinessTables({ baseline, tables: f.tables(), identities: { listeningId: f.listeningId, itemId: f.itemId,
+  const identities = { listeningId: f.listeningId, itemId: f.itemId,
     segmentId: seeded.segment.id, unlinkedId: seeded.other.id, unrelatedId: seeded.unrelated.listeningId, staleId: seeded.staleId,
-    cameraId: seeded.camera.id, factId: seeded.factId } });
+    cameraId: seeded.camera.id, factId: seeded.factId };
+  const checked = inspectNameBusinessTables({ baseline, tables: f.tables(), identities });
+  const committed = checkNameCommittedTables({ before: baseline, after: f.tables(), identities, id, input });
+  assert.equal(committed.ok, true, committed.reason);
   assert.equal(checked.ok, true, JSON.stringify(checked.violations)); assert.equal(checked.projection.name, name);
   assert.equal(checked.projection.activeSupportsValid, true);
+  }
 });

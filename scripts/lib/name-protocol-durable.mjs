@@ -17,7 +17,8 @@ const canonical = value => JSON.stringify(value, Object.keys(value).sort());
 const ordered = rows => [...rows].sort((a, b) => canonical(a).localeCompare(canonical(b)));
 const equalRows = (a, b) => same(ordered(a), ordered(b));
 const row = (values, id) => { const selected = values.filter(value => value.id === id); assert.equal(selected.length, 1, `Unique row ${id}`); return selected[0]; };
-const norm = value => value.toLowerCase(); // Frozen finite names are ASCII; no general normalization claim.
+// Independent normalization contract also serves the browser's Unicode fixtures.
+const norm = value => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
 function equalTables(left, right, label) {
   assert.deepEqual(Object.keys(left).sort(), tables, `${label}: complete table inventory`);
   assert.deepEqual(Object.keys(right).sort(), tables, `${label}: complete table inventory`);
