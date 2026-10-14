@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { validatePerformanceEvidence } from '../scripts/lib/performance-evidence.mjs';
+import { validatePerformanceEvidence, performanceMeasurementDigest } from '../scripts/lib/performance-evidence.mjs';
 import { fileSha256, performanceRoot } from '../scripts/lib/performance-files.mjs';
 
 test('actual incomplete collection stays incomplete and rehashed report corruptions fail closed', async t => {
@@ -53,4 +53,17 @@ test('actual incomplete collection stays incomplete and rehashed report corrupti
     await writeFile(path.join(copy, 'report.json'), JSON.stringify(report));
     assert.equal((await validatePerformanceEvidence(copy, { requireComplete: false })).valid, false, label);
   }
+});
+
+
+test('measurement identity binds execution and cleanup helpers independently of product changes', () => {
+  const helpers = ['scripts/lib/process.mjs', 'scripts/lib/verification-evidence.mjs', 'test-support/lifecycle.mjs'];
+  const sources = Object.fromEntries([...helpers, 'scripts/collect-performance.mjs', 'server.mjs'].map(file => [file, 'a'.repeat(64)]));
+  const baseline = performanceMeasurementDigest(sources);
+  for (const helper of helpers) {
+    assert.notEqual(performanceMeasurementDigest({ ...sources, [helper]: 'b'.repeat(64) }), baseline, helper);
+    const missing = { ...sources }; delete missing[helper];
+    assert.throws(() => performanceMeasurementDigest(missing), /Missing measurement dependency/, helper);
+  }
+  assert.equal(performanceMeasurementDigest({ ...sources, 'server.mjs': 'b'.repeat(64) }), baseline, 'The measured product may change between baseline and candidate');
 });

@@ -15,8 +15,14 @@ const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const equal = (a, b) => policyDigest(a) === policyDigest(b);
 const exited = execution => execution && execution.code === 0 && execution.signal === null && execution.timedOut === false && execution.interrupted === false && execution.ok === true;
 const safePath = file => typeof file === 'string' && file && !path.isAbsolute(file) && !file.split(/[\\/]/).includes('..') && !file.includes('\\');
-export const performanceMeasurementDigest = sources => policyDigest(Object.fromEntries(Object.entries(sources).filter(([file]) =>
-  /^(?:scripts\/(?:lib\/)?[^/]*performance[^/]*\.mjs|test-support\/performance[^/]*\.mjs|verification\/performance\/)/.test(file)).sort(([a], [b]) => a.localeCompare(b))));
+// Bind generic execution, atomic reporting and cleanup too. Product code stays
+// in sourceDigests, but can legitimately change between baseline and candidate.
+const measurementHelpers = ['scripts/lib/process.mjs', 'scripts/lib/verification-evidence.mjs', 'test-support/lifecycle.mjs'];
+export function performanceMeasurementDigest(sources) {
+  for (const file of measurementHelpers) assert.ok(hash(sources[file]), `Missing measurement dependency: ${file}`);
+  return policyDigest(Object.fromEntries(Object.entries(sources).filter(([file]) => measurementHelpers.includes(file) ||
+    /^(?:scripts\/(?:lib\/)?[^/]*performance[^/]*\.mjs|test-support\/performance[^/]*\.mjs|verification\/performance\/)/.test(file)).sort(([a], [b]) => a.localeCompare(b))));
+}
 
 // The random temporary browser user-data directory has no persistent content.
 // All other actual flags, device/browser/font/cache/network choices stay bound.
