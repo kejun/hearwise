@@ -71,7 +71,13 @@
     "verify:generation-protocol:report": "node scripts/verify-generation-report.mjs",
     "verify:m1:report": "node scripts/verify-m1-report.mjs",
     "prequality:semantic": "npm run build",
-    "quality:semantic": "node scripts/evaluate-semantic-quality.mjs"
+    "quality:semantic": "node scripts/evaluate-semantic-quality.mjs",
+    "setup:name-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:name-protocol": "npm run build",
+    "verify:name-protocol": "node scripts/verify-name-protocol.mjs",
+    "verify:name-protocol:report": "node scripts/verify-name-protocol-report.mjs",
+    "preverify:name-browser": "npm run build",
+    "verify:name-browser": "node scripts/verify-name-protocol-browser.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

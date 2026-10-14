@@ -1,0 +1,758 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Pre-freeze cost and limitation history; not a release report",
+  "baseline": "271cd966a0d4eee13f69d53edd29828b6feb23b8",
+  "modelCommit": "78822025515be6adc074e0e144408f90ce32cd6e",
+  "frozenDomain": {
+    "configurations": [
+      "independent",
+      "reuse"
+    ],
+    "attempts": 2,
+    "backgroundChanges": 1,
+    "boundedDepth": 6,
+    "witnesses": 22,
+    "simulation": {
+      "seed": "2026101471",
+      "samples": 100,
+      "maximumSteps": 20,
+      "selectedTraces": 3
+    },
+    "negativeBounds": {
+      "mutant_fingerprint": 6,
+      "mutant_rollback": 3,
+      "mutant_receipt": 3,
+      "mutant_revision": 4,
+      "mutant_anchor": 4
+    }
+  },
+  "budgetMs": {
+    "overall": 480000,
+    "tlc": 60000,
+    "bounded": 120000,
+    "negative": 120000
+  },
+  "boundsNotAttempted": "No depth above6 was attempted; no unlimited/inductive claim.",
+  "interruption": "Original environment became unavailable during final commit command. Commit was not completed. Actual files were recovered in the same environment; the source was not reconstructed from conversation fragments.",
+  "rows": [
+    {
+      "id": "independent-apalache-depth6-pre-noop-correction",
+      "metadata": "independent-apalache-depth6-pre-noop-correction.json",
+      "log": "independent-apalache-depth6-pre-noop-correction.log",
+      "sourceScope": "pre-noop-correction candidate",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 67677
+      },
+      "metrics": null,
+      "limitation": "No original source digests captured; historical cost only."
+    },
+    {
+      "id": "independent-apalache-depth6",
+      "metadata": "independent-apalache-depth6.json",
+      "log": "independent-apalache-depth6.log",
+      "sourceScope": "no-op-corrected candidate",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 74897
+      },
+      "metrics": null,
+      "limitation": "No original source digests captured; historical cost only."
+    },
+    {
+      "id": "independent-tlc-depth0-pre-noop-correction",
+      "metadata": "independent-tlc-depth0-pre-noop-correction.json",
+      "log": "independent-tlc-depth0-pre-noop-correction.log",
+      "sourceScope": "pre-noop-correction candidate",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 10893
+      },
+      "metrics": {
+        "generated": 201010,
+        "distinct": 58387,
+        "remaining": 0,
+        "graphDepth": 15
+      },
+      "limitation": "No original source digests captured; historical cost only."
+    },
+    {
+      "id": "independent-tlc-depth0",
+      "metadata": "independent-tlc-depth0.json",
+      "log": "independent-tlc-depth0.log",
+      "sourceScope": "no-op-corrected candidate",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 10893
+      },
+      "metrics": {
+        "generated": 201010,
+        "distinct": 58387,
+        "remaining": 0,
+        "graphDepth": 15
+      },
+      "limitation": "No original source digests captured; historical cost only."
+    },
+    {
+      "id": "initial-cli-path-failed",
+      "metadata": "initial-cli-path-failed.json",
+      "log": "initial-cli-path-failed.log",
+      "sourceScope": "failed prototype",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "failed",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 66
+      },
+      "metrics": null,
+      "limitation": "No original source digests captured; historical cost only."
+    },
+    {
+      "id": "mutant_anchor-tlc-depth0",
+      "metadata": "mutant_anchor-tlc-depth0.json",
+      "log": "mutant_anchor-tlc-depth0.log",
+      "sourceScope": "no-op-corrected candidate negative",
+      "sourceBinding": {
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec"
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "textual-counterexample-only",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 8666
+      },
+      "metrics": {
+        "generated": 729,
+        "distinct": 420,
+        "remaining": 314,
+        "graphDepth": 5
+      },
+      "limitation": "Quint TLC did not export ITF, despite accepted --out-itf flag; insufficient for trace replay."
+    },
+    {
+      "id": "mutant_fingerprint-tlc-depth0",
+      "metadata": "mutant_fingerprint-tlc-depth0.json",
+      "log": "mutant_fingerprint-tlc-depth0.log",
+      "sourceScope": "no-op-corrected candidate negative",
+      "sourceBinding": {
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec"
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "textual-counterexample-only",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 9323
+      },
+      "metrics": {
+        "generated": 1423,
+        "distinct": 751,
+        "remaining": 519,
+        "graphDepth": 7
+      },
+      "limitation": "Quint TLC did not export ITF, despite accepted --out-itf flag; insufficient for trace replay."
+    },
+    {
+      "id": "mutant_fingerprint-tlc-without-itf",
+      "metadata": "mutant_fingerprint-tlc-without-itf.json",
+      "log": "mutant_fingerprint-tlc-without-itf.log",
+      "sourceScope": "no-op-corrected candidate negative",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "textual-counterexample-only",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 8731
+      },
+      "metrics": {
+        "generated": 1423,
+        "distinct": 751,
+        "remaining": 519,
+        "graphDepth": 7
+      },
+      "limitation": "Quint TLC did not export ITF, despite accepted --out-itf flag; insufficient for trace replay."
+    },
+    {
+      "id": "mutant_receipt-tlc-depth0",
+      "metadata": "mutant_receipt-tlc-depth0.json",
+      "log": "mutant_receipt-tlc-depth0.log",
+      "sourceScope": "no-op-corrected candidate negative",
+      "sourceBinding": {
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec"
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "textual-counterexample-only",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 8543
+      },
+      "metrics": {
+        "generated": 90,
+        "distinct": 63,
+        "remaining": 51,
+        "graphDepth": 4
+      },
+      "limitation": "Quint TLC did not export ITF, despite accepted --out-itf flag; insufficient for trace replay."
+    },
+    {
+      "id": "mutant_revision-tlc-depth0",
+      "metadata": "mutant_revision-tlc-depth0.json",
+      "log": "mutant_revision-tlc-depth0.log",
+      "sourceScope": "no-op-corrected candidate negative",
+      "sourceBinding": {
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec"
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "textual-counterexample-only",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 8675
+      },
+      "metrics": {
+        "generated": 479,
+        "distinct": 286,
+        "remaining": 219,
+        "graphDepth": 5
+      },
+      "limitation": "Quint TLC did not export ITF, despite accepted --out-itf flag; insufficient for trace replay."
+    },
+    {
+      "id": "mutant_rollback-tlc-depth0",
+      "metadata": "mutant_rollback-tlc-depth0.json",
+      "log": "mutant_rollback-tlc-depth0.log",
+      "sourceScope": "no-op-corrected candidate negative",
+      "sourceBinding": {
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec"
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "textual-counterexample-only",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 8634
+      },
+      "metrics": {
+        "generated": 90,
+        "distinct": 63,
+        "remaining": 51,
+        "graphDepth": 4
+      },
+      "limitation": "Quint TLC did not export ITF, despite accepted --out-itf flag; insufficient for trace replay."
+    },
+    {
+      "id": "reuse-apalache-depth6",
+      "metadata": "reuse-apalache-depth6.json",
+      "log": "reuse-apalache-depth6.log",
+      "sourceScope": "no-op-corrected candidate",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 65438
+      },
+      "metrics": null,
+      "limitation": "No original source digests captured; historical cost only."
+    },
+    {
+      "id": "reuse-tlc-depth0-pre-noop-correction",
+      "metadata": "reuse-tlc-depth0-pre-noop-correction.json",
+      "log": "reuse-tlc-depth0-pre-noop-correction.log",
+      "sourceScope": "pre-noop-correction candidate",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 10469
+      },
+      "metrics": {
+        "generated": 142911,
+        "distinct": 40691,
+        "remaining": 0,
+        "graphDepth": 15
+      },
+      "limitation": "No original source digests captured; historical cost only."
+    },
+    {
+      "id": "reuse-tlc-depth0",
+      "metadata": "reuse-tlc-depth0.json",
+      "log": "reuse-tlc-depth0.log",
+      "sourceScope": "no-op-corrected candidate",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 10311
+      },
+      "metrics": {
+        "generated": 142911,
+        "distinct": 40691,
+        "remaining": 0,
+        "graphDepth": 15
+      },
+      "limitation": "No original source digests captured; historical cost only."
+    },
+    {
+      "id": "initial-conversion-failed",
+      "log": "initial-conversion-failed.log",
+      "sourceScope": "failed prototype shared init/step mark action",
+      "sourceBinding": null,
+      "releaseEvidence": false,
+      "complete": false,
+      "status": "failed",
+      "limitation": "Compiler rejected shared init/step action. Structured execution metadata was not preserved."
+    },
+    {
+      "id": "negative-mutant_anchor",
+      "metadata": "negative-mutant_anchor.json",
+      "log": "negative-mutant_anchor.log",
+      "trace": "negative-mutant_anchor.itf.json",
+      "sourceScope": "recovered no-op-corrected candidate; not final clean-checkout evidence",
+      "sourceBinding": {
+        "config.json": "ef580b8e571eb2153d2c845c493578c6d5c5524d7813a50ad66818b26967ee3f",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "properties.mjs": "5e27b07768c879bafb0b15261125f89fb81fb7d025f08856922907438eaca10b",
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec",
+        "trace-contract.json": "39ed00f1af0a2d29e3848cb9e38912a2e2a6bf6ca256d20f2fd9806391b3263e",
+        "witnesses.qnt": "f99fa7af8a3adece295073d0fb368df17aef06e4fd8ad6a966cea127480ebd45"
+      },
+      "source": {
+        "sha": "78822025515be6adc074e0e144408f90ce32cd6e",
+        "dirty": true
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 20129,
+        "ok": false
+      },
+      "metrics": {
+        "trace": "negative-mutant_anchor.itf.json",
+        "steps": 4,
+        "violation": "anchorsRechecked",
+        "firstViolation": 4
+      }
+    },
+    {
+      "id": "negative-mutant_fingerprint",
+      "metadata": "negative-mutant_fingerprint.json",
+      "log": "negative-mutant_fingerprint.log",
+      "trace": "negative-mutant_fingerprint.itf.json",
+      "sourceScope": "recovered no-op-corrected candidate; not final clean-checkout evidence",
+      "sourceBinding": {
+        "config.json": "ef580b8e571eb2153d2c845c493578c6d5c5524d7813a50ad66818b26967ee3f",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "properties.mjs": "5e27b07768c879bafb0b15261125f89fb81fb7d025f08856922907438eaca10b",
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec",
+        "trace-contract.json": "39ed00f1af0a2d29e3848cb9e38912a2e2a6bf6ca256d20f2fd9806391b3263e",
+        "witnesses.qnt": "f99fa7af8a3adece295073d0fb368df17aef06e4fd8ad6a966cea127480ebd45"
+      },
+      "source": {
+        "sha": "271cd966a0d4eee13f69d53edd29828b6feb23b8",
+        "dirty": true
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 38886,
+        "ok": false
+      },
+      "metrics": {
+        "trace": "negative-mutant_fingerprint.itf.json",
+        "steps": 6,
+        "violation": "exactReplay",
+        "firstViolation": 6
+      }
+    },
+    {
+      "id": "negative-mutant_receipt",
+      "metadata": "negative-mutant_receipt.json",
+      "log": "negative-mutant_receipt.log",
+      "trace": "negative-mutant_receipt.itf.json",
+      "sourceScope": "recovered no-op-corrected candidate; not final clean-checkout evidence",
+      "sourceBinding": {
+        "config.json": "ef580b8e571eb2153d2c845c493578c6d5c5524d7813a50ad66818b26967ee3f",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "properties.mjs": "5e27b07768c879bafb0b15261125f89fb81fb7d025f08856922907438eaca10b",
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec",
+        "trace-contract.json": "39ed00f1af0a2d29e3848cb9e38912a2e2a6bf6ca256d20f2fd9806391b3263e",
+        "witnesses.qnt": "f99fa7af8a3adece295073d0fb368df17aef06e4fd8ad6a966cea127480ebd45"
+      },
+      "source": {
+        "sha": "78822025515be6adc074e0e144408f90ce32cd6e",
+        "dirty": true
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 15253,
+        "ok": false
+      },
+      "metrics": {
+        "trace": "negative-mutant_receipt.itf.json",
+        "steps": 3,
+        "violation": "receiptAtomic",
+        "firstViolation": 3
+      }
+    },
+    {
+      "id": "negative-mutant_revision",
+      "metadata": "negative-mutant_revision.json",
+      "log": "negative-mutant_revision.log",
+      "trace": "negative-mutant_revision.itf.json",
+      "sourceScope": "recovered no-op-corrected candidate; not final clean-checkout evidence",
+      "sourceBinding": {
+        "config.json": "ef580b8e571eb2153d2c845c493578c6d5c5524d7813a50ad66818b26967ee3f",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "properties.mjs": "5e27b07768c879bafb0b15261125f89fb81fb7d025f08856922907438eaca10b",
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec",
+        "trace-contract.json": "39ed00f1af0a2d29e3848cb9e38912a2e2a6bf6ca256d20f2fd9806391b3263e",
+        "witnesses.qnt": "f99fa7af8a3adece295073d0fb368df17aef06e4fd8ad6a966cea127480ebd45"
+      },
+      "source": {
+        "sha": "78822025515be6adc074e0e144408f90ce32cd6e",
+        "dirty": true
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 16506,
+        "ok": false
+      },
+      "metrics": {
+        "trace": "negative-mutant_revision.itf.json",
+        "steps": 4,
+        "violation": "revisionRechecked",
+        "firstViolation": 4
+      }
+    },
+    {
+      "id": "negative-mutant_rollback",
+      "metadata": "negative-mutant_rollback.json",
+      "log": "negative-mutant_rollback.log",
+      "trace": "negative-mutant_rollback.itf.json",
+      "sourceScope": "recovered no-op-corrected candidate; not final clean-checkout evidence",
+      "sourceBinding": {
+        "config.json": "ef580b8e571eb2153d2c845c493578c6d5c5524d7813a50ad66818b26967ee3f",
+        "configurations.qnt": "6a23a22c24ccf79764cdbcf842271c62f5ac1555177a93a4fb9f995cee214241",
+        "properties.mjs": "5e27b07768c879bafb0b15261125f89fb81fb7d025f08856922907438eaca10b",
+        "protocol.qnt": "709ac5c8e880334ea687fb2b8ccfc3d1d6fc0cc31ce173e16ce60790756b159d",
+        "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec",
+        "trace-contract.json": "39ed00f1af0a2d29e3848cb9e38912a2e2a6bf6ca256d20f2fd9806391b3263e",
+        "witnesses.qnt": "f99fa7af8a3adece295073d0fb368df17aef06e4fd8ad6a966cea127480ebd45"
+      },
+      "source": {
+        "sha": "78822025515be6adc074e0e144408f90ce32cd6e",
+        "dirty": true
+      },
+      "releaseEvidence": false,
+      "complete": true,
+      "status": "passed",
+      "execution": {
+        "code": 1,
+        "signal": null,
+        "timedOut": false,
+        "interrupted": false,
+        "durationMs": 15176,
+        "ok": false
+      },
+      "metrics": {
+        "trace": "negative-mutant_rollback.itf.json",
+        "steps": 3,
+        "violation": "associatedAtomic",
+        "firstViolation": 3
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "independent-apalache-depth6-pre-noop-correction.json",
+      "sha256": "6aa748ff2e788a959a1d6b52b28f3474bf87fbd32cc23c18f82469a9dfe3f5a6"
+    },
+    {
+      "path": "independent-apalache-depth6-pre-noop-correction.log",
+      "sha256": "d3bc292631d2800e0f96de014bfe3e71d7a7201d300f5b18c51f8cef2f496a2c"
+    },
+    {
+      "path": "independent-apalache-depth6.json",
+      "sha256": "1e6c5e2255905a2496c415a458702eee727ca2b016a3d93c5aae73fa86ec1209"
+    },
+    {
+      "path": "independent-apalache-depth6.log",
+      "sha256": "30c1bac11912276c647caf0d589833241816cd1c9ba6b54da9f78b801e6b06df"
+    },
+    {
+      "path": "independent-tlc-depth0-pre-noop-correction.json",
+      "sha256": "71ccd7f26100807a0666ae6c245280ef347107d347f1ef31c3f1c57e5a29b19e"
+    },
+    {
+      "path": "independent-tlc-depth0-pre-noop-correction.log",
+      "sha256": "b86defbb2c2b4f0ed6bccce966f2eec0f9556239331f09137b38cc501644bb0a"
+    },
+    {
+      "path": "independent-tlc-depth0.json",
+      "sha256": "7a43285f80157aef507d5f94a499c7205b5a6e20b2a374c5fa22e49864d282ba"
+    },
+    {
+      "path": "independent-tlc-depth0.log",
+      "sha256": "534a0472530f46e95a90217ad3fe09543c2c723cb7935d5ddb97ce9937f89b6e"
+    },
+    {
+      "path": "initial-cli-path-failed.json",
+      "sha256": "b78e4c580bc54c241c6b568848cf6985d21a28055cccaffd24901889491d9551"
+    },
+    {
+      "path": "initial-cli-path-failed.log",
+      "sha256": "f42abce8a25e16c0151d0b0a38036eadb93b6e0d401f02fbcec6ff2ee21583d5"
+    },
+    {
+      "path": "initial-conversion-failed.log",
+      "sha256": "6d640e677e9b34a3eed9228358d7c7129ee7dbad2b1795fa920e014a84a573d2"
+    },
+    {
+      "path": "mutant_anchor-tlc-depth0.json",
+      "sha256": "3f8983ac2d6e27f0e3cd391f38d26906fde894571eea1dc6160fa6c7e521c5f0"
+    },
+    {
+      "path": "mutant_anchor-tlc-depth0.log",
+      "sha256": "fedbcdfbf531d04e71139227baff03966fc49c0a78cfa7ecd36fbb556fd1568d"
+    },
+    {
+      "path": "mutant_fingerprint-tlc-depth0.json",
+      "sha256": "fcc3d7a490fa1e1b2b010080c70985b4ca5df1e3bd2ace92a64ea0bb6e0c05b1"
+    },
+    {
+      "path": "mutant_fingerprint-tlc-depth0.log",
+      "sha256": "aac6bd416dd9b442801ac448031393551ac8d9fed3eb9878663a456d9f191bb0"
+    },
+    {
+      "path": "mutant_fingerprint-tlc-without-itf.json",
+      "sha256": "58e31d7015b678452071b00a5507e68b884c3ad1516459e8cebfdc967dafff8f"
+    },
+    {
+      "path": "mutant_fingerprint-tlc-without-itf.log",
+      "sha256": "91162ea93231f864b2bb1efce1cda34089503c25ffc68f58040839541a78eacd"
+    },
+    {
+      "path": "mutant_receipt-tlc-depth0.json",
+      "sha256": "930d58d7833ad782f62ee9238be4e69761d312c29f141fd6e304816a5d3a265c"
+    },
+    {
+      "path": "mutant_receipt-tlc-depth0.log",
+      "sha256": "c9ec865630fe3255fcc78fb719269c62e8fb752985eeabe5b7bb077f26a6fa4e"
+    },
+    {
+      "path": "mutant_revision-tlc-depth0.json",
+      "sha256": "e391a0970d1e60f62a64b6458f7d87271ab9adbfe13eb1bd34628cf296de68f9"
+    },
+    {
+      "path": "mutant_revision-tlc-depth0.log",
+      "sha256": "4d8469171e4a76e106e880267a14d43467cbe8485d5e240148221109f9fd242b"
+    },
+    {
+      "path": "mutant_rollback-tlc-depth0.json",
+      "sha256": "9d6c704c4fc3960a1f3ae1e4f7d47a05e13ed044d15632cff2ca72dc2454cf07"
+    },
+    {
+      "path": "mutant_rollback-tlc-depth0.log",
+      "sha256": "83718f07e3490b619d7775afd27bf48fef1c5abaf0531bc35703687855db30eb"
+    },
+    {
+      "path": "negative-mutant_anchor.itf.json",
+      "sha256": "480a6c8be07f5a00c8f8782a8617efb940087bf736ad52dba91852f436d8c70f"
+    },
+    {
+      "path": "negative-mutant_anchor.json",
+      "sha256": "0119bae87e656f8a11721751d41b68d7bb8b61b91c949f5c5110b71e344afaee"
+    },
+    {
+      "path": "negative-mutant_anchor.log",
+      "sha256": "f3102b083aec2b56c72e8d82c4cea52203e4fb0a997d5352e06e8acd6970c509"
+    },
+    {
+      "path": "negative-mutant_fingerprint.itf.json",
+      "sha256": "c7471521bdb4515ad2a68e35e495bc1d7070396925042087cb4eefb34b75b402"
+    },
+    {
+      "path": "negative-mutant_fingerprint.json",
+      "sha256": "bb97f516b2b38e1b985e893ab3ad8c9df0a0fa5aace3d4dda5fc7251e8e37397"
+    },
+    {
+      "path": "negative-mutant_fingerprint.log",
+      "sha256": "bd1a18dad128d611da704b0118be2e6c8710cc5e59ff583590d15bd934c067c6"
+    },
+    {
+      "path": "negative-mutant_receipt.itf.json",
+      "sha256": "767f2921545aead138084ea4dc9ce69fa2338db2ac8466eb290ad324ca0ed7a0"
+    },
+    {
+      "path": "negative-mutant_receipt.json",
+      "sha256": "8b1d8b3f726a2bc8e116eb8501f70ad4c7e6e69b113d76002e8d36992e095193"
+    },
+    {
+      "path": "negative-mutant_receipt.log",
+      "sha256": "93173e8b56f1463936c5dce33fd89817d2869deb5ce30141b4b342491eaff802"
+    },
+    {
+      "path": "negative-mutant_revision.itf.json",
+      "sha256": "5669855b2d57c6f2e3363232d41646b9153eef065dc155efcec620ee4b9b98e4"
+    },
+    {
+      "path": "negative-mutant_revision.json",
+      "sha256": "7bd7c3600e28b010f17fe77cd91ff023a1231a7443b27f5705be7a90f54216d1"
+    },
+    {
+      "path": "negative-mutant_revision.log",
+      "sha256": "e10fec6dcb9c5afc8f2b43017129aa1d0b48d9e756f3b6c7d620793d7c092884"
+    },
+    {
+      "path": "negative-mutant_rollback.itf.json",
+      "sha256": "51a42697122d65c73ed68640405149c96e7bc16ed13481d534dfa2503946af5a"
+    },
+    {
+      "path": "negative-mutant_rollback.json",
+      "sha256": "454dd0f26d97264cf4ccb6e14c57e14b8d16c0eba805fc5a3ca91280618ace6e"
+    },
+    {
+      "path": "negative-mutant_rollback.log",
+      "sha256": "35063e3ed086b2e621669943ae30a45cc20cad6f71d08c44313a31f631da7d71"
+    },
+    {
+      "path": "reuse-apalache-depth6.json",
+      "sha256": "6e1d738eb404b4144b047bc89680d3c63fc33c602feea80042c97c5f24119f70"
+    },
+    {
+      "path": "reuse-apalache-depth6.log",
+      "sha256": "ae5086298f10f9daaa3770092c507c5a59207f7e875d9fe9a4ae0fa7f5c6c176"
+    },
+    {
+      "path": "reuse-tlc-depth0-pre-noop-correction.json",
+      "sha256": "b80acb390bf20635b2dd47d64cc84934bd967d0de5aa6965384477441b95b968"
+    },
+    {
+      "path": "reuse-tlc-depth0-pre-noop-correction.log",
+      "sha256": "b2a04b0bb74dd5397abf82adae2986becf71d08803b96eb155a99fca92b4b509"
+    },
+    {
+      "path": "reuse-tlc-depth0.json",
+      "sha256": "8bf727632d72b1611f573df1313f1417662dee07cf597a3b6acf1b89c08bb7fc"
+    },
+    {
+      "path": "reuse-tlc-depth0.log",
+      "sha256": "fa2bdea8ad75a3a291211d5579b68f41ecdfaa2cd3ca7d343ae7ec56dc577fd1"
+    }
+  ],
+  "trackedTraceFormatting": {
+    "change": "Append one LF to Quint ITF JSON lacking final newline; JSON content and original evidence files unchanged.",
+    "originalDigests": {
+      "negative-mutant_anchor.itf.json": "f7f21587a22b1fc2be91866755fa773557075119687e4b0bdc82d0032e3f1623",
+      "negative-mutant_fingerprint.itf.json": "4775c5b94b96c178ca9686c484c41b91c0e45d0b8788a9b0bb40aac65bc2162d",
+      "negative-mutant_receipt.itf.json": "9054778610e95cd59812f8e089c1f6d0e40e4be52f300eb8dd7785f8f24e7315",
+      "negative-mutant_revision.itf.json": "71cc8b0376a6e8f9377125db966ba374c48d776af80bbbb866a90c620d30d0fc",
+      "negative-mutant_rollback.itf.json": "1f6542078f95ff955816737152ec2a5f37bcb5ce5fb854dd77750cebb8010561"
+    }
+  }
+}
