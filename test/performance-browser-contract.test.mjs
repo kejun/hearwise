@@ -159,3 +159,49 @@ test('pagination N/A is tied to exact fixture domain and cannot hide a missing c
   const forged = structuredClone(report); forged.cases.find(row => row.phase === 'graph-initial-e2e').status = 'not_applicable';
   assert.ok(validateBrowserEvidence(forged, m).errors.some(error => error.startsWith('graph-initial-e2e:')));
 });
+
+test('wheel input waits for the renderer page-scroll guard before dispatching the real gesture', async () => {
+  const { realPointer } = await import('../test-support/performance-browser.mjs');
+  const renderer = { scrollingPage: true }, events = [];
+  const oldDocument = globalThis.document;
+  globalThis.document = { getElementById: () => ({ _cyreg: { cy: { renderer: () => renderer } } }) };
+  try {
+    const page = {
+      locator: () => ({ scrollIntoViewIfNeeded: async () => events.push('scroll'), evaluate: async () => ({ x: 12, y: 12 }) }),
+      waitForFunction: async predicate => {
+        events.push('guard'); assert.equal(Boolean(predicate()), false, 'A page scroll still suppresses wheel input');
+        renderer.scrollingPage = false; assert.equal(predicate(), true);
+      },
+      mouse: { move: async () => events.push('move'), wheel: async (x, y) => {
+        assert.equal(renderer.scrollingPage, false, 'Wheel must not be silently dropped during the renderer scroll guard');
+        assert.deepEqual([x, y], [0, -240]); events.push('wheel');
+      } }
+    };
+    await realPointer(page, 'wheel', { nodeIds: ['node'] });
+    assert.deepEqual(events, ['scroll', 'move', 'guard', 'wheel']);
+  } finally { if (oldDocument === undefined) delete globalThis.document; else globalThis.document = oldDocument; }
+});
+
+test('import wire bodies are consumed before the UI action completes or navigates', async () => {
+  const { captureJsonResponse } = await import('../test-support/performance-browser.mjs');
+  for (const endpoint of ['/api/data/import/validate', '/api/data/import/commit']) {
+    const arrived = Promise.withResolvers(), bodyRead = Promise.withResolvers();
+    let evicted = false, reads = 0;
+    const response = { url: () => `http://127.0.0.1:1234${endpoint}`, request: () => ({ method: () => 'POST' }), status: () => 200,
+      json: async () => { assert.equal(evicted, false, 'Read must start before navigation'); reads++; bodyRead.resolve(); return { mode: 'append', addedCount: 1 }; } };
+    const page = { waitForResponse: predicate => { assert.equal(predicate(response), true);
+      assert.equal(predicate({ ...response, request: () => ({ method: () => 'GET' }) }), false);
+      assert.equal(predicate({ ...response, url: () => 'http://127.0.0.1:1234/api/unrelated' }), false); return arrived.promise; } };
+    const captured = captureJsonResponse(page, endpoint);
+    arrived.resolve(response); await bodyRead.promise; evicted = true;
+    assert.deepEqual(await captured, { status: 200, body: { mode: 'append', addedCount: 1 } }); assert.equal(reads, 1);
+  }
+});
+
+test('import response capture preserves HTTP status and body read failures', async () => {
+  const { captureJsonResponse } = await import('../test-support/performance-browser.mjs');
+  const response = { status: () => 409, json: async () => ({ error: 'stale' }) };
+  assert.deepEqual(await captureJsonResponse({ waitForResponse: async () => response }, '/api/data/import/commit'), { status: 409, body: { error: 'stale' } });
+  const error = new Error('body unavailable');
+  await assert.rejects(captureJsonResponse({ waitForResponse: async () => ({ ...response, json: async () => { throw error; } }) }, '/api/data/import/commit'), error);
+});

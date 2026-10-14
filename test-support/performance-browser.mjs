@@ -301,7 +301,7 @@ async function selectRecord(page, record, collected, withGraph = true) {
   await page.waitForFunction(title => document.getElementById('record-title').textContent === title, record.title);
   if (withGraph && await page.locator('#knowledge-view-graph').getAttribute('aria-pressed') === 'true') await waitGraph(page, record);
 }
-async function realPointer(page, kind, record) {
+export async function realPointer(page, kind, record) {
   const viewport = page.locator('#graph-viewport'); await viewport.scrollIntoViewIfNeeded();
   const point = await viewport.evaluate((element, input) => {
     const cy = element._cyreg.cy, rect = element.getBoundingClientRect();
@@ -316,7 +316,15 @@ async function realPointer(page, kind, record) {
     return { x: rect.x + element.clientLeft + chosen.x, y: rect.y + element.clientTop + chosen.y, dx: chosen.x > element.clientWidth / 2 ? -60 : 60, dy: chosen.y > element.clientHeight / 2 ? -40 : 40 };
   }, { kind, id: record.nodeIds[0] });
   await page.mouse.move(point.x, point.y);
-  if (kind === 'wheel') await page.mouse.wheel(0, -240);
+  if (kind === 'wheel') {
+    // Cytoscape's locked renderer suppresses wheel-to-zoom during page scroll.
+    // Observe its actual guard instead of sleeping or sending ignored gestures.
+    await page.waitForFunction(() => {
+      const renderer = document.getElementById('graph-viewport')?._cyreg?.cy?.renderer();
+      return Boolean(renderer) && renderer.scrollingPage !== true;
+    });
+    await page.mouse.wheel(0, -240);
+  }
   else { await page.mouse.down(); await page.mouse.move(point.x + point.dx, point.y + point.dy, { steps: 12 }); await page.mouse.up(); }
   return { kind, ...point, mechanism: 'Playwright real mouse input; Cytoscape read-only coordinate observation' };
 }
@@ -459,6 +467,14 @@ async function measurePhase(session, phase, state, prepared, index, warmup) {
   }
   return sample;
 }
+export function captureJsonResponse(page, pathname) {
+  // Start consuming the body as soon as the wire response arrives, before the
+  // triggering UI action can finish or navigate and evict Chromium's body cache.
+  const captured = page.waitForResponse(response => new URL(response.url()).pathname === pathname && response.request().method() === 'POST')
+    .then(async response => ({ status: response.status(), body: await response.json() }));
+  captured.catch(() => {}); // The owner awaits the original promise after input.
+  return captured;
+}
 async function importOnce(state) {
   const { manifest: m, report } = state;
   const bytes = await readFile(m.import.file); assert.equal(hash(bytes), m.import.sha256, 'Frozen import file hash');
@@ -466,14 +482,14 @@ async function importOnce(state) {
   try {
     const { page } = session;
     await page.locator('#settings-trigger').click(); await page.locator('#tab-data-button').click(); await page.locator('#data-import-append').check();
-    const validated = page.waitForResponse(response => new URL(response.url()).pathname === '/api/data/import/validate' && response.request().method() === 'POST');
-    await page.locator('#data-import-file').setInputFiles(m.import.file); const response = await validated, preview = await response.json();
-    assert.equal(response.status(), 200); assert.equal(preview.mode, 'append'); assert.equal(preview.addedCount, 1); assert.ok(preview.previewToken);
+    const validated = captureJsonResponse(page, '/api/data/import/validate');
+    await page.locator('#data-import-file').setInputFiles(m.import.file); const { status: previewStatus, body: preview } = await validated;
+    assert.equal(previewStatus, 200); assert.equal(preview.mode, 'append'); assert.equal(preview.addedCount, 1); assert.ok(preview.previewToken);
     await page.locator('#data-import-summary').filter({ hasText: '新增 1 条' }).waitFor();
-    const committed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/data/import/commit' && response.request().method() === 'POST');
+    const committed = captureJsonResponse(page, '/api/data/import/commit');
     page.once('dialog', async dialog => { if (dialog.type() === 'confirm' && dialog.message().includes('将新增 1 条收听')) await dialog.accept(); else await dialog.dismiss(); });
-    await page.locator('#data-import-confirm').click(); const commitResponse = await committed, result = await commitResponse.json();
-    assert.equal(commitResponse.status(), 200); assert.equal(result.mode, 'append'); assert.equal(result.addedCount, 1); assert.equal(result.listeningCount, m.import.addedCount, 'Imported backup record count, not destination total');
+    await page.locator('#data-import-confirm').click(); const { status: commitStatus, body: result } = await committed;
+    assert.equal(commitStatus, 200); assert.equal(result.mode, 'append'); assert.equal(result.addedCount, 1); assert.equal(result.listeningCount, m.import.addedCount, 'Imported backup record count, not destination total');
     await page.locator('#data-transfer-status').filter({ hasText: '追加完成：新增 1 条' }).waitFor();
     const reload = page.waitForEvent('load'); await page.locator('#close-settings').click(); await reload;
     const historyResponses = []; await openHistory(page, m, historyResponses, 1, true);
