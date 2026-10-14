@@ -271,7 +271,8 @@ async function translate(key, text, target, timeout = 15000, signal, context) {
     const result = await response.json().catch(() => { requestSignal.throwIfAborted(); return {}; });
     child.signal.throwIfAborted();
     child.event('response_received', { http_status: response.status });
-    if (!response.ok) throw Object.assign(new Error(result.error?.message || result.message || `翻译服务 HTTP ${response.status}`), { status: response.status });
+    // Provider bodies may echo authorization or transcript content. Keep safe status diagnostics only.
+    if (!response.ok) throw Object.assign(new Error(`翻译服务 HTTP ${response.status}`), { status: response.status });
     const output = result.choices?.[0]?.message?.content;
     if (typeof output !== 'string' || !output.trim()) throw Object.assign(new Error('翻译服务未返回文字'), { code: 'TRANSLATION_EMPTY' });
     return output.trim();
@@ -333,7 +334,7 @@ function checkRecognition(key) {
         ws.send(JSON.stringify({ header: { action: 'finish-task', task_id: taskId, streaming: 'duplex' }, payload: { input: {} } }),
           error => finish(error ? { ok: false, message: '无法结束测试任务' } : { ok: true, message: '识别模型可用' }));
       }
-      if (event.header?.event === 'task-failed') finish({ ok: false, message: event.header?.error_message || event.payload?.message || '识别任务启动失败' });
+      if (event.header?.event === 'task-failed') finish({ ok: false, message: '识别任务启动失败' });
     });
     ws.on('unexpected-response', (_request, response) => finish({ ok: false, message: `识别服务 HTTP ${response.statusCode}` }));
     ws.on('error', () => finish({ ok: false, message: '无法连接识别服务' }));
@@ -1027,14 +1028,14 @@ wss.on('connection', client => {
           } catch (error) { fail(`保存原文失败：${errorMessage(error)}`); }
         }
         if (kind === 'task-failed') {
-          const reason = event.payload?.message || event.header?.error_message || '识别任务失败';
+          // Untrusted provider error text must not enter client messages or fallback logs.
           if (!started && withSegmentation && !segmentationFallback && !stopping) {
             segmentationFallback = true;
-            console.warn('asr_param_fallback', String(reason).slice(0, 200));
+            console.warn('asr_param_fallback', '识别参数未被接受，重试基础参数');
             ws.close(); openUpstream(false);
             return;
           }
-          fail(reason);
+          fail('识别任务失败');
         }
         if (kind === 'task-finished') {
           recognitionTrace?.succeed();
