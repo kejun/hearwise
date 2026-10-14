@@ -36,7 +36,11 @@
     "setup:knowledge-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:knowledge-protocol": "npm run build",
     "verify:knowledge-protocol": "node scripts/verify-knowledge-protocol.mjs",
-    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs"
+    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs",
+    "setup:scheduler": "node scripts/setup-relation-protocol.mjs",
+    "preverify:scheduler": "npm run build",
+    "verify:scheduler": "node scripts/verify-scheduler-protocol.mjs",
+    "verify:scheduler:report": "node scripts/verify-scheduler-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
