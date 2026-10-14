@@ -58,6 +58,14 @@ export async function fullTraceFixture({ observations = false } = {}) {
     const end = speech.events.find(e => e.type === 'speech.unit-end');
     speech.send({ type: 'speech.progress', epoch: 7, playedUnit: end.unit, consumedSamples: end.samples });
     if (observations) speech.send({ type: 'speech.progress', epoch: 7, playedUnit: end.unit, consumedSamples: end.samples });
+    // A speech unit is not a terminal signal for the queued final translation.
+    // Stop only after this run's persisted final and its terminal Trace agree.
+    await until(() => asr.events.some(e => e.type === 'segment-final' && e.runId === run.runId && e.segment.asr_sentence_id === 'trace-final'));
+    const finalSegment = asr.events.find(e => e.type === 'segment-final' && e.runId === run.runId && e.segment.asr_sentence_id === 'trace-final').segment;
+    await until(() => asr.events.some(e => e.type === 'translation-updated' && e.runId === run.runId &&
+      e.segment.id === finalSegment.id && e.segment.translation_state === 'complete') &&
+      traceEvents(f.logs()).some(e => e.step_key === 'translation.execute' && e.state === 'succeeded' &&
+        e.attributes?.job_id === finalSegment.id && e.attributes?.run_id === run.runId));
     const asrClosed = once(asr.ws, 'close'); asr.send({ type: 'stop' }); await deadline(() => asrClosed, 3000, 'Full Trace ASR stop');
     await until(() => speech.events.some(e => e.type === 'speech.finished'));
     await until(() => traceEvents(f.logs()).some(e => e.step_key === 'knowledge.execute' && e.state === 'succeeded'));
