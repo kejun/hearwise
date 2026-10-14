@@ -10,6 +10,11 @@ export async function nameMutation(directory, mutation) {
   let changed = original;
   const replace = (before, after) => { assert.equal(changed.split(before).length, 2, 'Mutation must identify exactly one production guard'); changed = changed.replace(before, after); };
   if (mutation === 'bypass_fingerprint') replace('previous.fingerprint !== fingerprint(input)', 'false /* deliberately broken fingerprint check */');
+  else if (mutation === 'bypass_revision') replace(
+    "assertKnowledgeRevision(snapshot, input.revision, '条目或原文已改变，请核对最新内容后再提交');",
+    '/* deliberately omitted transaction revision recheck */');
+  else if (mutation === 'bypass_anchor') replace(
+    "fail(409, '关联原文引用已改变，请刷新后核对');", '{ /* deliberately omitted active support guard */ }');
   else if (mutation === 'non_atomic_receipt') {
     replace('return this.tx(() => {', 'return (() => {');
     replace('    });\n  }\n};', '    })();\n  }\n};');

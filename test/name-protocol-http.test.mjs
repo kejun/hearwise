@@ -43,3 +43,16 @@ test('actual HTTP receipt-boundary failure reports unsaved and allows the identi
   const saved = await submit(f, id, input); assert.equal(saved.status, 200); assert.equal(saved.body.job.saved, true);
   assert.equal(f.stats.providerRequests.length, 0);
 });
+
+test('browser-facing raw business gate supports a long Unicode replacement using actual HTTP and full table observations', async t => {
+  const { inspectNameBusinessTables } = await import('../scripts/lib/name-protocol-durable.mjs');
+  const f = await createNameProtocolFixture(); t.after(() => f.close());
+  const baseline = f.tables(), name = '🧑‍🔬 Tibo Longer';
+  const response = await submit(f, randomUUID(), { name, revision: f.snapshot().revision }); assert.equal(response.status, 200);
+  const { seeded } = f;
+  const checked = inspectNameBusinessTables({ baseline, tables: f.tables(), identities: { listeningId: f.listeningId, itemId: f.itemId,
+    segmentId: seeded.segment.id, unlinkedId: seeded.other.id, unrelatedId: seeded.unrelated.listeningId, staleId: seeded.staleId,
+    cameraId: seeded.camera.id, factId: seeded.factId } });
+  assert.equal(checked.ok, true, JSON.stringify(checked.violations)); assert.equal(checked.projection.name, name);
+  assert.equal(checked.projection.activeSupportsValid, true);
+});

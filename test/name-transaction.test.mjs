@@ -115,3 +115,19 @@ test('isolated real production-copy mutations expose fingerprint and receipt ato
     } finally { store.close(); }
   }
 });
+
+test('immutable receipt lookup precedes busy admission and newer-revision checks, but rejects altered input first', t => {
+  const h = fixture(t), id = randomUUID(), input = current(h, 'Tibo'), first = h.rename(id, input);
+  h.rename(randomUUID(), current(h, 'Mira'));
+  const before = nameTables(h.store), latest = h.snapshot();
+  const replay = h.store.replaceKnowledgeName(h.listeningId, h.item.id, id, input, { busy: true });
+  assert.deepEqual(replay.job, first.job); assert.equal(replay.changed, false); assert.deepEqual(nameTables(h.store), before);
+  for (const altered of [{ ...input, name: ' Tibo ' }, { ...input, revision: latest.revision }]) {
+    assert.throws(() => h.store.replaceKnowledgeName(h.listeningId, h.item.id, id, altered, { busy: true }),
+      error => error.status === 409 && /同一保存任务/.test(error.message));
+    assert.deepEqual(nameTables(h.store), before);
+  }
+  assert.throws(() => h.store.replaceKnowledgeName(h.listeningId, h.item.id, randomUUID(), current(h, 'Tibo'), { busy: true }),
+    error => error.status === 409 && /正在保存/.test(error.message));
+  assert.deepEqual(nameTables(h.store), before);
+});
