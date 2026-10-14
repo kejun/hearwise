@@ -3,10 +3,9 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { processEvidenceDefinition, validateProcessEvidence } from './process-crash-evidence.mjs';
 import { formalCommandContract } from './formal-release-evidence.mjs';
-import { validateFlatTap } from './release-tap-evidence.mjs';
+import { validateFormalRegression } from './formal-regression-contract.mjs';
 import { sourceSnapshot, sameSourceSnapshot, validBuildSource, evidenceFiles } from './runner-evidence-contract.mjs';
 import { sourceVersion } from './verification-evidence.mjs';
-import regressionNames from '../../verification/release/process-regressions.json' with { type: 'json' };
 export const processRegressionContract = { files: ['test/process-crash-replay.test.mjs', 'test/process-crash-lock.test.mjs', 'test/process-crash-trace.test.mjs'], count: 36, cwd: 'evidence' };
 export async function validateProcessReleaseEvidence(directory, { release = true, requireProfile = 'fast' } = {}) {
   const checked = await validateProcessEvidence(directory, { release, requireProfile });
@@ -22,7 +21,7 @@ export async function validateProcessReleaseEvidence(directory, { release = true
     assert.deepEqual(report.sourceStart.source, report.source); assert.deepEqual(report.sourceEnd, await sourceSnapshot());
     await formalCommandContract('process-crash', report, processEvidenceDefinition, processRegressionContract);
     const regression = report.results.find(row => row.id === 'implementation-regressions');
-    validateFlatTap(await readFile(path.join(directory, regression.log), 'utf8'), regressionNames);
+    await validateFormalRegression('process-crash', await readFile(path.join(directory, regression.log), 'utf8'));
     for (const id of ['replay-witnesses', 'replay-simulation', 'negative-replay']) {
       const row = report.results.find(row => row.id === id), replays = JSON.parse(await readFile(path.join(directory, row.data), 'utf8'));
       assert.deepEqual(JSON.parse(await readFile(path.join(directory, row.log), 'utf8')), replays.map(replay => ({ trace: replay.sourceTrace, classification: replay.classification, complete: replay.complete, ok: replay.ok, steps: replay.steps })));
