@@ -5,6 +5,8 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { runProcess } from '../scripts/lib/process.mjs';
+import { nestedProfileDeadlineMs, nestedProfileTestDeadlineMs } from '../scripts/lib/test-schedule.mjs';
+import { profileEvidenceDirectory } from '../test-support/profile-test-evidence.mjs';
 import { metadata, validateResult } from '../scripts/lib/verification-evidence.mjs';
 import { playbackProfile } from '../verification/playback-properties.mjs';
 import { playbackProvenance, playbackServedFiles, stablePlaybackSources } from '../test-support/playback-provenance.mjs';
@@ -47,19 +49,19 @@ function syntheticBrowser(provenance) {
       after: { ...structuredClone(unlocked), sockets: [...structuredClone(unlocked.sockets), { id: 2, readyState: 1, sent: [], received: [] }] }, served: served(true), errors: [] } };
 }
 
-test('playback profile runs the exact actual Node stages but keeps missing Chromium not_run', { timeout: 40000 }, async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'playback-node-profile-')); t.after(() => rm(root, { recursive: true, force: true }));
+test('playback profile runs the exact actual Node stages but keeps missing Chromium not_run', { timeout: nestedProfileTestDeadlineMs }, async t => {
+  const root = await profileEvidenceDirectory('playback');
   const result = await runProcess(process.execPath, ['scripts/verify-playback-browser.mjs', '--node-only'], {
-    env: { ...process.env, PLAYBACK_EVIDENCE_DIR: root }, timeoutMs: 35000 });
+    env: { ...process.env, PLAYBACK_EVIDENCE_DIR: root }, timeoutMs: nestedProfileDeadlineMs });
   assert.equal(result.code, 1, result.tail); assert.equal(result.timedOut, false);
   const directories = await readdir(root); assert.equal(directories.length, 1); const directory = path.join(root, directories[0]);
   const report = JSON.parse(await readFile(path.join(directory, 'report.json')));
   const observations = JSON.parse(await readFile(path.join(directory, 'observations.json')));
-  assert.equal(report.complete, true); assert.equal(report.ok, false);
+  assert.equal(report.complete, true, JSON.stringify(report)); assert.equal(report.ok, false);
   assert.deepEqual(report.results.map(row => row.property.id), playbackProfile);
   assert.ok(report.results.every(row => row.status === 'not_run'));
   assert.deepEqual(observations.checks.map(row => row.name), Object.keys(playbackCounts));
-  for (const check of observations.checks) { assert.equal(check.execution.ok, true); assert.equal(check.execution.testCount, playbackCounts[check.name]); }
+  for (const check of observations.checks) { assert.equal(check.execution.ok, true, JSON.stringify(check)); assert.equal(check.execution.testCount, playbackCounts[check.name]); }
   for (const row of report.results) { assert.equal(validateResult(row), true); assert.equal(await checkPlaybackEvidence(directory, row), true); }
   assert.ok(!(await readdir(directory)).some(name => name.startsWith('temporary-runtime-')));
 });

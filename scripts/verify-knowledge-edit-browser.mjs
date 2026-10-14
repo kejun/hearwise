@@ -1,18 +1,26 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { deadline } from '../test-support/lifecycle.mjs';
 import path from 'node:path';
 import { speechFixture } from '../test-support/speech-fixture.mjs';
 import { seedNameReplacement } from '../test-support/name-replacement-fixture.mjs';
 
 const fixture = await speechFixture({ seed: store => seedNameReplacement(store, { graph: true }),
   modelResponse: () => { throw new Error('Manual name replacement must not request a model'); } });
-let browser;
+let browser, page;
+const network = [];
+const record = entry => { if (network.length < 200) network.push({ at: new Date().toISOString(), ...entry }); };
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || undefined,
     args: ['--no-sandbox', '--no-zygote', '--disable-gpu'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+  page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => { if (request.url().startsWith(`${fixture.base}/api/`)) record({ event: 'request', method: request.method(), url: request.url(),
+    editId: request.headers()['idempotency-key'] || null,
+    ...(request.method() === 'POST' && request.url().endsWith('/name-replacements') ? { body: request.postDataJSON() } : {}) }); });
+  page.on('response', response => { if (response.url().startsWith(`${fixture.base}/api/`)) record({ event: 'response', method: response.request().method(), url: response.url(), status: response.status() }); });
+  page.on('requestfailed', request => { if (request.url().startsWith(`${fixture.base}/api/`)) record({ event: 'requestfailed', method: request.method(), url: request.url(), error: request.failure()?.errorText || null }); });
   // Deliberately no API Key, including for a graph that already has a relation.
   await page.goto(fixture.base);
   const open = async () => {
@@ -79,7 +87,11 @@ try {
   let writes = 0;
   page.on('request', request => { if (request.url() === `${url}/name-replacements` && request.method() === 'POST') writes++; });
   await page.route(`${url}/name-replacements`, async route => {
-    const result = await route.fetch(); assert.equal(result.status(), 200);
+    let result;
+    try { result = await route.fetch(); }
+    catch (error) { record({ event: 'lost_response_upstream_error', error: error.message }); throw error; }
+    record({ event: 'lost_response_upstream', status: result.status(), body: await result.text() });
+    assert.equal(result.status(), 200);
     await route.fulfill({ status: 502, contentType: 'text/html', body: '<html>response lost</html>' });
   }, { times: 1 });
   await page.locator('#knowledge-edit-save').click(); await page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
@@ -102,4 +114,33 @@ try {
   console.log(JSON.stringify({ ok: true, checks: ['one entry in list and graph', 'Deebo→Tibo without Key or model',
     'collision/cancel/proxy failure preserve input', 'literal linked-source/fact/quote replacement', 'existing graph stays active',
     'lost response recovers receipt without another write', 'desktop/390/320 layout', 'reload persistence', 'delete confirmation', 'no page errors'] }));
+} catch (failure) {
+  // Failure-only observation: never retries a write or changes the success path.
+  const diagnostics = { failure: { name: failure.name, message: failure.message }, network, editor: null, receipts: [], itemSnapshots: [], serverLog: fixture.logs(), providerRequests: fixture.stats.providerRequests };
+  try {
+    diagnostics.editor = await deadline(() => page.evaluate(() => ({ url: location.href,
+      open: document.querySelector('#knowledge-editor')?.open, busy: document.querySelector('#knowledge-editor')?.getAttribute('aria-busy'),
+      status: document.querySelector('#knowledge-edit-status')?.textContent, name: document.querySelector('#knowledge-edit-name')?.value })), 3000, 'editor failure snapshot');
+    const requests = network.filter(row => row.event === 'request' && row.method === 'POST' && row.url.endsWith('/name-replacements') && row.editId).slice(-4);
+    for (const request of requests) {
+      const url = request.url.replace(/\/name-replacements$/, `/edits/${request.editId}`);
+      try {
+        const response = await page.request.get(url, { timeout: 3000 });
+        diagnostics.receipts.push({ url, status: response.status(), body: await response.text() });
+      } catch (error) { diagnostics.receipts.push({ url, error: error.message }); }
+    }
+    for (const url of [...new Set(requests.map(request => request.url.replace(/\/name-replacements$/, '')))]) {
+      try {
+        const response = await page.request.get(url, { timeout: 3000 });
+        diagnostics.itemSnapshots.push({ url, status: response.status(), body: await response.text() });
+      } catch (error) { diagnostics.itemSnapshots.push({ url, error: error.message }); }
+    }
+    if (process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR) {
+      await mkdir(process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR, { recursive: true });
+      await writeFile(path.join(process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR, 'knowledge-edit-failure.json'), JSON.stringify(diagnostics, null, 2));
+      await page.screenshot({ path: path.join(process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR, 'knowledge-edit-failure.png'), timeout: 3000 });
+    }
+  } catch (error) { diagnostics.observationError = error.message; }
+  console.error('KNOWLEDGE_EDIT_FAILURE ' + JSON.stringify(diagnostics));
+  throw failure;
 } finally { await browser?.close(); await fixture.close(); }

@@ -1,6 +1,8 @@
 import { readdir, mkdir, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
+import { runTestSchedule } from './lib/test-schedule.mjs';
 import { runProcess } from './lib/process.mjs';
 
 async function findTests(directory) {
@@ -17,21 +19,22 @@ const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).tri
 const dirty = Boolean(execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], { encoding: 'utf8' }).trim());
 const results = [];
 await writeFile(path.join(directory, 'results.json'), JSON.stringify({ sha, dirty, complete: false, ok: false, results }));
-let next = 0, stopping = false;
+let stopping = false;
 const stop = () => { stopping = true; };
 process.on('SIGINT', stop); process.on('SIGTERM', stop);
-// Bounded concurrency keeps local provider fixtures predictable on small CI runners.
-await Promise.all(Array.from({ length: Math.min(4, files.length) }, async () => {
-  while (next < files.length && !stopping) {
-    const file = files[next++], log = path.join(directory, file.replaceAll(/[\\/]/g, '_') + '.log');
-    console.log(`START ${file}`);
-    const result = await runProcess(process.execPath, ['--test', '--test-timeout=30000', file], { logFile: log, timeoutMs: 90000 });
-    results.push({ file, log, ...result });
-    console.log(`${result.ok ? 'PASS' : 'FAIL'} ${file} (${result.durationMs}ms)${result.timedOut ? ' — file watchdog expired' : ''}`);
-    if (!result.ok) console.error(result.tail);
-    await writeFile(path.join(directory, 'results.json'), JSON.stringify({ sha, dirty, complete: false, ok: false, results }, null, 2));
-  }
-}));
+// Nested profile/Quint workers run alone instead of multiplying the outer
+// concurrency by each profile's internal child processes.
+console.log(`Test environment: ${JSON.stringify({ availableParallelism: os.availableParallelism(), load: os.loadavg(), totalMemory: os.totalmem(), freeMemory: os.freemem() })}`);
+await runTestSchedule(files, async (file, plan) => {
+  const log = path.join(directory, file.replaceAll(/[\\/]/g, '_') + '.log');
+  const startedAt = new Date().toISOString();
+  console.log(`START ${file}${plan.exclusive ? ' [exclusive nested processes]' : ''}`);
+  const result = await runProcess(process.execPath, ['--test', '--test-timeout=30000', file], { logFile: log, timeoutMs: plan.timeoutMs });
+  results.push({ file, log, startedAt, finishedAt: new Date().toISOString(), scheduling: plan, ...result });
+  console.log(`${result.ok ? 'PASS' : 'FAIL'} ${file} (${result.durationMs}ms)${result.timedOut ? ' — file watchdog expired' : ''}`);
+  if (!result.ok) console.error(result.tail);
+  await writeFile(path.join(directory, 'results.json'), JSON.stringify({ sha, dirty, complete: false, ok: false, results }, null, 2));
+}, { stopped: () => stopping });
 process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
 const complete = results.length === files.length && !stopping;
 const report = { sha, dirty, complete,
