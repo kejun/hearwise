@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { atomicityChecks, atomicityRegressionTap, validAtomicityCommand } from '../../test-support/import-atomicity-contract.mjs';
+import { atomicityChecks, atomicityRegressionTap, validAtomicityCommand, validAtomicityLocations } from '../../test-support/import-atomicity-contract.mjs';
 import { atomicitySource, atomicityVersion, hash, stableAtomicitySources, validateAtomicityObservations, validateAtomicityBrowser, executionPassed, atomicityEvidenceControls } from '../../test-support/import-atomicity-evidence.mjs';
 
 export async function readAtomicityReport(directory, { release = false, nodeOnly = false } = {}) {
@@ -30,7 +30,7 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
     return rows.length === 1 ? rows[0] : null;
   };
   const expectedChecks = atomicityChecks(report.evidenceDirectory || '', report.nodeOnly);
-  if (!path.isAbsolute(report.cwd || '') || !path.isAbsolute(report.evidenceDirectory || '')) reasons.push('execution_location_missing');
+  if (!validAtomicityLocations(report, directory, process.cwd())) reasons.push('execution_location_missing');
   for (const expected of expectedChecks) {
     const actual = check(expected.name);
     if (!validAtomicityCommand(actual, expected, report.cwd)) (expected.name === 'browser' ? browserArtifactReasons : nodeArtifactReasons).push(`command_or_budget_mismatch:${expected.name}`);

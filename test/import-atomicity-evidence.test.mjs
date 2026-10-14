@@ -25,10 +25,18 @@ test('atomicity execution rejects timeouts signals interruption and missing fini
 
 
 test('atomicity commands bind the actual regression files cwd and budgets', async () => {
-  const { atomicityChecks, validAtomicityCommand } = await import('../test-support/import-atomicity-contract.mjs');
+  const { atomicityChecks, validAtomicityCommand, validAtomicityLocations } = await import('../test-support/import-atomicity-contract.mjs');
   const expected = atomicityChecks('/tmp/atomicity-contract', true).find(row => row.name === 'regressions');
   const actual = { command: [process.execPath, ...expected.command], cwd: process.cwd(), log: 'regressions.log', configuredTimeoutMs: expected.timeout, effectiveTimeoutMs: expected.timeout };
   assert.equal(validAtomicityCommand(actual, expected, process.cwd()), true);
+  const directory = '/tmp/atomicity-contract', node = atomicityChecks(directory, true).find(row => row.name === 'node');
+  const report = { cwd: process.cwd(), evidenceDirectory: directory, checks: [actual, { ...actual, command: [process.execPath, ...node.command] }] };
+  assert.equal(validAtomicityLocations(report, directory, process.cwd()), true);
+  const cwdOnly = { ...report, cwd: '/tmp/unrelated-checkout' };
+  const cwdAndCommand = { ...cwdOnly, checks: report.checks.map(check => ({ ...check, cwd: cwdOnly.cwd })) };
+  const evidenceAndCommand = { ...report, evidenceDirectory: '/tmp/unrelated-artifacts', checks: report.checks.map(check => ({ ...check, command: check.command.map(value => value.replace(directory, '/tmp/unrelated-artifacts')) })) };
+  for (const forged of [cwdOnly, cwdAndCommand, evidenceAndCommand]) assert.equal(validAtomicityLocations(forged, directory, process.cwd()), false);
+
   assert.equal(validAtomicityCommand({ ...actual, command: actual.command.slice(0, -1) }, expected, process.cwd()), false);
   assert.equal(validAtomicityCommand({ ...actual, cwd: '/wrong' }, expected, process.cwd()), false);
   assert.equal(validAtomicityCommand({ ...actual, configuredTimeoutMs: 90000 }, expected, process.cwd()), false);

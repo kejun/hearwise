@@ -47,3 +47,7 @@ export function validAtomicityCommand(check, expected, cwd) {
     check.configuredTimeoutMs === expected.timeout && check.log === `${expected.name}.log` &&
     Number.isSafeInteger(check.effectiveTimeoutMs) && check.effectiveTimeoutMs > 0 && check.effectiveTimeoutMs <= expected.timeout;
 }
+
+export function validAtomicityLocations(report, directory, cwd) {
+  return path.isAbsolute(report.cwd || '') && path.isAbsolute(report.evidenceDirectory || '');
+}
