@@ -9,6 +9,8 @@ const directory = process.argv[2];
 const observations = { widths: [], complete: false };
 const expectedText = { shortage: '未发现有充分依据的关系', empty: '未发现有充分依据的关系',
   filtered: '未发现有充分依据的关系', qualified: '关系整理完成', partial: '关系部分完成', error: '关系整理失败' };
+const expectedProcessing = { shortage: '关系等待更多知识条目', empty: '已处理', filtered: '已处理',
+  qualified: '已处理', partial: '关系部分完成', error: '关系整理失败' };
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || undefined,
@@ -34,6 +36,8 @@ try {
         await page.locator('#graph-generate').focus(); await page.keyboard.press('Enter');
         const graph = await settledResult(fixture, record); assertResult(fixture, record, graph);
         await page.locator('#graph-status').filter({ hasText: expectedText[record.name] }).waitFor();
+        // The record header uses its own bounded poll; observe its terminal state too.
+        await page.locator('#processing-status').filter({ hasText: expectedProcessing[record.name] }).waitFor();
         await page.locator('#graph-count').filter({ hasText: `${record.edges} 条关系` }).waitFor();
         if (!await page.locator('.graph-results').evaluate(el => el.open)) await page.locator('.graph-results > summary').click();
         assert.equal(await page.locator('[data-result-node-id]').count(), record.nodes);
