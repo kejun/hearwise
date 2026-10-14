@@ -7,11 +7,11 @@ They do not turn the entire HW-08 or KEJ-61 acceptance green.
 ## Reproduce
 
 Use Node 24, `npm ci --ignore-scripts`, `npm run build`, and the pinned existing
-`node scripts/setup-relation-protocol.mjs` tool installer. Then, from this checkout:
+`npm run setup:playback-protocol` tool installer. Then, from this checkout:
 
-- `node scripts/verify-playback-protocol.mjs --release`
-- `node scripts/verify-playback-protocol-report.mjs DIRECTORY --release`
-- `node scripts/verify-playback-protocol.mjs --release --deep` is a separate,
+- `npm run verify:playback-protocol -- --release`
+- `npm run verify:playback-protocol:report -- DIRECTORY --release`
+- `npm run verify:playback-protocol -- --release --deep` is a separate,
   optional deeper bounded profile. A fast report never proves the deep profile.
 
 `QUINT_HOME` defaults to `/tmp/hearwise-quint`. `PLAYBACK_PROTOCOL_EVIDENCE_DIR`

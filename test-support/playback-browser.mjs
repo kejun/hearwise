@@ -98,6 +98,8 @@ async function unlockScenario(width, mutation = false) {
     await page.locator('#transcript-speech-stop').click();
     await open(page, fixture, 'B'); await start(page);
     await playbackWait(() => fixture.held.length === 1, 'current record B held response');
+    await page.waitForFunction(() => window.playbackProbe.contexts.length === 2 && window.playbackProbe.contexts[0].state === 'closed' &&
+      window.playbackProbe.contexts[1].state === 'running' && window.playbackProbe.sockets.length === 1 && window.playbackProbe.sockets[0].readyState === 1);
     const before = await snapshot(page); assert.equal(before.sockets.length, 1); assert.equal(before.enabled, true);
     assert.deepEqual(fixture.stats.commits, ['丙。']);
     await page.evaluate(async () => {

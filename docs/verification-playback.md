@@ -31,6 +31,14 @@ Qwen 协议按 response ID 关联 created/delta/done，参考[官方服务端事
 
 真实语义保持：服务器 `speech.stop` 是该 socket 的取消，不检查其 epoch；pause 不撤销已有 synthesize，但阻止下一次；seek 建立新 player/socket，保留暂停；原生 resume 正在等待时，controller 仍 paused，而 player 内部已经尝试恢复，这两个状态不能合并。完成合成不等于完成消费，消费完不等于设备尾缓冲已 settle。
 
+## 有限协议模型与实际重放
+
+正式入口为 `npm run setup:playback-protocol`、`npm run verify:playback-protocol -- --release`，独立报告复核为 `npm run verify:playback-protocol:report -- DIRECTORY --release`。CI 为它单独设置15分钟 job；运行器 fast 总 deadline 为480秒，保留工具准备与报告上传余量。源码、工具版本、模型配置、原始 ITF、每步真实观测和负例都绑定当前干净提交。完整命令、冻结范围与成本日志见 [模型说明](../verification/playback-protocol/README.md)。
+
+TLC 完整检查三个明确有限域：单 owner、两个 PCM 单元；双 owner、每 owner 最多一个 PCM；三个 owner 的同记录/固定起点/无 PCM 控制 ABA 补充。双 owner 域仍包含 seek、切换记录和相同 wire 值的旧/新代次交错。三个域分别做深度6的 Apalache 检查，这不是无限归纳证明。更宽三代音频交错的超时探针完整保留，不能由窄域通过替代。TLC 只去掉不进入 guard、业务更新或 Safety 的纯追踪标签，结构回归核对与带标签版本的对应。
+
+19条命名 witness 使用固定 seed；另按三个域各100次、最多24步抽样，实际重放每域选定的5条轨迹。更宽的三代/两 PCM witness 只证明那些固定轨迹可达并符合实现，不是穷尽。模型中四类错误变体及真实 controller 源码副本删除 owner guard 的负例必须被检出。每步附实际 SQLite 身份、请求文本、消息、原生状态、缓冲/消费计数和原始二进制 header/payload；门禁重建投影、跨步固定身份、检查历史只追加以及错误终态矛盾，不只信任缓存的 actual 或空 violations。
+
 ## 文本 oracle
 
 预先手写的 normalized golden 是期望值来源，不能调用生产 splitter 来生成它自己的期望。每个 unit 必须是下一个精确有序子串，任何间隙和尾部仅允许空白，全部 accepted/omitted 区间拼回 golden。可选 grapheme 边界检查覆盖 emoji family、组合字符及补充平面字符。

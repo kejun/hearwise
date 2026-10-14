@@ -36,7 +36,11 @@
     "setup:knowledge-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:knowledge-protocol": "npm run build",
     "verify:knowledge-protocol": "node scripts/verify-knowledge-protocol.mjs",
-    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs"
+    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs",
+    "setup:playback-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:playback-protocol": "npm run build",
+    "verify:playback-protocol": "node scripts/verify-playback-protocol.mjs",
+    "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
