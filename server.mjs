@@ -330,6 +330,7 @@ function checkRecognition(key) {
         parameters: { format: 'pcm', sample_rate: 16000 }, input: {} } })));
     ws.on('message', raw => {
       let event; try { event = JSON.parse(raw.toString()); } catch { return; }
+      if (!event || typeof event !== 'object' || Array.isArray(event)) return;
       if (event.header?.event === 'task-started') {
         ws.send(JSON.stringify({ header: { action: 'finish-task', task_id: taskId, streaming: 'duplex' }, payload: { input: {} } }),
           error => finish(error ? { ok: false, message: '无法结束测试任务' } : { ok: true, message: '识别模型可用' }));
@@ -989,6 +990,7 @@ wss.on('connection', client => {
       ws.on('message', raw => {
         if (ws !== upstream || finished || client.readyState !== WebSocket.OPEN) return;
         let event; try { event = JSON.parse(raw.toString()); } catch { return; }
+        if (!event || typeof event !== 'object' || Array.isArray(event)) return;
         const kind = event.header?.event;
         if (kind === 'task-started' && !started) {
           if (client.readyState !== WebSocket.OPEN || stopping) { ws.close(); return; }
