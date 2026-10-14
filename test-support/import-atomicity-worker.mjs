@@ -1,9 +1,9 @@
 import { atomicityCases, atomicityScenario } from './import-atomicity-scenarios.mjs';
 import { dataCases, dataScenario } from './import-atomicity-data.mjs';
 import { atomicityVersion } from './import-atomicity-evidence.mjs';
-import { writeJson } from '../scripts/lib/verification-evidence.mjs';
+import { sourceVersion, writeJson } from '../scripts/lib/verification-evidence.mjs';
 const output = process.argv[2];
-const observations = { version: atomicityVersion, scenarios: [] };
+const observations = { version: atomicityVersion, source: sourceVersion(), scenarios: [] };
 await writeJson(output, observations);
 for (const config of [...dataCases, ...atomicityCases]) {
   const row = {}; observations.scenarios.push(row);

@@ -7,10 +7,10 @@ import { databaseSnapshot } from './import-protocol-fixture.mjs';
 import { observeImportFetch } from './import-protocol-browser-observer.mjs';
 import { deadline } from './lifecycle.mjs';
 import { hash } from './import-atomicity-evidence.mjs';
-import { writeJson } from '../scripts/lib/verification-evidence.mjs';
+import { sourceVersion, writeJson } from '../scripts/lib/verification-evidence.mjs';
 
 const directory = process.argv[2], output = path.join(directory, 'browser.json');
-const evidence = { version: '1.0', chromium: null, scenarios: [], cleanup: [], complete: false, ok: false };
+const evidence = { version: '1.0', source: sourceVersion(), chromium: null, scenarios: [], cleanup: [], complete: false, ok: false };
 let browser;
 await writeJson(output, evidence);
 try {
@@ -73,7 +73,7 @@ try {
       row.complete = row.ok = true;
     } catch (error) { row.error = { name: error.name, message: error.message }; throw error; }
     finally {
-      if (fixture) row.providerCalls = [...fixture.calls];
+      if (fixture) { row.providerCalls = [...fixture.calls]; row.runtimes = await fixture.runtimes(); }
       for (const [target, close] of [['context', () => context?.close()], ['fixture', () => fixture?.close()]]) {
         try { await deadline(close, 8000, `${target} cleanup`); row.cleanup.push({ target, ok: true }); }
         catch (error) { row.cleanup.push({ target, ok: false, message: error.message }); row.complete = row.ok = false; }

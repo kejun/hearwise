@@ -58,6 +58,50 @@ function validateData(row) {
     assert.deepEqual(row.usable.after, edited);
   }
 }
+function runtimeEvidence(runtimes, pids, source) {
+  assert.ok(/^[a-f0-9]{40}$/.test(source?.sha)); assert.equal(typeof source.dirty, 'boolean');
+  assert.deepEqual(runtimes.map(row => row.pid).sort((a, b) => a - b), [...pids].sort((a, b) => a - b));
+  for (const row of runtimes) {
+    assert.deepEqual(row.diagnostics.build, { git_sha: source.sha, build_dirty: source.dirty, instrumentation_version: 3 });
+    assert.equal(row.diagnostics.active_spans, 0); assert.equal(row.diagnostics.complete, true);
+  }
+}
+function boundaryEvidence(row, source) {
+  const life = row.lifecycle, crashed = ['crash', 'negative'].includes(row.kind);
+  assert.deepEqual(life.map(value => value.action), crashed ? ['start', 'crash', 'start'] : ['start']);
+  const time = value => { const result = Date.parse(value); assert.ok(Number.isFinite(result)); return result; };
+  for (let i = 1; i < life.length; i++) assert.ok(time(life[i].at) >= time(life[i - 1].at));
+  const startAt = time(life[0].at), pid = life[0].pid;
+  runtimeEvidence(row.runtimes, life.filter(value => value.action === 'start').map(value => value.pid), source);
+  assert.ok(typeof row.commandId === 'string' && row.commandId.length > 0);
+  let previous = startAt;
+  for (const event of row.events) {
+    assert.equal(event.id, row.commandId); assert.equal(event.pid, pid);
+    const at = time(event.at); assert.ok(at >= previous); previous = at;
+    if (crashed) assert.ok(at <= time(life[1].at));
+  }
+  const bounds = row.events.filter(event => event.event === 'boundary');
+  const names = ['before-backup', 'after-backup', 'after-first-write', 'before-commit', 'after-commit'];
+  const end = crashed ? row.boundary : row.fault === 'backup' ? 'before-backup' : row.fault === 'lock' ? 'after-backup' : 'after-first-write';
+  assert.deepEqual(bounds.map(value => value.name), names.slice(0, names.indexOf(end) + 1));
+  const count = Object.keys(snapshot(row, 'before').rows).length; assert.equal(count, 22);
+  for (const event of bounds) {
+    const countExpected = ['before-backup', 'after-backup'].includes(event.name) ? 0 : event.name === 'after-first-write' ? 1 : count * (row.mode === 'replace' ? 2 : 1);
+    assert.equal(event.mutations, countExpected);
+    if (['before-backup', 'after-backup'].includes(event.name)) {
+      assert.equal(typeof event.backup, 'string'); assert.ok(event.backup.endsWith('.sqlite'));
+      assert.equal(event.sql, `VACUUM INTO '${event.backup.replaceAll("'", "''")}'`);
+    } else if (event.name === 'after-first-write') {
+      if (row.mode === 'replace') assert.equal(event.sql, 'DELETE FROM main."extraction_jobs"');
+      else assert.match(event.sql, /^INSERT INTO main\."listenings" \(/);
+    } else assert.equal(event.sql, 'COMMIT');
+  }
+  if (row.marker) {
+    const selected = bounds.filter(event => event.name === row.marker.name); assert.equal(selected.length, 1);
+    const { event, ...expected } = selected[0]; assert.deepEqual(row.marker, expected);
+    if (crashed) assert.equal(row.marker.name, row.boundary);
+  } else assert.ok(!crashed && row.fault === 'write');
+}
 export function validateAtomicityObservations(observations) {
   const reasons = [];
   try {
@@ -69,7 +113,7 @@ export function validateAtomicityObservations(observations) {
       if (row.id.startsWith('data/')) { assert.equal(row.id, `data/${row.kind}`); validateData(row); continue; }
       const config = atomicityCases.find(value => caseId(value) === row.id);
       for (const key of ['mode', 'kind', 'fault', 'boundary', 'mutation']) assert.equal(row[key], config[key], `frozen scenario ${key}`);
-      assert.deepEqual(row.providerCalls, []);
+      assert.deepEqual(row.providerCalls, []); boundaryEvidence(row, observations.source);
       if (!row.kind.startsWith('negative')) {
         const usable = row.usable; assert.equal(usable.get.status, 200); assert.equal(usable.patch.status, 200); assert.deepEqual(usable.providerCalls, []);
         const expectedEdit = structuredClone(usable.before), target = expectedEdit.rows.listenings.find(value => value.id === usable.request.id);
@@ -131,7 +175,15 @@ export function validateAtomicityBrowser(browser) {
       assert.equal(row.complete, true); assert.equal(row.ok, true);
       assert.deepEqual(row.cleanup, [{ target: 'context', ok: true }, { target: 'fixture', ok: true }]);
       assert.deepEqual(row.pageErrors, []); assert.deepEqual(row.providerCalls, []);
+      assert.equal(row.runtimes.length, 1); runtimeEvidence(row.runtimes, [row.runtimes[0].pid], browser.source);
+      assert.match(row.failureStatus, /失败/);
       assert.deepEqual(row.http.map(value => value.status), [row.mode === 'append' ? 409 : 500, 200, 200]);
+      const failed = row.http[0].body; assert.equal(failed.code, row.mode === 'append' ? 'APPEND_FAILED' : 'RESTORE_FAILED'); assert.match(failed.error, /失败/);
+      for (const [index, expectedMode] of [[1, row.mode], [2, 'replace']]) {
+        const body = row.http[index].body; assert.equal(body.ok, true); assert.equal(body.mode, expectedMode);
+        assert.equal(body.databaseVersion, 12); assert.equal(body.changed, true); assert.equal(body.addedCount, 1); assert.equal(body.skippedCount, 0);
+        assert.match(body.safetyBackup, /^before-import-.*\.sqlite$/);
+      }
       const before = snapshot(row, 'before'); assert.deepEqual(row.download.database, before); assert.ok(row.download.bytes > 0);
       assert.deepEqual(snapshot(row, 'after-failure'), before);
       assert.ok(row.failureEvents.some(event => event.event === 'sqlite-error' && event.errcode === 8 && event.mutations === 1));
@@ -151,6 +203,9 @@ export function atomicityEvidenceControls(observations) {
   assert.equal(validateAtomicityObservations(observations).ok, true, 'negative controls require a genuinely passing complete raw matrix');
   const find = (value, id) => value.scenarios.find(row => row.id === id);
   const controls = [
+    ['missing-boundary-events', value => { for (const row of value.scenarios.filter(row => row.kind === 'crash')) row.events = []; }],
+    ['false-boundary-sql', value => { const row = find(value, 'append/crash/after-commit'); row.marker.sql = 'SELECT 1'; row.marker.mutations = 0; }],
+    ['stale-runtime-build', value => { find(value, 'append/crash/after-commit').runtimes[0].diagnostics.build.git_sha = '0'.repeat(40); }],
     ['missing-case', value => { value.scenarios.pop(); }],
     ['duplicate-case', value => { value.scenarios.push(structuredClone(value.scenarios[0])); }],
     ['fault-descriptor', value => { find(value, 'append/failure/write').fault = 'backup'; }],

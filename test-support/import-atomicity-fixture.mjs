@@ -94,7 +94,9 @@ export async function importAtomicityFixture() {
     return { before, get: response, request: { id: listening.id, title: 'Recovered editable history', notes: 'Synthetic restore verified.' },
       patch: changed, after: fixture.snapshot(), providerCalls: [...fixture.calls] };
   }
-  return { ...fixture, arm, disarm, marker, events, upload, uploadFile, preparedSnapshot, commit, assertUsable,
+  return { ...fixture, arm, disarm, marker, events,
+    runtimes: async () => Promise.all((await readdir(path.join(fixture.directory, 'control'))).filter(name => /^atomicity-runtime-\d+\.json$/.test(name))
+      .map(async name => JSON.parse(await readFile(path.join(fixture.directory, 'control', name), 'utf8')))), upload, uploadFile, preparedSnapshot, commit, assertUsable,
     release: () => atomic('release', { id }),
     restoreBackup: async filename => { const result = await commit(await uploadFile(filename, 'replace')); assert.equal(result.status, 200, JSON.stringify(result.body)); return result; }
   };

@@ -96,7 +96,7 @@ row, rather than accepting a mere subset or comparing only listening counts.
 ## Evidence and limitations
 
 The frozen matrix contains seven data cases and twenty process/fault/negative
-cases. The separate regression command has exactly 31 tests. Its entire TAP log
+cases. The separate regression command has exactly 36 tests. Its entire TAP log
 is parsed by the repository's canonical parser; NODE_TEST_CONTEXT is removed
 before spawning. The profile bounds each command and the whole run (150 seconds),
 cleans child process groups, HTTP/WebSocket fixtures, locks and temporary files.
@@ -112,3 +112,22 @@ Cloud Chromium was verified unable to start because socket creation was denied.
 Local full-browser results therefore remain failed/unrun until supported CI
 actually runs them; authored test code is not acceptance. This profile does not
 claim power-loss behavior or supported real-device/platform coverage.
+
+## Independent audit regressions
+
+Audit of clean head 9dc166d found three report-reader gaps: erasing real boundary
+events, contradicting a COMMIT marker's SQL/count, or retaining only a passing
+TAP footer could still pass. Commit e3a6f72 preserves these as three failing
+regressions (0/3, exit 1). Their original reports are retained separately.
+The repair binds parent-issued command ID, child PID, complete ordered SQL
+boundary events, exact mutation counts and the atomic marker. New lifecycle
+observations record ready/start, confirmed SIGKILL and restart timestamps.
+A test-only preload queries actual diagnostics.build from the same compiled
+runtime module loaded by the server, disposes that probe, and retains each PID's
+real compiled git_sha/build_dirty/instrumentation_version. No production endpoint
+or paid task is added. Independent readers compare these with the target source.
+The shared TAP parser is unchanged; this profile additionally requires all 36
+frozen test names, contiguous numbers and complete result bodies. The actual
+command, four test files, working directory, original time budgets and log tail
+are bound to a shared checked-in contract. The raw-evidence controls also reject
+missing boundaries, contradictory markers and stale compiled runtimes.

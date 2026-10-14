@@ -100,7 +100,7 @@ export async function importProtocolFixture({ tokens = 1, serverFile = 'server.m
         env: { LISTENING_DB: filename, HEARWISE_IMPORT_TEST_CONTROL: controlDirectory,
           ASR_ENDPOINT: `ws://${endpoint}`, MT_ENDPOINT: `http://${endpoint}`, TTS_ENDPOINT: `ws://${endpoint}`,
           FISH_TTS_ENDPOINT: `http://${endpoint}/tts`, EXTRACTION_WAIT_MS: '0' } });
-      lifecycle.push({ action: 'start', pid: server.child.pid });
+      lifecycle.push({ action: 'start', pid: server.child.pid, at: new Date().toISOString() });
     }
     async function control(command, extra = {}) {
       const current = ++sequence;
@@ -147,7 +147,7 @@ export async function importProtocolFixture({ tokens = 1, serverFile = 'server.m
       const child = server.child, exited = once(child, 'exit');
       child.kill('SIGKILL');
       const [code, signal] = await deadline(() => exited, 3000, 'import server crash');
-      assert.equal(signal, 'SIGKILL'); lifecycle.push({ action: 'crash', pid: child.pid, code, signal });
+      assert.equal(signal, 'SIGKILL'); lifecycle.push({ action: 'crash', pid: child.pid, code, signal, at: new Date().toISOString() });
       await afterCrash();
       await start();
     }

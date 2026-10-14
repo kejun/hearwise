@@ -25,7 +25,7 @@ export async function atomicityScenario(config, observation = {}) {
     assert.deepEqual(snapshot('after-upload'), before);
     const expected = importedSnapshot(before, incoming, config.mode);
     const boundary = ['failure', 'negative-write'].includes(config.kind) ? (config.fault === 'backup' ? 'before-backup' : config.fault === 'lock' ? 'after-backup' : 'none') : config.boundary;
-    await fixture.arm({ boundary, fault: config.fault, mutation: config.mutation });
+    observation.commandId = await fixture.arm({ boundary, fault: config.fault, mutation: config.mutation });
     pending = fixture.commit(review).then(value => ({ response: value }), error => ({ networkError: { name: error.name, message: error.message } }));
     if (boundary !== 'none') observation.marker = await fixture.marker();
     if (['failure', 'negative-write'].includes(config.kind)) {
@@ -98,7 +98,7 @@ export async function atomicityScenario(config, observation = {}) {
   } catch (error) { observation.error = { name: error.name, message: error.message }; throw error; }
   finally {
     if (writer) { writer.exec('ROLLBACK'); writer.close(); }
-    observation.events = await fixture.events(); observation.lifecycle = [...fixture.lifecycle]; observation.providerCalls = [...fixture.calls];
+    observation.runtimes = await fixture.runtimes(); observation.events = await fixture.events(); observation.lifecycle = [...fixture.lifecycle]; observation.providerCalls = [...fixture.calls];
     observation.logs = fixture.logs();
     try { await fixture.close(); observation.cleanup = { ok: true }; }
     catch (error) { observation.cleanup = { ok: false, message: error.message }; observation.complete = observation.ok = false; throw error; }

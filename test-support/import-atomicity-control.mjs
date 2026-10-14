@@ -3,13 +3,20 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
+import { createTaskRuntime } from '../dist/server/index.js';
 
 const directory = process.env.HEARWISE_IMPORT_TEST_CONTROL;
 if (!directory) throw new Error('Atomicity preload requires the isolated import control directory');
 const file = name => path.join(directory, `atomicity-${name}`);
+const runtime = createTaskRuntime();
+writeFileSync(file(`runtime-${process.pid}.json`), JSON.stringify({ pid: process.pid, diagnostics: runtime.diagnostics() }));
+await runtime.dispose();
 const original = DatabaseSync.prototype.exec;
 let selected, backedUp = false, mutations = 0;
-const journal = row => appendFileSync(file('events.ndjson'), JSON.stringify({ pid: process.pid, at: new Date().toISOString(), ...row }) + '\n');
+const journal = row => {
+  const event = { id: selected?.id, pid: process.pid, at: new Date().toISOString(), ...row };
+  appendFileSync(file('events.ndjson'), JSON.stringify(event) + '\n'); return event;
+};
 function command() {
   if (!existsSync(file('command.json'))) return null;
   const value = JSON.parse(readFileSync(file('command.json'), 'utf8'));
@@ -17,9 +24,9 @@ function command() {
   return value;
 }
 function barrier(name, sql) {
-  journal({ event: 'boundary', name, sql, mutations, backup: selected.backup || null });
+  const event = journal({ event: 'boundary', name, sql, mutations, backup: selected.backup || null });
   if (selected.boundary !== name) return;
-  const marker = { id: selected.id, pid: process.pid, name, sql, mutations, backup: selected.backup || null };
+  const marker = { ...event }; delete marker.event;
   writeFileSync(file('marker.next'), JSON.stringify(marker)); renameSync(file('marker.next'), file('marker.json'));
   const until = Date.now() + 12000, sleep = new Int32Array(new SharedArrayBuffer(4));
   while (Date.now() < until) {

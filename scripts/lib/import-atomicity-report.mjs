@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { tapSummary } from './tap-summary.mjs';
+import { atomicityChecks, atomicityRegressionTap, validAtomicityCommand } from '../../test-support/import-atomicity-contract.mjs';
 import { atomicitySource, atomicityVersion, hash, stableAtomicitySources, validateAtomicityObservations, validateAtomicityBrowser, executionPassed, atomicityEvidenceControls } from '../../test-support/import-atomicity-evidence.mjs';
 
 export async function readAtomicityReport(directory, { release = false, nodeOnly = false } = {}) {
@@ -29,22 +29,32 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
     const rows = (report.checks || []).filter(row => row.name === name);
     return rows.length === 1 ? rows[0] : null;
   };
+  const expectedChecks = atomicityChecks(report.evidenceDirectory || '', report.nodeOnly);
+  if (!path.isAbsolute(report.cwd || '') || !path.isAbsolute(report.evidenceDirectory || '')) reasons.push('execution_location_missing');
+  for (const expected of expectedChecks) {
+    const actual = check(expected.name);
+    if (!validAtomicityCommand(actual, expected, report.cwd)) (expected.name === 'browser' ? browserArtifactReasons : nodeArtifactReasons).push(`command_or_budget_mismatch:${expected.name}`);
+    const log = artifacts.get(`${expected.name}.log`);
+    if (log && actual?.execution.tail !== log.toString().slice(-12000)) (expected.name === 'browser' ? browserArtifactReasons : nodeArtifactReasons).push(`log_tail_mismatch:${expected.name}`);
+  }
   const node = check('node'), regressions = check('regressions'), browserCheck = check('browser');
   let raw, nodeValidation = { ok: false, reasons: ['observations_missing'] };
-  try { raw = JSON.parse(artifacts.get('observations.json')); nodeValidation = validateAtomicityObservations(raw); } catch { /* fail closed */ }
+  try { raw = JSON.parse(artifacts.get('observations.json')); nodeValidation = validateAtomicityObservations(raw);
+    if (!isDeepStrictEqual(raw.source, { sha: report.sourceStart.sha, dirty: report.sourceStart.dirty })) nodeValidation = { ok: false, reasons: ['runtime_source_mismatch'] }; } catch { /* fail closed */ }
   let controlsValid = false;
   try {
     const controls = JSON.parse(artifacts.get('controls.json'));
     controlsValid = controls.every(row => row.rejected === true) && isDeepStrictEqual(controls, atomicityEvidenceControls(raw));
   } catch { /* Real-evidence negative controls are required. */ }
-  const tap = tapSummary(artifacts.get('regressions.log')?.toString() || '');
-  const nodeOk = executionPassed(node?.execution) && artifacts.has('node.log') && nodeValidation.ok && controlsValid && executionPassed(regressions?.execution) && tap.ok && tap.testCount === 31;
+  const tap = atomicityRegressionTap(artifacts.get('regressions.log')?.toString() || '');
+  const nodeOk = executionPassed(node?.execution) && artifacts.has('node.log') && nodeValidation.ok && controlsValid && executionPassed(regressions?.execution) && tap.ok;
   const finished = value => [0, 1].includes(value?.code) && value.signal === null && value.timedOut === false && value.interrupted === false;
   const nodeComplete = Boolean(finished(node?.execution) && finished(regressions?.execution) && raw && tap.testComplete);
   let browser, browserValidation = { ok: false, reasons: ['browser_not_run'] };
   if (!report.nodeOnly) {
     try {
       browser = JSON.parse(artifacts.get('browser.json')); browserValidation = validateAtomicityBrowser(browser);
+      if (!isDeepStrictEqual(browser.source, { sha: report.sourceStart.sha, dirty: report.sourceStart.dirty })) browserValidation = { ok: false, reasons: ['runtime_source_mismatch'] };
       for (const row of browser.scenarios) for (const screenshot of row.screenshots) {
         if (!artifacts.has(screenshot.path) || hash(artifacts.get(screenshot.path)) !== screenshot.sha256) browserValidation = { ok: false, reasons: ['screenshot_missing_or_changed'] };
       }
