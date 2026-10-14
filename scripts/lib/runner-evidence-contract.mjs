@@ -1,3 +1,4 @@
+import { journeyScreenshots } from '../../test-support/user-journey-contract.mjs';
 import { nameBrowserAssets } from '../../test-support/name-protocol-browser-evidence.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, lstat } from 'node:fs/promises';
@@ -7,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { digest, sourceVersion } from './verification-evidence.mjs';
 
-export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol'];
+export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol', 'user-journey'];
 export async function findNodeTests(directory = 'test') {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(entries.map(entry => entry.isDirectory() ? findNodeTests(path.join(directory, entry.name)) :
@@ -24,6 +25,7 @@ export const rootScreenshots = {
     [`CAPTION_SIZE_${size.replaceAll('-', '_').toUpperCase()}_${bound.toUpperCase()}_SCREENSHOT`, `caption-size-${size}-${bound}.png`])))
 };
 export const browserScreenshots = {
+  'user-journey': journeyScreenshots,
   'import-atomicity': ['append', 'replace'].flatMap(mode => [`atomicity-${mode}-failure.png`, `atomicity-${mode}-restored.png`]),
   'name-protocol': nameBrowserAssets.filter(file => file.endsWith('.png')),
   playback: [...[1280, 390].flatMap(width => ['text', 'paused-seek', 'stale-events', 'unlock-race'].map(name => `playback-${width}-${name}.png`)), 'playback-1280-negative-unlock.png'],
@@ -60,7 +62,7 @@ export async function sourceSnapshot() {
 export const validBuildSource = snapshot => Boolean(snapshot?.runtimeBuild && /^[a-f0-9]{40}$/.test(snapshot.runtimeBuild.git_sha) &&
   snapshot.runtimeBuild.instrumentation_version === 3 && snapshot.runtimeBuild.git_sha === snapshot.source?.sha && snapshot.runtimeBuild.build_dirty === snapshot.source?.dirty);
 export const sameSourceSnapshot = (before, after) => Boolean(before?.digests && Object.keys(before.digests).length && isDeepStrictEqual(before, after));
-export const executionEnvironment = () => ({ executionRepositoryRoot: process.cwd(), tools: { node: process.version, sqlite: process.versions.sqlite }, environment: { platform: process.platform, arch: process.arch, release: os.release() } });
+export const executionEnvironment = () => ({ executionRepositoryRoot: process.cwd(), nodeExecutable: process.execPath, tools: { node: process.version, sqlite: process.versions.sqlite }, environment: { platform: process.platform, arch: process.arch, release: os.release() } });
 export const safeRelative = value => typeof value === 'string' && value.length > 0 && !path.isAbsolute(value) && !value.includes('\\') && !value.split('/').some(part => !part || part === '.' || part === '..');
 export async function evidenceFiles(directory, prefix = '') {
   const entries = await readdir(path.join(directory, prefix), { withFileTypes: true });

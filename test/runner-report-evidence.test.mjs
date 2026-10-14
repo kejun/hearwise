@@ -1,3 +1,4 @@
+import { userJourneyEvidenceFixture } from '../test-support/user-journey-evidence-fixture.mjs';
 import { atomicityReleaseFixture } from '../test-support/release-atomicity-fixture.mjs';
 import { releaseNameBrowserFixture } from '../test-support/release-name-fixture.mjs';
 import { releasePlaybackFixture } from '../test-support/release-playback-fixture.mjs';
@@ -84,16 +85,20 @@ async function nestedFixture(kind, directory) {
   await json(path.join(directory, 'report.json'), { ...context, profile: kind, complete: true, ok: true, results, ...summary });
   return observations;
 }
-async function browserFixture(directory) {
+async function browserFixture(directory, { evidenceDirectory = path.join(process.cwd(), 'browser-evidence/run-contract') } = {}) {
   const run = 'run-contract'; await mkdir(path.join(directory, run));
   const rows = [];
   for (const name of browserChecks) {
     const log = `synthetic ${name} contract\n`; await writeFile(path.join(directory, run, `${name}.log`), log);
-    rows.push({ name, log: `/different-ci-root/browser-evidence/${run}/${name}.log`, argv: [`scripts/verify-${name}-browser.mjs`], ...execution(log) });
+    rows.push({ name, log: path.join(evidenceDirectory, `${name}.log`), argv: [`scripts/verify-${name}-browser.mjs`], ...execution(log) });
     if (name === 'import-atomicity') {
-      const fixture = await atomicityReleaseFixture(path.join(directory, run, 'run-atomicitycontract'), { outerRun: run });
+      const fixture = await atomicityReleaseFixture(path.join(directory, run, 'run-atomicitycontract'), { outerRun: run, outerDirectory: evidenceDirectory });
       await writeFile(path.join(directory, run, `${name}.log`), fixture.outerLog); rows.at(-1).tail = fixture.outerLog;
       continue;
+    }
+    if (name === 'user-journey') {
+      const fixture = await userJourneyEvidenceFixture(path.join(directory, run, 'user-journey-contract'), { outerRun: run, outerDirectory: evidenceDirectory });
+      await writeFile(path.join(directory, run, `${name}.log`), fixture.outerLog); rows.at(-1).tail = fixture.outerLog; continue;
     }
     if (name === 'name-protocol') { await releaseNameBrowserFixture(path.join(directory, run, `${name}-contract`)); continue; }
     if (name === 'playback') { await releasePlaybackFixture(path.join(directory, run, `${name}-contract`)); continue; }
@@ -103,7 +108,7 @@ async function browserFixture(directory) {
     const assets = name === 'speech' ? directory : path.join(directory, run, name); await mkdir(assets, { recursive: true });
     for (const file of browserScreenshots[name]) await writeFile(path.join(assets, file), png);
   }
-  const report = { ...await aggregate(rows), evidenceDirectory: `/different-ci-root/browser-evidence/${run}`, artifacts: await hashEvidenceFiles(directory, await evidenceFiles(directory)) };
+  const report = { ...await aggregate(rows), evidenceDirectory, artifacts: await hashEvidenceFiles(directory, await evidenceFiles(directory)) };
   await json(path.join(directory, 'results.json'), report); return report;
 }
 
@@ -124,15 +129,52 @@ test('Node release reader requires every current test file and full raw logs, no
     assert.equal((await validateNodeEvidence(directory, { release: false })).ok, false);
   }
 });
-test('browser aggregate binds all nineteen suites, screenshots, child log tails and nested complete reports', { timeout: 80000 }, async t => {
+test('browser aggregate binds all twenty suites, screenshots, child log tails and nested complete reports', { timeout: 80000 }, async t => {
   const startedAt = performance.now(), directory = await temporary(t), baseline = await browserFixture(directory), fixtureMs = performance.now() - startedAt;
   const good = await validateBrowserEvidence(directory, { release: false }); assert.equal(good.ok, true, JSON.stringify(good));
-  assert.equal(baseline.results.length, 19);
-  assert.deepEqual(good.nested.map(row => row.kind), ['session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol']);
-  t.diagnostic(`Full 19-profile fixture: ${Math.round(fixtureMs)}ms; positive validation: ${Math.round(performance.now() - startedAt - fixtureMs)}ms; total positive: ${Math.round(performance.now() - startedAt)}ms; test/file budgets: 80000/90000ms`);
+  assert.equal(baseline.results.length, 20);
+  assert.deepEqual(good.nested.map(row => row.kind), ['session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol', 'user-journey']);
+  // Rebind only explicit synthetic origin envelopes; retain the one collected
+  // HTTP/SQLite matrix and every browser/raw artifact without running it again.
+  const originalOrigins = await Promise.all(['import-atomicity', 'user-journey'].map(async kind => {
+    const nested = kind === 'import-atomicity' ? 'run-atomicitycontract' : 'user-journey-contract';
+    const file = path.join(directory, 'run-contract', nested, 'report.json');
+    const bytes = await readFile(file); return { kind, nested, file, bytes, report: JSON.parse(bytes) };
+  }));
+  for (const evidenceDirectory of ['/custom/browser-artifacts/run-contract', 'custom-browser-artifacts/run-contract']) {
+    const rebound = structuredClone(baseline); rebound.evidenceDirectory = evidenceDirectory;
+    for (const row of rebound.results) row.log = path.join(evidenceDirectory, `${row.name}.log`);
+    for (const origin of originalOrigins) {
+      const child = structuredClone(origin.report), expected = path.resolve(process.cwd(), evidenceDirectory, origin.nested);
+      if (origin.kind === 'import-atomicity') {
+        const previous = child.evidenceDirectory; child.evidenceDirectory = expected;
+        for (const check of child.checks) check.command = check.command.map(value => value.replace(previous, expected));
+      } else { child.executionContext.evidenceDirectory = expected; child.checks[0].command[2] = expected; }
+      await json(origin.file, child);
+      const log = origin.kind === 'import-atomicity' ? `Import atomicity evidence: ${path.join(evidenceDirectory, origin.nested)}\n` : `User journey browser evidence: ${expected}\n`;
+      await writeFile(path.join(directory, 'run-contract', `${origin.kind}.log`), log);
+      rebound.results.find(row => row.name === origin.kind).tail = log;
+    }
+    rebound.artifacts = await hashEvidenceFiles(directory, (await evidenceFiles(directory)).filter(file => file !== 'results.json'));
+    await json(path.join(directory, 'results.json'), rebound);
+    const configured = await validateBrowserEvidence(directory, { release: false }); assert.equal(configured.ok, true, JSON.stringify(configured));
+    for (const kind of ['import-atomicity', 'user-journey']) assert.equal(configured.nested.find(row => row.kind === kind).ok, true);
+    for (const changed of ['', '/forged/run-contract', 'custom-browser-artifacts/../run-contract', '/custom/run-other']) {
+      await json(path.join(directory, 'results.json'), { ...rebound, evidenceDirectory: changed });
+      assert.equal((await validateBrowserEvidence(directory, { release: false })).ok, false, changed);
+    }
+  }
+  for (const origin of originalOrigins) {
+    await writeFile(origin.file, origin.bytes);
+    await writeFile(path.join(directory, 'run-contract', `${origin.kind}.log`), baseline.results.find(row => row.name === origin.kind).tail);
+  }
+  await json(path.join(directory, 'results.json'), baseline);
+  assert.equal((await validateBrowserEvidence(directory, { release: false })).ok, true, 'original fixture restored byte-for-byte');
+  t.diagnostic(`Full 20-profile fixture: ${Math.round(fixtureMs)}ms; origin validations: ${Math.round(performance.now() - startedAt - fixtureMs)}ms; total positive: ${Math.round(performance.now() - startedAt)}ms; test/file budgets: 80000/90000ms`);
   for (const mutate of [r => { r.results.pop(); }, r => { r.results[0].argv = ['scripts/unrelated.mjs']; }, r => { r.results[0].tail = 'wrong log'; },
     r => { r.artifacts = r.artifacts.filter(a => !a.path.endsWith('session-contract/browser.json')); }, r => { r.artifacts[0].sha256 = '0'.repeat(64); },
-    r => { r.results[0].timedOut = true; }, r => { r.sourceStart.digests['dist/server/index.js'] = '0'.repeat(64); }]) {
+    r => { r.results[0].timedOut = true; }, r => { r.sourceStart.digests['dist/server/index.js'] = '0'.repeat(64); },
+    r => { r.evidenceDirectory = '/different-artifacts/run-contract'; }]) {
     const changed = structuredClone(baseline); mutate(changed); await json(path.join(directory, 'results.json'), changed);
     assert.equal((await validateBrowserEvidence(directory, { release: false })).ok, false);
   }

@@ -27,7 +27,7 @@ export async function speechFixture({ autoSentences = false, autoNow = () => Dat
       if (translationDelay) await new Promise(resolve => setTimeout(resolve, translationDelay));
     }
     const chosenTranslation = typeof translationText === 'function' ? translationText(body.messages?.[0]?.content) : translationText;
-    const override = modelResponse ? await modelResponse(body, stats, seeded) : undefined;
+    const override = modelResponse ? await modelResponse(body, stats, seeded, { request: req, response: res }) : undefined;
     const text = override === undefined ? (body.model === 'qwen-mt-flash' ? chosenTranslation ?? `这是第 ${body.messages[0].content.match(/\d+/)?.[0] || 1} 句中文译文。` : '{"items":[]}') : typeof override === 'string' ? override : JSON.stringify(override);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));

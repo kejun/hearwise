@@ -47,6 +47,7 @@ test('server observer captures only completed allowlisted GET bytes without chan
   `);
   assert.deepEqual(await fixture.capture.read(), [], 'No source-file prefill before a request');
   await (await fetch(fixture.base + '/unrelated.js')).text();
+  await (await fetch(fixture.base + '/api/data/export?download=1')).text();
   await (await fetch(fixture.base + '/speech-buffer.js', { method: 'HEAD' })).text();
   await (await fetch(fixture.base + '/speech-buffer.js', { method: 'POST' })).text();
   await (await fetch(fixture.base + '/speech-buffer.js?unrelated=1')).text();

@@ -41,9 +41,19 @@ test('atomicity release adapter preserves actual matrices, complete TAP and inde
 test('atomicity browser release adapter binds its separately recorded outer origin and genuine HTTP SQLite observations', { timeout: 80000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'release-atomicity-ui-')); t.after(() => rm(root, { recursive: true, force: true }));
   const directory = path.join(root, 'run-contract'), fixture = await atomicityReleaseFixture(directory);
-  const options = { release: false, outerRun: 'run-contract', outerLog: fixture.outerLog };
+  const options = { release: false, outerRun: 'run-contract', outerLog: fixture.outerLog,
+    outerOrigin: { repositoryRoot: process.cwd(), nodeExecutable: process.execPath, evidenceDirectory: 'browser-evidence/run-contract' } };
   assert.equal((await validateAtomicityBrowserReleaseEvidence(directory, options)).ok, true);
   for (const outerLog of ['', fixture.outerLog + fixture.outerLog, 'unrelated prefix\n' + fixture.outerLog, fixture.outerLog.replace('browser-evidence', '/tmp/other')]) await assert.rejects(async () => validateAtomicityBrowserReleaseEvidence(directory, { ...options, outerLog }));
+  for (const evidenceDirectory of [undefined, '', '/forged/run-contract', 'browser-evidence/run-other', 'browser-evidence/../run-contract'])
+    await assert.rejects(async () => validateAtomicityBrowserReleaseEvidence(directory, { ...options, outerOrigin: { ...options.outerOrigin, evidenceDirectory } }));
+  for (const forgery of [{ repositoryRoot: '/forged/checkout' }, { nodeExecutable: '/forged/node' }, { repositoryRoot: '/forged/checkout', nodeExecutable: '/forged/node' }]) {
+    const outerOrigin = { ...options.outerOrigin, ...forgery }, changed = structuredClone(fixture.report), previous = changed.evidenceDirectory;
+    changed.cwd = outerOrigin.repositoryRoot; changed.evidenceDirectory = path.resolve(outerOrigin.repositoryRoot, outerOrigin.evidenceDirectory, path.basename(directory));
+    for (const check of changed.checks) { check.cwd = changed.cwd; check.command = check.command.map(value => value.replace(previous, changed.evidenceDirectory)); check.command[0] = outerOrigin.nodeExecutable; }
+    await json(path.join(directory, 'report.json'), changed);
+    await assert.rejects(async () => validateAtomicityBrowserReleaseEvidence(directory, { ...options, outerOrigin }), /atomicity_outer_(repository|executable)/);
+  }
   for (const mutate of [r => { r.summary.fullImportAtomicityAcceptance = false; }, r => { r.nodeOnly = true; },
     r => { r.checks.forEach(c => { c.execution.durationMs = 51000; }); r.finishedAt = new Date(Date.parse(r.startedAt) + 170000).toISOString(); }]) {
     const changed = structuredClone(fixture.report); mutate(changed); await json(path.join(directory, 'report.json'), changed);

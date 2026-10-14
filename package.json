@@ -81,6 +81,8 @@
     "verify:name-protocol:report": "node scripts/verify-name-protocol-report.mjs",
     "preverify:name-browser": "npm run build",
     "verify:name-browser": "node scripts/verify-name-protocol-browser.mjs",
+    "preverify:user-journey": "npm run build",
+    "verify:user-journey": "node scripts/verify-user-journey-browser.mjs",
     "preverify:upgrade": "npm run build",
     "verify:upgrade": "node scripts/verify-upgrade.mjs",
     "verify:upgrade:report": "node scripts/verify-upgrade-report.mjs",

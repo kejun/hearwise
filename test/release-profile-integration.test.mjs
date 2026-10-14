@@ -22,7 +22,7 @@ test('release browser roster retains security, import and edit profiles with con
     assert.equal(browserChecks.filter(value => value === name).length, 1, `${name} must run exactly once`);
     assert.ok(browserScreenshots[name]?.length > 0, `${name} must bind screenshots`);
   }
-  assert.equal(browserChecks.length, 19);
+  assert.equal(browserChecks.length, 20);
 });
 for (const suite of ['import-protocol', 'edit-protocol']) test(`${suite} is a registered raw reader and missing actual evidence stays not run`, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'release-added-profile-'));

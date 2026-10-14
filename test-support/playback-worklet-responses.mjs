@@ -7,7 +7,7 @@ export const playbackWorkletFiles = ['public/speech-output-processor.js', 'publi
 
 // An independent, per-server log. Only the actual server child imports the
 // observer; the browser fixture never requests module copies to fill this log.
-export async function capturePlaybackWorkletResponses() {
+export async function capturePlaybackWorkletResponses({ captureExports = false } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-worklet-responses-'));
   const filename = path.join(directory, 'responses.jsonl'), fixtureId = randomUUID();
   try { await writeFile(filename, '', { mode: 0o600 }); }
@@ -15,7 +15,8 @@ export async function capturePlaybackWorkletResponses() {
   return {
     fixtureId,
     imports: [new URL('./playback-worklet-preload.mjs', import.meta.url).href],
-    env: { HEARWISE_TEST_WORKLET_RESPONSES: filename, HEARWISE_TEST_WORKLET_FIXTURE: fixtureId },
+    env: { HEARWISE_TEST_WORKLET_RESPONSES: filename, HEARWISE_TEST_WORKLET_FIXTURE: fixtureId,
+      ...(captureExports ? { HEARWISE_TEST_CAPTURE_EXPORTS: '1' } : {}) },
     async read() { return (await readFile(filename, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line)); },
     close: () => rm(directory, { recursive: true, force: true })
   };
