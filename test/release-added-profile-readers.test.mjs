@@ -1,3 +1,5 @@
+import { validateEditDurableReplay } from '../scripts/lib/edit-release-durable.mjs';
+import { createEditProtocolAdapter } from '../test-support/edit-protocol-adapter.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -127,5 +129,25 @@ test('actual imported unfinished backup content is preserved with only the decla
     changed.rows.knowledge_items.find(row => row.listening_id === importedId).canonical_name = 'CORRUPTED';
     assert.throws(() => validateImportedRows(fixture.backupSnapshots[0], before, changed, mode, { stoppedWork: true }));
     await fixture.close();
+  }
+});
+
+test('edit negative final frames bind real requests, revision tokens, transaction snapshots and immutable histories', async t => {
+  const config = { clients: 2, codecs: { 0: 'v1', 1: 'v1' }, initialOverride: false, background: true };
+  for (const mutation of ['bypass_revision', 'auto_revision_resend']) {
+    const adapter = await createEditProtocolAdapter({ ...config, mutation }); t.after(() => adapter.close());
+    const actions = [['read', 0, ''], ['edit', 0, 'new'], ['send', 0, ''], ['background_change', -1, ''], ['transaction', 0, 'ok'],
+      ...(mutation === 'auto_revision_resend' ? [['deliver', 0, ''], ['refresh_stale', 0, '']] : [])].map(([action, actor, argument]) => ({ action, actor, argument }));
+    const replay = await record(adapter, actions), actual = replay.observations.at(-1).actual, expected = structuredClone(actual);
+    expected.requests[0] = mutation === 'auto_revision_resend' ? 1 : expected.requests[0];
+    if (mutation === 'bypass_revision') expected.txResult[0] = 'conflict';
+    Object.assign(replay, { difference: { step: actions.length - 1, actual, expected }, counterexample: { steps: actions.map((action, index) => ({ ...action, expected: index === actions.length - 1 ? expected : {} })) } });
+    assert.equal(validateEditDurableReplay(replay, config, { negative: true, mutation }), true);
+    for (const change of [r => { r.observations.at(-1).durable.clients[0].requests = 0; }, r => { r.observations.at(-1).durable.clients[0].actualRequest.revision = '0'.repeat(64); },
+      r => { r.observations.at(-1).durable.events = []; }, r => { r.observations.at(-1).durable.clients[0].jobs = []; },
+      r => { r.observations.at(-1).durable.versions[0] = '0'.repeat(64); }]) {
+      const bad = structuredClone(replay); change(bad); assert.throws(() => validateEditDurableReplay(bad, config, { negative: true, mutation }));
+    }
+    await adapter.close();
   }
 });

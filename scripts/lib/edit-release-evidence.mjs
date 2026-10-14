@@ -5,7 +5,7 @@ import path from 'node:path';
 import { editConfig, validateEditProtocolEvidence } from './edit-protocol-evidence.mjs';
 import { sourceSnapshot, sameSourceSnapshot, validBuildSource, evidenceFiles, safeRelative } from './runner-evidence-contract.mjs';
 import { tapSummary, parseTapFooter } from './tap-summary.mjs';
-import { validMatchedEditDurable } from './edit-protocol-durable.mjs';
+import { validateEditDurableReplay } from './edit-release-durable.mjs';
 import { editConfiguration } from './edit-protocol-evidence.mjs';
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
 export async function editCommandContract(report) {
@@ -72,8 +72,7 @@ export async function validateEditReleaseEvidence(directory, { release = true, r
       const source = report.results.find(value => ['model-witness', 'simulation'].includes(value.kind) && value.traces.includes(replay.sourceTrace));
       const config = editConfiguration(source.id.replace(/^(witnesses|simulation)-/, ''), report.config);
       const negative = row.kind === 'implementation-negative';
-      for (const observation of negative ? replay.observations.slice(0, -1) : replay.observations) assert.ok(validMatchedEditDurable(observation, config));
-      if (negative) { assert.notDeepEqual(replay.difference.actual, replay.difference.expected); assert.deepEqual(replay.observations.at(-1).actual, replay.difference.actual); assert.deepEqual(replay.counterexample.steps.at(-1).expected, replay.difference.expected); }
+      validateEditDurableReplay(replay, config, { negative, mutation: negative ? row.id.slice('negative-replay-'.length) : undefined });
     }
   });
   result.scope = { ...result.scope, limits: report.config?.limits, exclusions: report.config?.scope?.exclusions };
