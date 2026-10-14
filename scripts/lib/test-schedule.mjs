@@ -23,7 +23,8 @@ export const nestedProfileDeadlineMs = 180000;
 export const nestedProfileTestDeadlineMs = nestedProfileDeadlineMs + 5000;
 const longProfiles = new Set(['test/playback-evidence.test.mjs', 'test/relation-result-evidence.test.mjs', 'test/session-evidence.test.mjs']);
 export function testExecutionPlan(file) {
-  const normalized = file.replaceAll('\\', '/').replace(/^\.\//, '');
+  const candidate = file.replaceAll('\\', '/');
+  const normalized = path.isAbsolute(candidate) ? path.relative(fileURLToPath(new URL('../../', import.meta.url)), candidate).split(path.sep).join('/') : path.posix.normalize(candidate);
   return { exclusive: exclusiveFiles.has(normalized), timeoutMs: longProfiles.has(normalized) ? nestedProfileTestDeadlineMs + 5000 : 90000 };
 }
 
@@ -43,3 +44,6 @@ export async function runTestSchedule(files, execute, { concurrency = 4, stopped
   }
   await drain();
 }
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+

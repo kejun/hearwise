@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import { runTestSchedule, testExecutionPlan, nestedProfileDeadlineMs, nestedProfileTestDeadlineMs } from '../scripts/lib/test-schedule.mjs';
 
 test('nested profiles run alone between bounded ordinary batches without losing failed files', async () => {
@@ -29,5 +30,6 @@ test('actual nested profile and compiler files are isolated and parent deadlines
   assert.equal(nestedProfileDeadlineMs, 150000 + 30000);
   assert.ok(nestedProfileTestDeadlineMs > nestedProfileDeadlineMs + 1500);
   for (const file of ['playback-evidence', 'relation-result-evidence', 'session-evidence'])
-    assert.ok(testExecutionPlan(`./test/${file}.test.mjs`).timeoutMs > nestedProfileTestDeadlineMs);
+    { assert.ok(testExecutionPlan(`./test/${file}.test.mjs`).timeoutMs > nestedProfileTestDeadlineMs);
+      assert.deepEqual(testExecutionPlan(fileURLToPath(new URL(`./${file}.test.mjs`, import.meta.url))), testExecutionPlan(`test/${file}.test.mjs`)); }
 });
