@@ -40,7 +40,9 @@
     "setup:edit-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:edit-protocol": "npm run build",
     "verify:edit-protocol": "node scripts/verify-edit-protocol.mjs",
-    "verify:edit-protocol:report": "node scripts/verify-edit-protocol-report.mjs"
+    "verify:edit-protocol:report": "node scripts/verify-edit-protocol-report.mjs",
+    "preverify:security": "npm run build",
+    "verify:security": "node scripts/verify-security-browser.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

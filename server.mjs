@@ -271,7 +271,8 @@ async function translate(key, text, target, timeout = 15000, signal, context) {
     const result = await response.json().catch(() => { requestSignal.throwIfAborted(); return {}; });
     child.signal.throwIfAborted();
     child.event('response_received', { http_status: response.status });
-    if (!response.ok) throw Object.assign(new Error(result.error?.message || result.message || `翻译服务 HTTP ${response.status}`), { status: response.status });
+    // Provider bodies may echo authorization or transcript content. Keep safe status diagnostics only.
+    if (!response.ok) throw Object.assign(new Error(`翻译服务 HTTP ${response.status}`), { status: response.status });
     const output = result.choices?.[0]?.message?.content;
     if (typeof output !== 'string' || !output.trim()) throw Object.assign(new Error('翻译服务未返回文字'), { code: 'TRANSLATION_EMPTY' });
     return output.trim();
@@ -329,11 +330,12 @@ function checkRecognition(key) {
         parameters: { format: 'pcm', sample_rate: 16000 }, input: {} } })));
     ws.on('message', raw => {
       let event; try { event = JSON.parse(raw.toString()); } catch { return; }
+      if (!event || typeof event !== 'object' || Array.isArray(event)) return;
       if (event.header?.event === 'task-started') {
         ws.send(JSON.stringify({ header: { action: 'finish-task', task_id: taskId, streaming: 'duplex' }, payload: { input: {} } }),
           error => finish(error ? { ok: false, message: '无法结束测试任务' } : { ok: true, message: '识别模型可用' }));
       }
-      if (event.header?.event === 'task-failed') finish({ ok: false, message: event.header?.error_message || event.payload?.message || '识别任务启动失败' });
+      if (event.header?.event === 'task-failed') finish({ ok: false, message: '识别任务启动失败' });
     });
     ws.on('unexpected-response', (_request, response) => finish({ ok: false, message: `识别服务 HTTP ${response.statusCode}` }));
     ws.on('error', () => finish({ ok: false, message: '无法连接识别服务' }));
@@ -953,7 +955,11 @@ wss.on('connection', client => {
       if (started && !stopping && upstream?.readyState === WebSocket.OPEN) { receivedSamples += data.length / 2; upstream.send(data, { binary: true }); }
       return;
     }
-    let message; try { message = JSON.parse(data.toString()); } catch { fail('消息格式无效'); return; }
+    let message;
+    try {
+      message = JSON.parse(data.toString());
+      if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error('Invalid message shape');
+    } catch { fail('消息格式无效'); return; }
     if (message.type === 'stop') {
       stopping = true;
       if (started && upstream?.readyState === WebSocket.OPEN) upstream.send(JSON.stringify({
@@ -990,6 +996,7 @@ wss.on('connection', client => {
       ws.on('message', raw => {
         if (ws !== upstream || finished || client.readyState !== WebSocket.OPEN) return;
         let event; try { event = JSON.parse(raw.toString()); } catch { return; }
+        if (!event || typeof event !== 'object' || Array.isArray(event)) return;
         const kind = event.header?.event;
         if (kind === 'task-started' && !started) {
           if (client.readyState !== WebSocket.OPEN || stopping) { ws.close(); return; }
@@ -1033,14 +1040,14 @@ wss.on('connection', client => {
           } catch (error) { fail(`保存原文失败：${errorMessage(error)}`); }
         }
         if (kind === 'task-failed') {
-          const reason = event.payload?.message || event.header?.error_message || '识别任务失败';
+          // Untrusted provider error text must not enter client messages or fallback logs.
           if (!started && withSegmentation && !segmentationFallback && !stopping) {
             segmentationFallback = true;
-            console.warn('asr_param_fallback', String(reason).slice(0, 200));
+            console.warn('asr_param_fallback', '识别参数未被接受，重试基础参数');
             ws.close(); openUpstream(false);
             return;
           }
-          fail(reason);
+          fail('识别任务失败');
         }
         if (kind === 'task-finished') {
           recognitionTrace?.succeed();
@@ -1059,6 +1066,8 @@ wss.on('connection', client => {
     };
     openUpstream(captionMode === 'realtime');
   });
+  // ws closes protocol-invalid frames itself; handle its error event without crashing the service.
+  client.on('error', () => { upstream?.close(); });
   client.on('close', () => {
     recognitionTrace?.cancel('consumer_closed');
     unsubscribe(listeningId, client);
