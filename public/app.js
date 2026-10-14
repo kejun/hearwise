@@ -646,7 +646,7 @@ function showImportReview(result) {
     ? '没有可追加的数据，已有记录保持不变。' : '备份验证通过。导入前会自动备份当前数据库；未完成的任务需手动重试。');
 }
 async function refreshImportPreview() {
-  if (!pendingImportToken || importCommitting) return;
+  if (!pendingImportToken || importCommitting) return false;
   const token = pendingImportToken, version = ++importRequestVersion;
   pendingImportReview = null;
   els.dataImportConfirm.disabled = true;
@@ -659,11 +659,13 @@ async function refreshImportPreview() {
       body: JSON.stringify({ token, mode: els.dataImportAppend.checked ? 'append' : 'replace' })
     });
     const result = await response.json();
-    if (version !== importRequestVersion) return;
+    if (version !== importRequestVersion) return false;
     if (!response.ok) throw new Error(result.error || '无法预览备份');
     showImportReview(result);
+    return true;
   } catch (error) {
     if (version === importRequestVersion) setDataTransferStatus(error.message || '无法预览备份，请重新选择文件。', true);
+    return false;
   }
 }
 els.dataImportAppend.addEventListener('change', () => { updateImportMode(); void refreshImportPreview(); });
@@ -718,8 +720,10 @@ els.dataImportConfirm.addEventListener('click', async () => {
     if (!response.ok) {
       if (result.code === 'IMPORT_PREVIEW_STALE') {
         importCommitting = false;
-        await refreshImportPreview();
-        throw new Error('当前数据或导入方式已变化，预览已刷新，请核对后再次确认。');
+        if (await refreshImportPreview()) {
+          throw new Error('当前数据或导入方式已变化，预览已刷新，请核对后再次确认。');
+        }
+        return; // Preserve the actual refresh error; there is no new review to confirm.
       }
       throw new Error(result.error || '导入失败');
     }

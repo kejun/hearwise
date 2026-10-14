@@ -387,7 +387,8 @@ async function requestKnowledgeModel(key, messages, endpoint, timeoutMs, context
       const retryAfter = response.headers.get('retry-after');
       const seconds = retryAfter != null && /^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Number(retryAfter) : NaN;
       const retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
-      throw Object.assign(new Error(result?.error?.message || result?.message || `知识服务 HTTP ${response.status}`), {
+      // Preserve retry classification without exposing untrusted provider error bodies.
+      throw Object.assign(new Error(`知识服务 HTTP ${response.status}`), {
         status: response.status, retryAfterMs: Number.isFinite(retryAfterMs) ? retryAfterMs : 0
       });
     }

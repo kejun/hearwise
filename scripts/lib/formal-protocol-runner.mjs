@@ -26,8 +26,10 @@ export async function runFormalProtocol(definition) {
   let timedOut = false, interrupted = false;
   const interrupt = () => { interrupted = true; };
   process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt);
-  // Initial measured-cost budgets: never relax them to turn a partial run green.
-  const overall = setTimeout(() => { timedOut = true; process.kill(process.pid, 'SIGTERM'); }, profile === 'deep' ? 1200000 : 480000);
+  // Domain-specific budgets are declared before a run, never inferred from a timeout.
+  const overallTimeoutMs = definition.overallTimeoutMs?.[profile] ?? (profile === 'deep' ? 1200000 : 480000);
+  report.overallTimeoutMs = overallTimeoutMs;
+  const overall = setTimeout(() => { timedOut = true; process.kill(process.pid, 'SIGTERM'); }, overallTimeoutMs);
   const relative = file => path.relative(directory, file).split(path.sep).join('/');
   const save = () => writeJson(path.join(directory, 'report.json'), report);
   const checkStopped = () => { if (interrupted || timedOut) throw new Error(`${definition.label} verification interrupted`); };
@@ -38,18 +40,18 @@ export async function runFormalProtocol(definition) {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     return port;
   }
-  async function command(id, kind, argv, { timeoutMs = 60000, bound, expectedFailure = false } = {}) {
+  async function command(id, kind, argv, { timeoutMs = 60000, bound, expectedFailure = false, cwd = directory } = {}) {
     checkStopped();
     const startedAt = new Date().toISOString();
     const logFile = path.join(directory, `${id}.log`);
     console.log(`START ${id}`);
     const childEnv = { ...process.env, QUINT_HOME: quintHome, JVM_ARGS: '-Xmx2G' };
     delete childEnv.NODE_TEST_CONTEXT;
-    const execution = await runProcess(process.execPath, argv, { cwd: directory, env: childEnv, timeoutMs, graceMs: 1500, logFile });
+    const execution = await runProcess(process.execPath, argv, { cwd, env: childEnv, timeoutMs, graceMs: 1500, logFile });
     const log = await readFile(logFile, 'utf8'), conclusion = checkerConclusion(kind, execution, log, bound);
     const { tail: _tail, ...processResult } = execution;
     const result = { id, kind, startedAt, finishedAt: new Date().toISOString(), complete: conclusion.complete, status: conclusion.ok ? 'passed' : conclusion.complete ? 'failed' : 'incomplete',
-      execution: processResult, timeoutMs, log: relative(logFile), metrics: conclusion.metrics || null, expectedFailure, argv, bound };
+      execution: processResult, timeoutMs, log: relative(logFile), metrics: conclusion.metrics || null, expectedFailure, argv, bound, cwd };
     artifacts.add(result.log); report.results.push(result); await save();
     console.log(`${result.status.toUpperCase()} ${id} (${execution.durationMs}ms)`);
     if (execution.interrupted) interrupted = true;
@@ -70,7 +72,7 @@ export async function runFormalProtocol(definition) {
       checkStopped();
       const raw = await readFile(path.join(directory, entry.file), 'utf8'), itf = JSON.parse(raw);
       const trace = definition.normalizeTrace(itf, definition.traceConfig(entry.main));
-      const result = await definition.replayTrace(trace, options => definition.createAdapter({ ...options, mutation: mutation ? 'skip_reservation' : 'none' }));
+      const result = await definition.replayTrace(trace, options => definition.createAdapter({ ...options, mutation: mutation ? (definition.implementationMutation ?? 'skip_reservation') : 'none' }));
       results.push({ ...result, sourceTrace: entry.file, sourceTraceSha256: digest(raw), semanticTraceSha256: digest(JSON.stringify(trace)), steps: trace.steps.length });
     }
     const data = `${id}.json`, log = `${id}.log`;
@@ -90,7 +92,7 @@ export async function runFormalProtocol(definition) {
     for (const main of mains) {
       const base = ['verify', path.join(modelRoot, config.specification), '--main', main, '--init', config.init, '--step', config.step, '--invariant', config.invariant,
         '--apalache-version', toolchain.apalache.version, '--verbosity', '3'];
-      await quint(`tlc-${main}`, 'finite-state-complete', [...base, '--backend', 'tlc', '--tlc-config', path.join(modelRoot, 'tlc.json'), '--server-endpoint', `127.0.0.1:${await freePort()}`]);
+      await quint(`tlc-${main}`, 'finite-state-complete', [...base, '--backend', 'tlc', '--tlc-config', path.join(modelRoot, 'tlc.json'), '--server-endpoint', `127.0.0.1:${await freePort()}`], { timeoutMs: definition.tlcTimeoutMs?.[main] ?? 60000 });
       const bound = config.profiles[profile].apalacheDepth[main];
       await quint(`bounded-${main}`, 'bounded-model-check', [...base, '--backend', 'apalache', '--max-steps', String(bound), '--server-endpoint', `127.0.0.1:${await freePort()}`],
         { bound, timeoutMs: profile === 'deep' && main !== 'single' ? 900000 : 240000 });
@@ -125,8 +127,8 @@ export async function runFormalProtocol(definition) {
     }
     await replay('replay-witnesses', fixedTraces);
     await replay('replay-simulation', simulationTraces);
-    await replay('negative-replay', fixedTraces.filter(row => row.file.includes('normalSuccessTest-')), true);
-    await command('implementation-regressions', 'implementation-regression', ['--test', '--test-reporter=tap', '--test-timeout=30000', ...definition.regressionFiles.map(file => path.resolve(file))]);
+    await replay('negative-replay', fixedTraces.filter(row => row.file.includes(`${definition.implementationNegativeWitness ?? 'normalSuccessTest'}-`)), true);
+    await command('implementation-regressions', 'implementation-regression', ['--test', '--test-reporter=tap', '--test-timeout=30000', ...definition.regressionFiles.map(file => path.resolve(file))], { cwd: definition.regressionCwd ?? directory });
   } catch (error) { report.error = { name: error.name, message: error.message }; }
   finally {
     clearTimeout(overall); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
