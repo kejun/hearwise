@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile, rename, rm } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -158,6 +158,13 @@ export async function createProcessProtocolAdapter(config = { protocol: 'knowled
     }
     return failures;
   };
+  async function releaseBoundary(action) {
+    assert.ok(boundary);
+    const release = boundary.release;
+    // The worker polls existence synchronously; publish only the complete command.
+    await writeFile(`${release}.tmp`, `${action}\n`);
+    await rename(`${release}.tmp`, release);
+  }
   async function act({ action, actor = -1, response }) {
     assert.equal(closed, false);
     const index = messages.length;
@@ -207,7 +214,7 @@ export async function createProcessProtocolAdapter(config = { protocol: 'knowled
       }, 'committed SQLite before the first result notification');
       latest = { ...boundary, type: 'state', label: 'committed' }; history.push({ action: 'commit', boundaryId: boundary.id });
     } else if (action === 'notify' || action === 'notify_fail') {
-      assert.ok(boundary); await writeFile(boundary.release, `${action}\n`); await stateAfter(index, ['settled']); boundary = null;
+      await releaseBoundary(action); await stateAfter(index, ['settled']); boundary = null;
     } else if (action === 'advance_time') {
       send({ command: 'advance_time' }); await stateAfter(index, ['clock']);
     } else if (action === 'pump') { send({ command: 'pump' }); await stateAfter(index, ['pumped']);

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { createProcessProtocolAdapter } from '../test-support/process-crash-adapter.mjs';
+import { deadline } from '../test-support/lifecycle.mjs';
 
 test('SIGKILL after knowledge reservation preserves paid occupancy in a different process', async t => {
   const adapter = await createProcessProtocolAdapter({ protocol: 'knowledge', parts: 1 });
@@ -253,6 +256,49 @@ for (const protocol of ['knowledge', 'relation']) {
     if (protocol === 'knowledge') assert.deepEqual(adapter.observe().durable.knowledge, committed.knowledge);
     else assert.deepEqual(adapter.observe().durable.actors[0].relations, committed.actors[0].relations);
     assert.deepEqual(adapter.check(), []);
+  });
+}
+
+for (const protocol of ['knowledge', 'relation']) for (const action of ['notify', 'notify_fail']) {
+  test(`${protocol} ${action} release is invisible to the real worker until its complete payload is published`, async t => {
+    const adapter = await createProcessProtocolAdapter(protocol === 'knowledge' ? { protocol, parts: 1 } : { protocol, actors: 1, capacity: 1 });
+    t.after(() => adapter.close());
+    await toBoundary(adapter, 'committed');
+    const committed = adapter.observe(), release = committed.boundary.release;
+    const halfWritten = Promise.withResolvers(), resume = Promise.withResolvers();
+    const writeFile = fs.promises.writeFile;
+    const writer = t.mock.method(fs.promises, 'writeFile', async (filename, data, options) => {
+      if (filename === release || filename === `${release}.tmp`) {
+        await writeFile(filename, '', options);
+        halfWritten.resolve(filename);
+        await resume.promise;
+      }
+      return writeFile(filename, data, options);
+    });
+    syncBuiltinESMExports();
+    const notification = adapter.act({ action, actor: 0 });
+    try {
+      const staging = await deadline(() => halfWritten.promise, 1000, 'release partial-write barrier');
+      assert.equal(fs.readFileSync(staging, 'utf8'), '');
+      assert.equal(fs.existsSync(release), false, 'the worker must not see a release file with an incomplete command');
+      assert.equal(protocol === 'knowledge' ? adapter.observe().stage : adapter.observe().tasks[0].phase, 'committed');
+      assert.equal(protocol === 'knowledge' ? adapter.observe().resultNotifications : adapter.observe().tasks[0].notifications, 0);
+      resume.resolve();
+      await notification;
+      const actual = adapter.observe();
+      const notifications = protocol === 'knowledge' ? actual.resultNotifications : actual.tasks[0].notifications;
+      const failures = protocol === 'knowledge' ? actual.notificationFailures : actual.tasks[0].notificationFailures;
+      assert.equal(notifications, protocol === 'knowledge' ? 2 : 1);
+      assert.equal(failures, action === 'notify_fail' ? notifications : 0);
+      assert.equal(actual.ledger.length, 1);
+      if (protocol === 'knowledge') assert.deepEqual(actual.durable.knowledge, committed.durable.knowledge);
+      else assert.deepEqual(actual.durable.actors[0].relations, committed.durable.actors[0].relations);
+      assert.deepEqual(adapter.check(), []);
+    } finally {
+      resume.resolve();
+      try { await notification; }
+      finally { writer.mock.restore(); syncBuiltinESMExports(); }
+    }
   });
 }
 
