@@ -65,3 +65,22 @@ test('profile and cache metadata never alias fast/deep or claim paid execution',
   assert.equal(fast.automaticPaidCalls, false); assert.equal(fast.fullProjectAcceptance, false);
   await assert.rejects(impactPlan('HEAD', { profile: 'unchecked' }));
 });
+
+test('actual UI layout and provider history cannot reuse stale performance or security evidence', async t => {
+  const bindings = Object.fromEntries(['policy', 'model', 'tools', 'configuration', 'thresholds', 'corpus', 'environment'].map(key => [key, 'a'.repeat(64)]));
+  for (const [file, domain] of [['public/styles.css', 'HW-13'], ['public/knowledge-graph-layout.js', 'HW-13'], ['qwen-tts.mjs', 'HW-12']]) {
+    const r = await repository(t), base = await r.commit(file, 'before\n'), head = await r.commit(file, 'after\n');
+    const source = { sha: base, dirty: false }, target = { sha: head, dirty: false };
+    const verdict = historicalEligibility({ range: inspectChangeRange(base, head, { cwd: r.cwd }), source, target, domains: [domain],
+      actualBindings: bindings, expectedBindings: bindings, originalVerdict: { ok: true, source, artifactsVerified: true } });
+    assert.equal(verdict.eligible, false, `${file} changes ${domain}`);
+  }
+});
+test('complete merge history preserves a changed and restored side-branch dependency', async t => {
+  const r = await repository(t), base = await r.commit('package-lock.json', 'A\n');
+  r.git(['checkout', '-qb', 'side']); const changed = await r.commit('package-lock.json', 'B\n'); await r.commit('package-lock.json', 'A\n');
+  r.git(['checkout', '-qb', 'target', base]); await r.commit('README.md', 'main side\n');
+  r.git(['merge', '--no-ff', '-m', 'fixture merge', 'side']); const head = r.git(['rev-parse', 'HEAD']);
+  const range = inspectChangeRange(base, head, { cwd: r.cwd });
+  assert.equal(range.complete, true); assert.ok(range.commits.includes(changed)); assert.deepEqual(range.affectedDomains, groups);
+});
