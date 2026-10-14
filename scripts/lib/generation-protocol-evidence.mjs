@@ -108,7 +108,7 @@ export function validateGenerationReplayEvidence(trace, replay) {
           const after = runs.find(run => run.id === before.id);
           if (step.action === 'restart' && before.state === 'active') return after?.state === 'interrupted' && time(after.ended_at) &&
             Date.parse(after.ended_at) >= Date.parse(before.started_at) && Date.parse(after.ended_at) <= Date.parse(replay.finishedAt) &&
-            equal(after, { ...before, state: 'interrupted', ended_at: after.ended_at });
+            equal({ ...after }, { ...before, state: 'interrupted', ended_at: after.ended_at });
           return equal(after, before);
         }), 'listening_run_changed');
       } else expect(runs.every(run => run.state === 'active' && run.ended_at === null), 'initial_listening_run');

@@ -81,6 +81,12 @@ for (const protocol of ['knowledge', 'relation']) test(`${protocol} restart evid
   const trace = await fixedTrace(t, protocol, 1, 1, 'deleteRestartLateTest', true);
   const actual = await replayGenerationTrace(trace, createGenerationProtocolAdapter);
   assert.equal(actual.ok, true); assert.deepEqual(validateGenerationReplayEvidence(trace, actual), { ok: true, reasons: [] });
+  const retainedTrace = await fixedTrace(t, protocol, 1, 1, 'successfulRestartTest', true);
+  const retained = await replayGenerationTrace(retainedTrace, createGenerationProtocolAdapter);
+  const serialized = JSON.parse(JSON.stringify(retained));
+  assert.equal(retained.ok, true);
+  assert.deepEqual(validateGenerationReplayEvidence(retainedTrace, serialized), { ok: true, reasons: [] });
+  assert.deepEqual(validateGenerationReplayEvidence(retainedTrace, retained), { ok: true, reasons: [] }, 'native SQLite row prototypes must not change the full-field JSON evidence verdict');
   const mutateRestart = (value, mutate) => { for (const observation of value.observations)
     for (const row of observation.durable.raw.ledger.filter(row => row.event === 'restart_http')) mutate(row); };
   const corruptions = [
