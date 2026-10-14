@@ -27,6 +27,8 @@
     "verify:report": "node scripts/verify-report.mjs",
     "preverify:revision": "npm run build",
     "verify:revision": "node scripts/verify-revision.mjs",
+    "preverify:name-interval": "npm run build",
+    "verify:name-interval": "node scripts/verify-name-interval.mjs",
     "setup:relation-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:relation-protocol": "npm run build",
     "verify:relation-protocol": "node scripts/verify-relation-protocol.mjs",

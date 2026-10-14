@@ -26,7 +26,9 @@ function replaceSegment(store, segment, source, name) {
   // Include anchors for other nodes and quotes after the corrected word. Their
   // offsets change too. Never reactivate historical evidence already marked stale.
   for (const support of store.db.prepare("SELECT * FROM relation_supports WHERE segment_id=? AND state='active'").all(segment.id)) {
-    if (support.source_revision !== hash(segment.original_text) || segment.original_text.slice(support.start, support.end) !== support.quote)
+    if (!Number.isSafeInteger(support.start) || !Number.isSafeInteger(support.end) ||
+        support.start < 0 || support.start >= support.end || support.end > segment.original_text.length ||
+        support.source_revision !== hash(segment.original_text) || segment.original_text.slice(support.start, support.end) !== support.quote)
       fail(409, '关联原文引用已改变，请刷新后核对');
     const start = mappedOffset(support.start, matches, name), end = mappedOffset(support.end, matches, name, true);
     store.db.prepare('UPDATE relation_supports SET source_revision=?,start=?,end=?,quote=? WHERE id=?')
