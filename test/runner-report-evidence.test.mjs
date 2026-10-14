@@ -1,3 +1,4 @@
+import { atomicityReleaseFixture } from '../test-support/release-atomicity-fixture.mjs';
 import { releasePlaybackFixture } from '../test-support/release-playback-fixture.mjs';
 import { traceReleaseFixture } from '../test-support/release-trace-fixture.mjs';
 import { addedNestedFixture } from '../test-support/release-added-profile-fixtures.mjs';
@@ -88,6 +89,11 @@ async function browserFixture(directory) {
   for (const name of browserChecks) {
     const log = `synthetic ${name} contract\n`; await writeFile(path.join(directory, run, `${name}.log`), log);
     rows.push({ name, log: `/different-ci-root/browser-evidence/${run}/${name}.log`, argv: [`scripts/verify-${name}-browser.mjs`], ...execution(log) });
+    if (name === 'import-atomicity') {
+      const fixture = await atomicityReleaseFixture(path.join(directory, run, 'run-atomicitycontract'), { outerRun: run });
+      await writeFile(path.join(directory, run, `${name}.log`), fixture.outerLog); rows.at(-1).tail = fixture.outerLog;
+      continue;
+    }
     if (name === 'playback') { await releasePlaybackFixture(path.join(directory, run, `${name}-contract`)); continue; }
     if (name === 'trace-business') { await traceReleaseFixture(path.join(directory, run, `${name}-contract`)); continue; }
     if (['security', 'import-protocol', 'edit-consistency'].includes(name)) { await addedNestedFixture(name, path.join(directory, run, `${name}-contract`)); continue; }
@@ -116,7 +122,7 @@ test('Node release reader requires every current test file and full raw logs, no
     assert.equal((await validateNodeEvidence(directory, { release: false })).ok, false);
   }
 });
-test('browser aggregate binds all seventeen suites, screenshots, child log tails and nested complete reports', async t => {
+test('browser aggregate binds all eighteen suites, screenshots, child log tails and nested complete reports', { timeout: 80000 }, async t => {
   const directory = await temporary(t), baseline = await browserFixture(directory);
   const good = await validateBrowserEvidence(directory, { release: false }); assert.equal(good.ok, true, JSON.stringify(good));
   for (const mutate of [r => { r.results.pop(); }, r => { r.results[0].argv = ['scripts/unrelated.mjs']; }, r => { r.results[0].tail = 'wrong log'; },

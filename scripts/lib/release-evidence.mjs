@@ -1,3 +1,4 @@
+import { validateAtomicityReleaseEvidence } from './atomicity-release-evidence.mjs';
 import { validateSemanticOfflineReleaseEvidence } from './semantic-release-evidence.mjs';
 import { validateSchedulerReleaseEvidence } from './scheduler-release-evidence.mjs';
 import { validatePlaybackReleaseEvidence } from './playback-release-evidence.mjs';
@@ -16,6 +17,7 @@ import { validateFormalReleaseEvidence } from './formal-release-evidence.mjs';
 
 export async function readTechnicalEvidence(suite, directory, { release = true, profile = 'fast' } = {}) {
   if (!technicalSuites.includes(suite)) throw new Error('Unregistered technical evidence suite');
+  if (suite === 'import-atomicity') return validateAtomicityReleaseEvidence(directory, { release });
   if (suite === 'semantic-offline') return validateSemanticOfflineReleaseEvidence(directory, { release });
   if (suite === 'scheduler') return validateSchedulerReleaseEvidence(directory, { release, requireProfile: profile });
   if (suite === 'node') return validateNodeEvidence(directory, { release });

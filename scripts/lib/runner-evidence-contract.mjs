@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { digest, sourceVersion } from './verification-evidence.mjs';
 
-export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback'];
+export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity'];
 export async function findNodeTests(directory = 'test') {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(entries.map(entry => entry.isDirectory() ? findNodeTests(path.join(directory, entry.name)) :
@@ -23,6 +23,7 @@ export const rootScreenshots = {
     [`CAPTION_SIZE_${size.replaceAll('-', '_').toUpperCase()}_${bound.toUpperCase()}_SCREENSHOT`, `caption-size-${size}-${bound}.png`])))
 };
 export const browserScreenshots = {
+  'import-atomicity': ['append', 'replace'].flatMap(mode => [`atomicity-${mode}-failure.png`, `atomicity-${mode}-restored.png`]),
   playback: [...[1280, 390].flatMap(width => ['text', 'paused-seek', 'stale-events', 'unlock-race'].map(name => `playback-${width}-${name}.png`)), 'playback-1280-negative-unlock.png'],
   'trace-business': ['trace-business-desktop.png', 'trace-business-mobile.png', 'trace-business-incomplete.png'],
   speech: Object.values(rootScreenshots),
