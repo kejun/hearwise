@@ -168,8 +168,8 @@ try {
     pending[2].resolve('新版本有效译文 😀');
     await until(async () => (await row()).translation_state === 'complete');
     await open();
-    await page.getByText(corrected.original_text, { exact: true }).waitFor();
-    await page.getByText('新版本有效译文 😀', { exact: true }).waitFor();
+    await page.locator('#transcript-panel').getByText(corrected.original_text, { exact: true }).waitFor();
+    await page.locator('#transcript-panel').getByText('新版本有效译文 😀', { exact: true }).waitFor();
     assert.equal(await page.getByText('OLD SOURCE RESPONSE', { exact: true }).count(), 0);
     await page.screenshot({ path: path.join(directory, 'session-source-version.png') });
     observations.sourceVersion = { before: snapshot.revision, after: revision, oldRequest: pending[0].source,

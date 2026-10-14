@@ -23,8 +23,8 @@ function storeFixture(t) {
   Object.assign(h, seedNameReplacement(h.store));
   // Model a legitimately pending request captured before a local name correction.
   h.store.db.prepare("UPDATE segments SET translation_text=NULL, translation_state='pending' WHERE id=?").run(h.segment.id);
-  h.rename = () => h.store.replaceKnowledgeName(h.listeningId, h.item.id, randomUUID(), {
-    name: 'Tibo', revision: h.store.knowledgeEditSnapshot(h.listeningId, h.item.id).revision
+  h.rename = (name = 'Tibo') => h.store.replaceKnowledgeName(h.listeningId, h.item.id, randomUUID(), {
+    name, revision: h.store.knowledgeEditSnapshot(h.listeningId, h.item.id).revision
   });
   h.row = () => h.store.detail(h.listeningId).segments.find(s => s.id === h.segment.id);
   h.reopen = () => { h.store.close(); h.store = new ListeningStore(filename); };
@@ -133,4 +133,21 @@ test('HTTP retry, failed concurrent attempt, source correction and late provider
   await until(async () => (await row()).translation_state === 'complete');
   assert.equal((await row()).translation_text, '新版本有效译文 😀');
   assert.equal((await row()).original_text, corrected.original_text);
+});
+
+
+for (const failed of [false, true]) test(`A→B→A retains the existing content-source version for an old ${failed ? 'failure' : 'success'}, without overwriting a new completion`, t => {
+  const h = storeFixture(t), source = h.row().original_text;
+  h.store.setTranslation(h.segment.id, null, true);
+  const before = h.store.knowledgeEditSnapshot(h.listeningId, h.item.id).revision;
+  h.rename('Tibo'); h.rename('Deebo'); h.reopen();
+  assert.equal(h.row().original_text, source);
+  assert.notEqual(h.store.knowledgeEditSnapshot(h.listeningId, h.item.id).revision, before,
+    'editing revision includes knowledge changes; source content version remains equal');
+  const accepted = h.store.setTranslation(h.segment.id, failed ? null : '同内容译文', failed, source);
+  assert.equal(accepted.translation_state, failed ? 'failed' : 'complete');
+  if (failed) h.store.setTranslation(h.segment.id, '有效新译文', false, source);
+  const complete = h.row();
+  assert.equal(h.store.setTranslation(h.segment.id, failed ? null : '重复旧译文', failed, source), undefined);
+  h.reopen(); assert.deepEqual(h.row(), complete);
 });

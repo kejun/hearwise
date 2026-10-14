@@ -20,7 +20,7 @@ node scripts/verify-session-browser.mjs --release
 
 - HW-01-02：身份是 `run_id + asr_sentence_id`。同一 run 的重复 final 只有一条记录，冲突 final 保留首次定稿并提示。新 run 可重用 sentence ID。停止时终态前的尾句合法；`task-finished` 后同一批已排队 frame 不可落库。
 - HW-01-03：一次麦克风拒绝不创建收听，键盘重试可恢复；真实 AudioWorklet/fake media track 在停止或断连后结束。断连后可继续同一收听，切换新收听后旧 socket 事件不能污染页面或记录。
-- HW-02-02：最终翻译提交以请求捕获的 `original_text` 和持久行原文相等为条件，无 schema/public HTTP 变更。正常 pending 阻止编辑，但某个并发尝试失败后可合法纠正原文，因此不能仅靠 pending 状态假定来源不变。过期成功和失败都丢弃；显式重试从新原文生成译文。原文相同视为同版本；不声称新的单调修订计数。现行语义允许名称纠正保留已完成译文，本改动不重新计费或自动重译。
+- HW-02-02：最终翻译提交以请求捕获的 `original_text` 和持久行原文相等为条件，无 schema/public HTTP 变更。正常 pending 阻止编辑，但某个并发尝试失败后可合法纠正原文，因此不能仅靠 pending 状态假定来源不变。过期成功和失败都丢弃；显式重试从新原文生成译文。这里沿用既有内容来源版本：基线 dcd2c7f 的 `relation-storage.mjs`（构建来源时 `source_revision: hash(s.original_text)`，提交时再次核 hash）及 `knowledge-name-replacement.mjs`（原文改变时持久更新 support.source_revision）都采用原文 SHA-256。SQL 精确文本比较具有相同内容等价语义且不引入哈希碰撞。知识卡片编辑 revision 还含内容版本等字段，不是 MT 的来源版本。固定合法 A→B→A 回归确认成功/失败响应按同内容处理，已完成的新译文仍不可覆盖；不增加单调修订计数。现行语义允许名称纠正保留已完成译文，本改动不重新计费或自动重译。
 - HW-02-03：复用字幕前沿测试验证相同来源上下文不增加确认、深度重写和 Unicode。浏览器验证更短的 interim→final、原文/译文显示与停止尾句的最终翻译补齐。这里不是允许同身份的冲突 final 覆写首次定稿。
 - HW-11-02：桌面/窄屏明确错误、可操作恢复、键盘开始、停止、继续、新建收听与横向布局；不是 HW-11 整个编辑/迁移旅程的完成声明。
 
