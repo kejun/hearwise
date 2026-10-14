@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { decodeEditITF } from './edit-protocol-replay.mjs';
 import { validMatchedNameDurable } from './name-protocol-durable.mjs';
 import { deadline } from '../../test-support/lifecycle.mjs';
+import { nameDeadlineAt, nameRemainingMs } from './name-protocol-budget.mjs';
 
 export const nameTraceContract = JSON.parse(readFileSync(new URL('../../verification/name-protocol/trace-contract.json', import.meta.url), 'utf8'));
 export const nameProjectionFields = [...Object.keys(nameTraceContract.scalars), ...nameTraceContract.attemptMaps, ...nameTraceContract.operationMaps];
@@ -67,13 +68,21 @@ export function validateNameTrace(trace) {
 
 // Expected projections come exclusively from the supplied Quint ITF. Independent
 // raw-table validation is mandatory even when adapter.check() claims no errors.
-export async function replayNameTrace(trace, createAdapter, { stepTimeoutMs = 15000, cleanupTimeoutMs = 5000 } = {}) {
-  const result = { startedAt: new Date().toISOString(), finishedAt: null, complete: false, ok: false, classification: 'driver_cannot_replay', observations: [] };
-  let adapter, currentStep = -1;
+export async function replayNameTrace(trace, createAdapter, { startupTimeoutMs = 15000, stepTimeoutMs = 15000, cleanupTimeoutMs = 5000,
+  timeoutMs = 60000, deadlineAt: parentDeadline } = {}) {
+  const deadlineAt = nameDeadlineAt(timeoutMs, parentDeadline ?? process.env.HEARWISE_NAME_DEADLINE_AT);
+  const result = { startedAt: new Date().toISOString(), finishedAt: null, complete: false, ok: false, cleanupComplete: false,
+    classification: 'driver_cannot_replay', observations: [], budget: { deadlineAt, startupTimeoutMs, stepTimeoutMs, cleanupTimeoutMs, timeoutMs } };
+  let adapter, startup, startupRejected = false, currentStep = -1;
+  const operation = (fn, limit, label) => deadline(fn, nameRemainingMs(deadlineAt, limit, cleanupTimeoutMs), label);
   try {
     if (!validateNameTrace(trace)) throw new Error('Invalid name replay contract');
-    adapter = await deadline(() => createAdapter(trace.config), stepTimeoutMs, 'name adapter startup');
-    const compare = expected => deadline(async () => {
+    // Capture the eventual resource even if its caller times out before the
+    // asynchronous factory returns. The finally block still owns that resource.
+    const startupBudget = nameRemainingMs(deadlineAt, startupTimeoutMs, cleanupTimeoutMs);
+    startup = Promise.resolve().then(() => createAdapter(trace.config)).catch(error => { startupRejected = true; throw error; });
+    adapter = await deadline(() => startup, startupBudget, 'name adapter startup');
+    const compare = expected => operation(async () => {
       const observation = { step: currentStep, actual: structuredClone(await adapter.project()), durable: structuredClone(await adapter.observe()),
         durableViolations: structuredClone(await adapter.check?.() || []) };
       const durableValid = validMatchedNameDurable(observation, trace.config, result.observations.at(-1));
@@ -89,13 +98,34 @@ export async function replayNameTrace(trace, createAdapter, { stepTimeoutMs = 15
     if (!await compare(trace.initial)) { result.complete = true; return result; }
     for (const [index, step] of trace.steps.entries()) {
       currentStep = index;
-      await deadline(() => adapter.act(step), stepTimeoutMs, `name action ${index}: ${step.action}`);
+      await operation(() => adapter.act(step), stepTimeoutMs, `name action ${index}: ${step.action}`);
       if (!await compare(step.expected)) { result.complete = true; return result; }
     }
     result.complete = true; result.ok = true; result.classification = 'matched';
   } catch (error) { result.error = { step: currentStep, name: error.name, message: error.message }; }
   finally {
-    try { if (adapter) await deadline(() => adapter.close(), cleanupTimeoutMs, 'name adapter cleanup'); }
+    try {
+      if (!adapter && startup && !startupRejected) {
+        try { adapter = await deadline(() => startup, nameRemainingMs(deadlineAt, cleanupTimeoutMs), 'name late adapter acquisition'); }
+        catch (error) {
+          // The result remains explicitly unclean. If the resource arrives
+          // after the deadline, close it rather than abandoning its server.
+          void startup.then(late => deadline(() => late.close(), cleanupTimeoutMs, 'name overdue adapter cleanup')).catch(() => {});
+          throw error;
+        }
+      }
+      if (adapter) {
+        // Even synchronous startup can exhaust the clock before timers fire.
+        // Always initiate close for an acquired resource, including this path.
+        const closing = Promise.resolve().then(() => adapter.close());
+        const remaining = deadlineAt - Date.now();
+        if (remaining <= 0) {
+          void deadline(() => closing, cleanupTimeoutMs, 'name overdue acquired adapter cleanup').catch(() => {});
+          throw new Error('Name cleanup deadline exhausted after acquisition');
+        }
+        await deadline(() => closing, Math.min(remaining, cleanupTimeoutMs), 'name adapter cleanup'); result.cleanupComplete = true;
+      }
+    }
     catch (error) { result.complete = false; result.ok = false; result.classification = 'driver_cannot_replay'; result.cleanupError = error.message; }
     result.finishedAt = new Date().toISOString();
   }

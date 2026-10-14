@@ -67,11 +67,11 @@ export async function probeJavaVersion({ command = 'java', args = ['-version'], 
   return { major: Number(version[1]), output: result.tail.trim(), execution };
 }
 
-export async function checkProtocolTools() {
+export async function checkProtocolTools({ deadlineAt = Infinity } = {}) {
   const installed = JSON.parse(await readFile('node_modules/@informalsystems/quint/package.json', 'utf8'));
   if (installed.version !== toolchain.quint.version) throw new Error(`Quint must be exactly ${toolchain.quint.version}; run npm ci --ignore-scripts`);
   if (await fileDigest(archive) !== toolchain.apalache.archiveSha256 || await fileDigest(jar) !== toolchain.apalache.jarSha256) throw new Error('Apalache archive/JAR does not match the pinned toolchain');
-  const java = await probeJavaVersion();
+  const java = await probeJavaVersion({ timeoutMs: Math.min(JAVA_STARTUP_TIMEOUT_MS, deadlineAt - Date.now()) });
   return { quint: installed.version, apalache: toolchain.apalache.version, tlc: toolchain.apalache.bundledTlcVersion,
     apalacheJarSha256: toolchain.apalache.jarSha256, apalacheArchiveSha256: toolchain.apalache.archiveSha256,
     java: java.output, javaProbe: java.execution, node: process.version, sqlite: process.versions.sqlite, quintHome };

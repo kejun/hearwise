@@ -19,6 +19,8 @@ const report = { ...context, startedAt: new Date().toISOString(), finishedAt: nu
   origin: { repositoryRoot: process.cwd(), nodeExecutable: process.execPath, quintHome, evidenceDirectory: directory },
   config, propertyCoverage: nameProtocolCoverage(config), overallTimeoutMs: config.limits.overallMs,
   results: [], artifacts: [], execution: { complete: false, timedOut: false, interrupted: false } };
+const overallDeadlineAt = Date.parse(report.startedAt) + config.limits.overallMs;
+const checkTools = () => checkProtocolTools({ deadlineAt: overallDeadlineAt });
 const save = () => writeJson(path.join(directory, 'report.json'), report);
 await save(); console.log(`Name protocol evidence: ${directory}`);
 let timedOut = false, interrupted = false;
@@ -34,19 +36,19 @@ async function freePort() {
 }
 try {
   if (!context.buildCurrent) throw new Error('Actual built source is stale; run npm run build against this exact worktree');
-  report.tools = await checkProtocolTools(); await save();
+  report.tools = await checkTools(); await save();
   for (const stage of plan) {
     if (interrupted || timedOut) throw new Error('Name verification interrupted');
-    const start = await nameProtocolMetadata(), inputStart = nameInputBinding(start, config, await checkProtocolTools());
+    const start = await nameProtocolMetadata(), inputStart = nameInputBinding(start, config, await checkTools());
     if (!same(start, context)) throw new Error('Source/build content changed before stage');
     const endpoint = ['finite-state-complete', 'bounded-model-check', 'model-negative'].includes(stage.kind) ? await freePort() : null;
-    const invocation = nameStageCommand(stage, config, directory, endpoint), startedAt = new Date().toISOString();
+    const invocation = nameStageCommand(stage, config, directory, endpoint);
     const log = `${stage.id}.log`; console.log(`START ${stage.id}`);
-    const execution = await runNameProtocolCommand(invocation, path.join(directory, log));
+    const execution = await runNameProtocolCommand(invocation, path.join(directory, log), { deadlineAt: overallDeadlineAt - 10000 });
     const { tail: _tail, ...processResult } = execution;
     const conclusion = nameStageConclusion(stage, execution, await readFile(path.join(directory, log), 'utf8'), config);
-    const result = { id: stage.id, kind: stage.kind, startedAt, finishedAt: new Date().toISOString(),
-      invocation, inputStart, inputEnd: nameInputBinding(await nameProtocolMetadata(), config, await checkProtocolTools()),
+    const result = { id: stage.id, kind: stage.kind, startedAt: execution.startedAt, finishedAt: new Date().toISOString(),
+      invocation, inputStart, inputEnd: nameInputBinding(await nameProtocolMetadata(), config, await checkTools()),
       execution: processResult, complete: conclusion.complete, status: conclusion.ok ? 'passed' : conclusion.complete ? 'failed' : 'incomplete',
       metrics: conclusion.metrics || null, log, traces: nameTracePaths(stage, config) };
     artifacts.add(log); for (const file of result.traces) artifacts.add(file);
@@ -63,6 +65,7 @@ try {
     report.results.push(result); await save();
     console.log(`${result.status.toUpperCase()} ${stage.id} (${execution.durationMs}ms)`);
     if (execution.interrupted) interrupted = true;
+    if (execution.timedOut) { timedOut = true; throw new Error('Name stage timed out; no later stage is started'); }
   }
 } catch (error) { report.error = { name: error.name, message: error.message }; }
 finally {
@@ -73,7 +76,7 @@ finally {
     try { report.artifacts.push({ path: file, sha256: digest(await readFile(path.join(directory, file))) }); }
     catch { report.complete = false; }
   }
-  report.inputEnd = nameInputBinding(await nameProtocolMetadata(), config, await checkProtocolTools().catch(() => null));
+  report.inputEnd = nameInputBinding(await nameProtocolMetadata(), config, await checkTools().catch(() => null));
   if (!same(report.inputEnd, nameInputBinding(context, config, report.tools))) { report.complete = false; report.error = { message: 'Source/build/config/tool inputs changed during execution' }; }
   report.execution = { complete: report.complete, timedOut, interrupted, code: !report.error && report.results.every(row => row.status === 'passed') ? 0 : 1, signal: null };
   await save();

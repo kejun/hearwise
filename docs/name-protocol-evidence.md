@@ -12,7 +12,7 @@ The unchanged frozen configuration in `verification/name-protocol/config.json` g
 - Five bounded abstract-model negative controls
 - Actual HTTP/SQLite replay of all 22 witnesses and all six simulation traces
 - Four independent production-source-copy negatives
-- The fixed 47-test driver/HTTP/report regression roster
+- The fixed 52-test driver/HTTP/report regression roster
 
 Every process uses the existing process-group runner, including actual replay. Each stage has a declared timeout and a 1.5-second process-group kill grace. Adapter step and cleanup deadlines remain active. An overall timeout or interruption preserves partial logs and cannot pass. No browser process, paid provider call or production debug endpoint is used by this profile.
 
@@ -46,3 +46,10 @@ The browser raw reader independently checks all full-table deltas, immutable ide
 The Node contract fixture explicitly synthesizes UI observations around real HTTP/SQLite transactions. It is only a reader regression and is never evidence that Chromium or a physical device ran. Actual browser acceptance requires the separate current-source CI artifact.
 
 The first genuine browser run exposed a view synchronization defect: after a committed save lost both its response and receipt lookup, reopening read the new name into the editor while the surrounding list still showed the old name. The editor now invokes its existing view-refresh callback when that guarded read returns a different canonical name, without another write. Actual-editor HTTP regressions cover the lost-response path, unchanged names, stale reads after a listening switch and refresh failure; the new fields remain available even if the surrounding refresh fails. The browser's list/detail/graph assertions remain required.
+
+
+## Replay deadline hierarchy
+
+Each of the 22 real witnesses is an independent top-level test with the original 30-second per-test limit. The two witness-generating compiler calls each keep their 20-second cap, share the file's absolute 80-second work/cleanup deadline, and have a 45-second hook ceiling. Real replay test groups share at most 25 seconds including cleanup inside their 30-second test ceiling; grouped negatives do not reset that deadline per case. The file watchdog remains 90 seconds. The complete serial driver stage has a 90-second shared process budget; its deadline is passed to every child file, rather than restarted for each witness. The overall profile remains 480 seconds and all model domains, exploration limits and depths remain unchanged.
+
+Replay startup (15 seconds), each action/projection (15 seconds), and cleanup (5 seconds) are capped by one absolute per-trace deadline (at most 60 seconds) and the inherited remaining file/stage time. Cleanup is reserved before actions start. A factory resolving after startup timeout is still owned and closed; if the cleanup deadline expires, the result stays explicitly unverified even when a late-close handler later succeeds. The outer process-group watchdog remains the final bound for a never-settling factory. Real HTTP-resource regressions cover slow startup, late factory completion, cleanup expiry, and cumulative action timeout. A timed-out stage never starts a later stage.

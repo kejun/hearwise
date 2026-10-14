@@ -36,10 +36,10 @@ export const nameGateTests = [
   'name abstract negatives require the precise first violated property',
   'name replay gate binds every ITF action mode path and expected projection',
   'name production negatives reject false prefixes and corrupted final raw tables',
-  'name report gate rejects missing results artifacts and stale inputs'
+  'name report gate rejects missing results artifacts and stale inputs',
+  'name stage shares its parent deadline with the real child and removes temporary resources'
 ];
 const replayTests = [
-  'all 22 genuine Quint witnesses replay every action through real HTTP and SQLite full-table checks',
   'real source-copy negatives break fingerprint, atomic receipt, revision and active-anchor contracts',
   'independent gate rejects raw-table/HTTP corruption despite unchanged projections and empty cached violations',
   'raw business gate is usable by browser consumers and independently detects protected-row changes',
@@ -52,9 +52,14 @@ const httpTests = ['three simultaneous exact HTTP attempts share one durable nam
   'same-ID conflicting concurrent HTTP bodies choose one actual winner without relying on arrival order',
   'actual HTTP receipt-boundary failure reports unsaved and allows the identical request after rollback',
   'browser-facing raw business gate supports a long Unicode replacement using actual HTTP and full table observations'];
-export const nameDriverRoster = [...nameGateTests, ...httpTests, ...replayTests,
-  ...Object.values(nameWitnesses).flat().map(name => `${replayTests[0]} > ${name}`),
-  ...nameNegatives.map(row => `${replayTests[1]} > ${row.mutation}`)].sort();
+export const nameLifecycleTests = ['name slow startup keeps its own limit before the action timeout',
+  'name startup timeout still closes a resource delivered inside its cleanup window',
+  'name overdue startup remains unverified and closes its eventual HTTP resource',
+  'name replay shares one absolute deadline instead of resetting it per action',
+  'name acquired resource is closed even when synchronous startup exhausts the deadline'];
+export const nameDriverRoster = [...nameGateTests, ...httpTests, ...replayTests, ...nameLifecycleTests,
+  ...Object.values(nameWitnesses).flat().map(name => `actual Quint witness: ${name}`),
+  ...nameNegatives.map(row => `${replayTests[0]} > ${row.mutation}`)].sort();
 export function nameConfiguration(main, config) {
   const mode = main.replace(/_witnesses$/, '');
   const row = config.configurations.find(value => value.main === mode) || config.mutants.find(value => value.main === main);
@@ -72,7 +77,7 @@ export function nameProtocolPlan(config) {
     { id: 'replay-witnesses', kind: 'implementation-replay', timeoutMs: 60000 },
     { id: 'replay-simulation', kind: 'implementation-replay', timeoutMs: 60000 },
     ...nameNegatives.map(row => ({ id: `negative-replay-${row.mutation}`, kind: 'implementation-negative', timeoutMs: 30000 })),
-    { id: 'driver-regressions', kind: 'implementation-regression', timeoutMs: 60000 }
+    { id: 'driver-regressions', kind: 'implementation-regression', timeoutMs: 90000 }
   ];
 }
 export const nameProtocolCoverage = config => properties.map(property => ({ id: property.id, version: property.version,
@@ -153,6 +158,11 @@ export function validateNameCommand(result, stage, config, directory, binding, o
     assert.deepEqual(result.inputStart, binding); assert.deepEqual(result.inputEnd, binding);
     assert.equal(binding.buildCurrent, true); assert.ok(validNameInterval(result));
     assert.ok(completeExecution(result.execution)); assert.equal(result.execution.cleanupComplete, true);
+    const budget = result.execution.budget, started = Date.parse(result.startedAt);
+    assert.equal(result.execution.startedAt, result.startedAt);
+    assert.ok(budget && Number.isSafeInteger(budget.timeoutMs) && budget.timeoutMs > 1500 && budget.timeoutMs <= stage.timeoutMs);
+    assert.equal(budget.deadlineAt, started + budget.timeoutMs); assert.equal(budget.childDeadlineAt, budget.deadlineAt - 1500);
+    assert.ok(Date.parse(result.finishedAt) <= budget.deadlineAt + 1500);
     assert.ok(Number.isSafeInteger(result.execution.durationMs) && result.execution.durationMs >= 0 && result.execution.durationMs <= stage.timeoutMs + 1500);
     return true;
   } catch { return false; }
@@ -255,7 +265,12 @@ export function validateNameReplay(value, trace, sourceTrace, sourceBytes, { neg
     assert.equal(value.semanticTraceSha256, digest(JSON.stringify(trace))); assert.equal(value.steps, trace.steps.length);
     assert.deepEqual(value.config, trace.config); assert.ok(validNameInterval(value)); assert.ok(validNameInterval(interval));
     assert.ok(Date.parse(value.startedAt) >= Date.parse(interval.startedAt) && Date.parse(value.finishedAt) <= Date.parse(interval.finishedAt));
-    assert.equal(value.complete, true); assert.equal(value.ok, !negative); assert.equal(value.classification, negative ? 'implementation_mismatch' : 'matched');
+    assert.equal(value.complete, true); assert.equal(value.cleanupComplete, true);
+    const b = value.budget; assert.ok(b && Number.isSafeInteger(b.deadlineAt));
+    assert.equal(b.startupTimeoutMs, 15000); assert.equal(b.stepTimeoutMs, 15000); assert.equal(b.cleanupTimeoutMs, 5000); assert.equal(b.timeoutMs, 60000);
+    assert.ok(b.deadlineAt <= Date.parse(value.startedAt) + b.timeoutMs && Date.parse(value.finishedAt) <= b.deadlineAt);
+    if (interval.execution?.budget) assert.ok(b.deadlineAt <= interval.execution.budget.childDeadlineAt);
+    assert.equal(value.ok, !negative); assert.equal(value.classification, negative ? 'implementation_mismatch' : 'matched');
     assert.ok(!value.error && !value.cleanupError);
     const states = [trace.initial, ...trace.steps.map(step => step.expected)], index = negative ? value.difference?.step : trace.steps.length - 1;
     assert.ok(Number.isSafeInteger(index) && index >= 0 && index < trace.steps.length); assert.equal(value.observations?.length, index + 2);
