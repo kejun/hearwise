@@ -85,7 +85,7 @@ function inspectRow(row, { width, scenario, negative, source, mutation }) {
     assert.match(unknown.editor.status, /输入已保留.*保存结果尚未确认|保存结果尚未确认.*输入已保留/);
     assert.deepEqual(unknown.tables, reopened.tables); assert.deepEqual(reopened.tables, final.tables);
     assert.notEqual(unknown.snapshot.revision, opened.snapshot.revision);
-    assert.equal(row.responses.filter(response => response.url.startsWith(url + '/edits/') && response.status === 502).length, 1);
+    assert.equal(row.responses.filter(response => response.url === gets[0].url && response.status === 502).length, 1);
   } else if (scenario === 'receipt-recovery') {
     const response = row.responses.filter(response => response.url === url + '/edits/' + receipt.id); assert.equal(response.length, 1);
     assert.equal(response[0].status, 200); assert.deepEqual(JSON.parse(response[0].text).job, publicJob);
