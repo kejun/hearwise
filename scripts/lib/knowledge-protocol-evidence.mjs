@@ -37,6 +37,7 @@ export function knowledgeMutationViolation(main, itf) {
   return { ok: step >= 0, classification: 'model_violation', firstViolationState: step, traceLength: trace.steps.length };
 }
 export const knowledgeEvidenceDefinition = {
+  regressionSuite: 'knowledge-protocol',
   loadConfig: async () => JSON.parse(await readFile(path.join(knowledgeModelRoot, 'config.json'), 'utf8')),
   loadToolchain: async () => JSON.parse(await readFile(path.join(knowledgeModelRoot, 'toolchain.json'), 'utf8')),
   metadata: knowledgeMetadata, coverage: knowledgeCoverage, normalizeTrace: normalizeKnowledgeTrace,

@@ -1,3 +1,4 @@
+import { validateFormalRegression } from './formal-regression-contract.mjs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -88,6 +89,9 @@ export async function validateFormalEvidence(directory, definition, { release = 
       else if (!['implementation-replay', 'implementation-negative'].includes(entry.kind)) {
         const main = entry.id.replace(/^bounded-/, '');
         if (!checkerConclusion(entry.kind, result.execution, log, profile?.apalacheDepth[main]).ok) row.reasons.push('raw_check_not_passed');
+        if (entry.kind === 'implementation-regression' && definition.regressionSuite) {
+          try { await validateFormalRegression(definition.regressionSuite, log); } catch { row.reasons.push('raw_check_not_passed'); }
+        }
       }
       if (['model-witness', 'simulation', 'model-negative'].includes(entry.kind)) {
         const expectedCount = entry.kind === 'model-witness' ? config.witnesses.counts[entry.id.slice('witnesses-'.length)] : entry.kind === 'simulation' ? config.simulation.selectedTraces : 1;

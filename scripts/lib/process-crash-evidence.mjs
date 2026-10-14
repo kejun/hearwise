@@ -46,6 +46,7 @@ export function processMutationViolation(main, itf) {
   return { ok: step >= 0, classification: 'model_violation', firstViolationState: step, traceLength: trace.steps.length };
 }
 export const processEvidenceDefinition = {
+  regressionSuite: 'process-crash',
   loadConfig: async () => JSON.parse(await readFile(path.join(processModelRoot, 'config.json'), 'utf8')),
   loadToolchain: async () => JSON.parse(await readFile(path.join(processModelRoot, 'toolchain.json'), 'utf8')),
   metadata: processMetadata, coverage: processCoverage, normalizeTrace: normalizeProcessTrace, traceConfig: processTraceConfig,

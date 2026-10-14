@@ -34,6 +34,7 @@ export function expectedMutationViolation(main, itf) {
 }
 
 export const relationEvidenceDefinition = {
+  regressionSuite: 'relation-protocol',
   loadConfig: async () => JSON.parse(await readFile(path.join(modelRoot, 'config.json'), 'utf8')),
   loadToolchain: async () => JSON.parse(await readFile(path.join(modelRoot, 'toolchain.json'), 'utf8')),
   metadata: protocolMetadata, coverage: protocolCoverage, normalizeTrace: normalizeProtocolTrace,
