@@ -26,13 +26,13 @@ export async function securityFixture({ seed, serverFile = 'server.mjs' } = {}) 
   const filename = path.join(directory, 'business.sqlite');
   let seeded, app, closing;
   const stats = { requests: [], asrConnections: 0, asrClients: new Set() };
-  const control = { modelStatus: 200, asrFailure: false, modelOutput: undefined };
+  const control = { modelStatus: 200, asrFailure: false, modelOutput: undefined, asrReply: undefined, retryAfter: '0' };
   if (seed) { const store = new ListeningStore(filename); try { seeded = await seed(store); } finally { store.close(); } }
   const model = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     stats.requests.push({ kind: 'model', model: body.model, authorization: req.headers.authorization, body });
-    res.writeHead(control.modelStatus, { 'Content-Type': 'application/json', 'Retry-After': '0' });
+    res.writeHead(control.modelStatus, { 'Content-Type': 'application/json', 'Retry-After': control.retryAfter });
     if (control.modelStatus !== 200) return res.end(JSON.stringify({ error: { message: `Provider echoed ${req.headers.authorization}` } }));
     const output = typeof control.modelOutput === 'function' ? control.modelOutput(body) : control.modelOutput;
     const content = output === undefined ? body.model === 'qwen-mt-flash' ? '固定安全译文。' : '{"items":[]}' : typeof output === 'string' ? output : JSON.stringify(output);
@@ -48,7 +48,7 @@ export async function securityFixture({ seed, serverFile = 'server.mjs' } = {}) 
     ws.on('message', (raw, binary) => {
       if (binary) return;
       const input = JSON.parse(raw.toString());
-      if (input.header?.action === 'run-task') ws.send(JSON.stringify(control.asrFailure
+      if (input.header?.action === 'run-task') ws.send(JSON.stringify(control.asrReply !== undefined ? control.asrReply : control.asrFailure
         ? { header: { event: 'task-failed', error_message: `Provider echoed ${req.headers.authorization}` } }
         : { header: { event: 'task-started' } }));
       if (input.header?.action === 'finish-task') ws.send(JSON.stringify({ header: { event: 'task-finished' } }));
@@ -66,7 +66,7 @@ export async function securityFixture({ seed, serverFile = 'server.mjs' } = {}) 
     const env = { LISTENING_DB: filename, MT_ENDPOINT: `http://127.0.0.1:${model.address().port}`,
       ASR_ENDPOINT: `ws://127.0.0.1:${asrHttp.address().port}`, EXTRACTION_WAIT_MS: '15000' };
     app = await startServer({ args: [serverFile], env });
-    return { directory, filename, seeded, stats, control, base: app.base, logs: app.logs, close,
+    return { directory, filename, seeded, stats, control, modelEndpoint: env.MT_ENDPOINT, base: app.base, logs: app.logs, close,
       async restart() { await stopChild(app.child); app = await startServer({ args: [serverFile], env }); this.base = app.base; this.logs = app.logs; },
       final(text, id = 'security-source') {
         for (const ws of stats.asrClients) if (ws.readyState === 1) ws.send(JSON.stringify({ header: { event: 'result-generated' },

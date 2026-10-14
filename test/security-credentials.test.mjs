@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import WebSocket from 'ws';
 import { securityFixture, SECURITY_KEY, credentialFindings } from '../test-support/security-fixture.mjs';
+import { extractKnowledge } from '../knowledge.mjs';
 import { deadline } from '../test-support/lifecycle.mjs';
 
 async function post(f, route, input) {
@@ -25,13 +26,22 @@ test('credentials stay out of normal connection responses and structured traces;
 
 test('provider error bodies cannot echo credentials through translation or connection diagnostics; recovery still works', { timeout: 15000 }, async t => {
   const f = await securityFixture(); t.after(f.close);
-  f.control.modelStatus = 401; f.control.asrFailure = true;
-  const translation = await post(f, '/api/translate', { key: SECURITY_KEY, text: 'Hello.', source: 'en', target: 'Chinese' });
-  const connection = await post(f, '/api/test-connection', { key: SECURITY_KEY });
-  assert.equal(translation.status, 502); assert.equal(connection.status, 200);
-  assert.ok(Object.values(connection.body).every(row => row.ok === false));
-  assert.deepEqual(credentialFindings({ translation, connection }), [], 'Provider error response must not contain a credential sentinel');
-  assert.deepEqual(credentialFindings(f.logs()), []);
+  f.control.asrFailure = true;
+  for (const status of [401, 429, 503]) {
+    f.control.modelStatus = status; f.control.retryAfter = '7';
+    const translation = await post(f, '/api/translate', { key: SECURITY_KEY, text: 'Hello.', source: 'en', target: 'Chinese' });
+    const connection = await post(f, '/api/test-connection', { key: SECURITY_KEY });
+    assert.equal(translation.status, 502); assert.equal(connection.status, 200);
+    assert.ok(Object.values(connection.body).every(row => row.ok === false));
+    assert.match(translation.body.error, new RegExp(`HTTP ${status}`));
+    assert.match(connection.body.knowledge.message, new RegExp(`HTTP ${status}`));
+    assert.deepEqual(credentialFindings({ translation, connection }), [], 'Provider error response must not contain a credential sentinel');
+    assert.deepEqual(credentialFindings(f.logs()), []);
+    await assert.rejects(extractKnowledge(SECURITY_KEY, { focus_segments: [] }, f.modelEndpoint), error => {
+      assert.equal(error.status, status); assert.equal(error.retryAfterMs, 7000);
+      assert.deepEqual(credentialFindings(error.message), []); return true;
+    });
+  }
   f.control.modelStatus = 200; f.control.asrFailure = false;
   assert.ok(Object.values((await post(f, '/api/test-connection', { key: SECURITY_KEY })).body).every(row => row.ok));
 });
