@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { metricDefinition } from './quality-metrics.mjs';
+import { metricDefinition, normalizeQualityText } from './quality-metrics.mjs';
 export const qualityVersion = 1;
 export const qualityCategories = ['daily', 'technical', 'numbers-time-money', 'negation-condition', 'proper-names', 'long-sentences', 'accent-noise', 'multilingual', 'silence-empty', 'ambiguity'];
 export const seriousErrorTypes = ['number', 'negation', 'condition', 'attribution', 'omission'];
@@ -76,7 +76,7 @@ export async function inspectQualityPlan(configFile, { now = Date.now() } = {}) 
       sample.gold.criticalFacts.every(row => seriousErrorTypes.includes(row.type) && text(row.meaning)), `${prefix}:gold_unreviewed`);
     require((text(sample.text) || sample.silence === true && sample.text === '' && sample.tasks?.length === 1 && sample.tasks[0] === 'asr') && sample.text.length <= 3000, `${prefix}:text_limit`);
     if (text(sample.text)) {
-      const fingerprint = hashBytes(sample.text.normalize('NFC').trim().toLowerCase());
+      const fingerprint = hashBytes(normalizeQualityText(sample.text));
       require(!textsBySplit.has(fingerprint) || textsBySplit.get(fingerprint) === sample.split, `${prefix}:development_acceptance_overlap`); textsBySplit.set(fingerprint, sample.split);
     }
     if (sample.tasks?.includes('asr')) {

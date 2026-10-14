@@ -186,6 +186,10 @@ export async function assessQuality({ frozen, baselineDirectory, candidateDirect
     for (const trial of all) {
       const matches = review.rows.filter(row => row.trialId === trial.trialId); assert.equal(matches.length, 1); const row = matches[0];
       assert.equal(row.outputSha256, trial.outputSha256); assert.ok(frozen.config.reviewers.includes(row.reviewer));
+      // The human scores the displayed context, not merely a copied digest.
+      assert.equal(row.output, trial.result.output); assert.equal(row.source, trial.sample.text);
+      same(row.acceptedReferences, trial.kind === 'asr' ? trial.sample.gold.transcripts : trial.sample.gold.translations);
+      same(row.criticalFacts, trial.sample.gold.criticalFacts);
       assert.ok(Date.parse(row.reviewedAt) >= Date.parse(trial.finishedAt) && Date.parse(row.reviewedAt) <= Date.now());
       same(Object.keys(row.serious).sort(), [...seriousErrorTypes].sort()); assert.ok(Object.values(row.serious).every(value => typeof value === 'boolean'));
       if (Object.values(row.serious).some(Boolean)) assert.ok(typeof row.notes === 'string' && row.notes.trim());
