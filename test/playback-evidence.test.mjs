@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -7,6 +8,7 @@ import { runProcess } from '../scripts/lib/process.mjs';
 import { metadata, validateResult } from '../scripts/lib/verification-evidence.mjs';
 import { playbackProfile } from '../verification/playback-properties.mjs';
 import { playbackProvenance, playbackServedFiles, stablePlaybackSources } from '../test-support/playback-provenance.mjs';
+import { playbackWorkletFiles } from '../test-support/playback-worklet-responses.mjs';
 import { playbackGolden } from '../test-support/playback-speech-fixture.mjs';
 import { speechIntervalLedger } from '../test-support/playback-text-contract.mjs';
 import { playbackAssets, playbackCounts, playbackTap, checkPlaybackBrowser, writePlaybackEvidence, checkPlaybackEvidence,
@@ -18,8 +20,13 @@ const execution = changes => ({ code: 0, signal: null, ok: true, timedOut: false
 function syntheticBrowser(provenance) {
   const cut = playbackGolden.indexOf('。') + 1;
   const requests = [playbackGolden.slice(0, cut), playbackGolden.slice(cut).trim().slice(0, -4), 'END'];
-  const served = mutant => ({ errors: [], responses: playbackServedFiles.map(file => ({ file, status: 200,
-    sha256: mutant && file === 'public/speech-controller.js' ? provenance.mutantControllerSha256 : provenance.snapshot.digests[file] })) });
+  const served = mutant => {
+    const fixtureId = randomUUID(), origin = 'http://127.0.0.1:12345';
+    return { fixtureId, origin, errors: [], responses: playbackServedFiles.map(file => ({ fixtureId, origin, file, status: 200,
+      source: playbackWorkletFiles.includes(file) ? 'server-response-finish' : 'page-response', method: 'GET', path: file.slice('public'.length),
+      bytes: mutant && file === 'public/speech-controller.js' ? provenance.mutantControllerBytes : provenance.servedBytes[file],
+      sha256: mutant && file === 'public/speech-controller.js' ? provenance.mutantControllerSha256 : provenance.snapshot.digests[file] })) };
+  };
   const socket = { id: 1, readyState: 3, sent: [{ type: 'speech.transcript', epoch: 1 }, { type: 'speech.progress', epoch: 1, playedUnit: 3, consumedSamples: 18000 }],
     received: requests.flatMap((text, i) => [{ type: 'speech.unit', epoch: 1, unit: i + 1, text }, { type: 'pcm', epoch: 1, unit: i + 1, frame: 0, samples: 6000, bytes: 12016 },
       { type: 'speech.unit-end', epoch: 1, unit: i + 1, samples: 6000 }]).concat({ type: 'speech.finished', epoch: 1 }) };
@@ -112,6 +119,18 @@ test('playback browser contract rejects false completion, missing coverage and i
     b => { b.widths[0].cases[1].afterLate.contextIds[1] = 999; },
     b => { b.widths[0].cases[0].served.responses[0].sha256 = '0'.repeat(64); },
     b => { b.widths[0].cases[0].served.responses.pop(); },
+    b => { b.widths[0].cases[0].served.responses.at(-1).source = 'page-response'; },
+    b => { b.widths[0].cases[0].served.responses[0].source = 'server-response-finish'; },
+    b => { b.widths[0].cases[0].served.responses.at(-1).method = 'HEAD'; },
+    b => { b.widths[0].cases[0].served.responses.at(-1).path = '/unrelated.js'; },
+    b => { b.widths[0].cases[0].served.responses.at(-1).status = 404; },
+    b => { b.widths[0].cases[0].served.responses.at(-1).bytes = 0; },
+    b => { b.widths[0].cases[0].served.responses.at(-1).bytes++; },
+    b => { b.widths[0].cases[0].served.responses.at(-1).fixtureId = randomUUID(); },
+    b => { b.widths[0].cases[0].served.responses.at(-1).origin = 'http://127.0.0.1:54321'; },
+    b => { b.widths[0].cases[0].served.responses.at(-1).source = 'server-response-close'; },
+    b => { b.widths[0].cases[0].served.fixtureId = randomUUID(); },
+    b => { b.widths[0].cases[1].served = structuredClone(b.widths[0].cases[0].served); },
     b => { b.negative.served.responses.find(row => row.file === 'public/speech-controller.js').sha256 = provenance.normalControllerSha256; },
     b => { b.sourceEnd.digests['public/app.js'] = '0'.repeat(64); },
     b => { b.mutation.mutantControllerSha256 = b.mutation.normalControllerSha256; },
@@ -149,7 +168,7 @@ test('playback child budgets share the 150s deadline and stop after timeout with
 test('playback source snapshots reject dirty-to-dirty content changes and missing build provenance', async () => {
   const { snapshot } = await playbackProvenance(); const start = structuredClone(snapshot); start.source.dirty = true;
   assert.equal(stablePlaybackSources(start, structuredClone(start)), true);
-  for (const key of ['public/app.js', 'dist/server/index.js', 'test-support/playback-evidence.mjs']) {
+  for (const key of ['public/app.js', 'dist/server/index.js', 'test-support/playback-evidence.mjs', 'test-support/playback-worklet-preload.mjs']) {
     const changed = structuredClone(start); changed.digests[key] = '0'.repeat(64);
     assert.equal(stablePlaybackSources(start, changed), false);
     delete changed.digests[key]; assert.equal(stablePlaybackSources(changed, changed), false);

@@ -8,6 +8,7 @@ import { playbackFixture, playbackWait, playbackGolden } from './playback-speech
 import { speechIntervalLedger } from './playback-text-contract.mjs';
 import { playbackControllerVariant } from './playback-controller-variant.mjs';
 import { playbackSourceSnapshot, playbackProvenance, playbackServedFiles } from './playback-provenance.mjs';
+import { playbackWorkletFiles } from './playback-worklet-responses.mjs';
 import { digest } from '../scripts/lib/verification-evidence.mjs';
 import { deadline } from './lifecycle.mjs';
 
@@ -15,13 +16,19 @@ const directory = process.argv[2];
 const sourceStart = await playbackSourceSnapshot(), provenance = await playbackProvenance(sourceStart);
 const observations = { complete: false, widths: [], negative: null, sourceStart, sourceEnd: null, mutation: { mutation: provenance.mutation,
   normalControllerSha256: provenance.normalControllerSha256, mutantControllerSha256: provenance.mutantControllerSha256 } };
-function monitorServed(page) {
+function monitorServed(page, fixture) {
   const responses = [], errors = [], pending = [];
+  const { fixtureId } = fixture.workletCapture;
   page.on('response', response => {
-    const file = 'public' + new URL(response.url()).pathname; if (!playbackServedFiles.includes(file)) return;
-    pending.push(response.body().then(body => responses.push({ file, status: response.status(), sha256: digest(body) })).catch(error => errors.push(error.message)));
+    const { pathname, origin } = new URL(response.url()), file = 'public' + pathname;
+    if (!playbackServedFiles.includes(file) || playbackWorkletFiles.includes(file)) return;
+    pending.push(response.body().then(body => responses.push({ fixtureId, origin, source: 'page-response', method: response.request().method(),
+      path: pathname, file, status: response.status(), bytes: body.length, sha256: digest(body) })).catch(error => errors.push(error.message)));
   });
-  return async () => { await deadline(() => Promise.all(pending), 3000, 'served playback module hashes'); return { responses, errors }; };
+  return async () => {
+    await deadline(() => Promise.all(pending), 3000, 'served playback module hashes');
+    return { fixtureId, origin: fixture.base, responses: [...responses, ...await fixture.workletCapture.read()], errors };
+  };
 }
 let browser;
 async function prepare(page, { delayedUnlock = false, mutation = false } = {}) {
@@ -88,9 +95,9 @@ async function screenshot(page, width, scenario) {
   await page.screenshot({ path: path.join(directory, `playback-${width}-${scenario}.png`) });
 }
 async function unlockScenario(width, mutation = false) {
-  const fixture = await playbackFixture({ hold: true, audioSamples: 12000 });
+  const fixture = await playbackFixture({ hold: true, audioSamples: 12000, captureWorkletResponses: true });
   const page = await browser.newPage({ viewport: { width, height: 900 } });
-  const served = monitorServed(page);
+  const served = monitorServed(page, fixture);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await prepare(page, { delayedUnlock: true, mutation }); await open(page, fixture, 'A'); await start(page);
@@ -129,9 +136,9 @@ try {
   observations.chromium = browser.version();
   for (const width of [1280, 390]) {
     const cases = [];
-    const textFixture = await playbackFixture({ audioSamples: 6000 });
+    const textFixture = await playbackFixture({ audioSamples: 6000, captureWorkletResponses: true });
     const textPage = await browser.newPage({ viewport: { width, height: 900 } });
-    const textServed = monitorServed(textPage);
+    const textServed = monitorServed(textPage, textFixture);
     const textErrors = []; textPage.on('pageerror', error => textErrors.push(error.message));
     try {
       await prepare(textPage); await open(textPage, textFixture, 'Text'); await start(textPage);
@@ -151,9 +158,9 @@ try {
       cases.push({ scenario: 'text', normalized: playbackGolden, requests: textFixture.stats.commits, ledger, state, served: await textServed(), errors: textErrors });
     } finally { await textPage.close(); await textFixture.close(); }
 
-    const fixture = await playbackFixture({ hold: true, audioSamples: 12000 });
+    const fixture = await playbackFixture({ hold: true, audioSamples: 12000, captureWorkletResponses: true });
     const page = await browser.newPage({ viewport: { width, height: 900 } });
-    const served = monitorServed(page);
+    const served = monitorServed(page, fixture);
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     try {
       await prepare(page); await open(page, fixture, 'A'); await start(page);
