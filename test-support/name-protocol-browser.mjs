@@ -100,11 +100,12 @@ async function run(width, scenario, mutant = false) {
       });
       const conflict = mutant ? a.page.waitForResponse(r => r.url() === f.url + '/name-replacements' && r.status() === 409) : null;
       await save(a, 'Tibo', { doubled: true }); await wait(committed, 'Real name commit held before browser response');
-      await capture('committed-held'); if (!mutant) assert.equal(row.checkpoints.at(-1).editor.closeDisabled, true);
       if (mutant) {
         await conflict;
+        await a.page.waitForFunction(() => document.querySelector('#knowledge-edit-source').value === 'Tibo');
         assert.equal(a.requests.filter(r => r.method === 'POST').length, 2);
       } else assert.equal(a.requests.filter(r => r.method === 'POST').length, 1);
+      await capture('committed-held'); if (!mutant) assert.equal(row.checkpoints.at(-1).editor.closeDisabled, true);
       release.resolve(); await a.page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
       row.views = await views(a, f, 'Tibo');
     } else if (['receipt-recovery', 'unknown-502', 'unknown-lost'].includes(scenario)) {

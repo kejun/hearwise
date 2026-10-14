@@ -15,8 +15,11 @@ export async function nameBrowserContractFixture() {
         unrelatedId: s.unrelated.listeningId, staleId: s.staleId, cameraId: s.camera.id, factId: s.factId };
       const baseline = f.tables(), initial = f.snapshot(), requests = [], responses = [], upstream = [], checkpoints = [];
       const name = scenario === 'cancel-noop' ? 'Deebo' : scenario === 'rollback-retry' ? 'Ｔｉｂｏ  Longer' : 'Tibo', input = { name, revision: initial.revision };
-      const editor = (draft = name, extra = {}) => ({ open: true, draft, source: '', status: '', saveDisabled: false, closeDisabled: false, fits: true, ...extra });
-      const capture = (label, ui = editor()) => checkpoints.push({ label, tables: f.tables(), snapshot: f.snapshot(), editor: ui });
+      const editor = (draft = name, extra = {}) => ({ open: true, draft, source: 'Deebo', status: '', saveDisabled: false, closeDisabled: false, fits: true, ...extra });
+      const capture = (label, ui = editor()) => {
+        if (label === 'final' || label === 'reopened-unknown' || label === 'committed-held' && negative) ui.source = f.snapshot().item.canonical_name;
+        checkpoints.push({ label, tables: f.tables(), snapshot: f.snapshot(), editor: ui });
+      };
       capture('opened', editor('Deebo'));
       const submit = async () => {
         const id = randomUUID(), headers = { 'idempotency-key': id }, url = f.url + '/name-replacements';

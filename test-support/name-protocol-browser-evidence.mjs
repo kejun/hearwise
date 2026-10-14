@@ -42,6 +42,8 @@ function inspectRow(row, { width, scenario, negative, source, mutation }) {
     assert.equal(checkpoint.snapshot.item.id, ids.itemId); assert.equal(checkpoint.snapshot.item.canonical_name, check.projection.name);
     assert.equal(knowledgeRevision(checkpoint.snapshot), checkpoint.snapshot.revision);
     assert.equal(checkpoint.snapshot.segments.find(value => value.id === ids.segmentId)?.original_text, check.projection.sourceText);
+    const displayedSource = ['opened', 'rolled-back', 'unknown', 'cancelled-reopened'].includes(checkpoint.label) || checkpoint.label === 'committed-held' && !negative ? opened.snapshot.item.canonical_name : checkpoint.snapshot.item.canonical_name;
+    assert.equal(checkpoint.editor.source, displayedSource);
     assert.equal(checkpoint.editor.open, true); assert.equal(checkpoint.editor.fits, true);
   }
   assert.equal(final.snapshot.item.canonical_name, name); assert.equal(final.editor.draft, name); assert.equal(final.editor.saveDisabled, false);
@@ -61,6 +63,8 @@ function inspectRow(row, { width, scenario, negative, source, mutation }) {
   assert.equal(added.length, 1); const receipt = added[0], request = posts.find(post => post.headers['idempotency-key'] === receipt.id); assert.ok(request);
   assert.equal(receipt.listening_id, ids.listeningId); assert.equal(receipt.item_id, ids.itemId); assert.equal(receipt.state, 'succeeded');
   assert.equal(receipt.name, name); assert.equal(receipt.revision, request.body.revision);
+  for (const get of gets) { assert.equal(get.url, url + '/edits/' + receipt.id); assert.equal(get.body, null); }
+  const publicJob = { id: receipt.id, state: receipt.state, name: receipt.name, source: receipt.source, saved: true, error: receipt.error };
   assert.equal(receipt.fingerprint, digest(JSON.stringify(['name_replace', request.body.name, request.body.revision])));
   const transaction = checkNameCommittedTables({ before: row.baseline, after: final.tables, identities: ids, id: receipt.id, input: request.body });
   assert.equal(transaction.ok, true, transaction.reason);
@@ -69,7 +73,7 @@ function inspectRow(row, { width, scenario, negative, source, mutation }) {
   for (const value of row.upstream) {
     const post = posts.find(post => post.headers['idempotency-key'] === value.id); assert.ok(post); assert.deepEqual(value.request, post.body);
     const body = JSON.parse(value.text);
-    if (value.status === 200) { assert.equal(body.job.id, receipt.id); assert.equal(body.job.saved, true); assert.equal(body.job.name, name); }
+    if (value.status === 200) { assert.deepEqual(body.job, publicJob); }
     else { assert.equal(negative, true); assert.equal(value.status, 409); assert.equal(body.saved, false); assert.equal(body.code, 'KNOWLEDGE_EDIT_STALE'); }
   }
   if (scenario === 'held-double-submit') {
@@ -84,7 +88,7 @@ function inspectRow(row, { width, scenario, negative, source, mutation }) {
     assert.equal(row.responses.filter(response => response.url.startsWith(url + '/edits/') && response.status === 502).length, 1);
   } else if (scenario === 'receipt-recovery') {
     const response = row.responses.filter(response => response.url === url + '/edits/' + receipt.id); assert.equal(response.length, 1);
-    assert.equal(response[0].status, 200); assert.equal(JSON.parse(response[0].text).job.saved, true);
+    assert.equal(response[0].status, 200); assert.deepEqual(JSON.parse(response[0].text).job, publicJob);
   } else if (scenario === 'rollback-retry') {
     assert.deepEqual(row.checkpoints[1].tables, row.baseline); assert.equal(row.checkpoints[1].editor.draft, name); assert.equal(row.checkpoints[1].editor.saveDisabled, false);
     const failed = row.responses.filter(response => response.url === url + '/name-replacements' && response.status === 502); assert.equal(failed.length, 1);

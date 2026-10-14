@@ -6,6 +6,9 @@ test('name browser evidence rechecks genuine full-table commits inside an explic
   const { browser, source, mutation } = await nameBrowserContractFixture();
   assert.equal(validNameBrowser(browser, source, mutation), true);
   const cases = [
+    value => { const row = value.widths[0].results[1].responses.find(row => row.url.includes('/edits/')); const body = JSON.parse(row.text); body.job.id = '11111111-1111-4111-8111-111111111111'; row.text = JSON.stringify(body); },
+    value => { const row = value.widths[0].results[2]; for (const value of [...row.requests, ...row.responses].filter(value => value.url.includes('/edits/'))) value.url = value.url.replace(/[^/]+$/, '11111111-1111-4111-8111-111111111111'); },
+    value => { value.widths[0].results[0].checkpoints.at(-1).editor.source = 'arbitrary stale name'; },
     value => { value.widths[0].results[0].checkpoints.at(-1).tables.knowledge_edit_jobs = []; },
     value => { value.widths[0].results[0].checkpoints.at(-1).tables.knowledge_items[0].content_version++; },
     value => { value.widths[0].results[0].checkpoints.at(-1).tables.relation_supports.find(row => row.state === 'stale').quote = 'changed'; },

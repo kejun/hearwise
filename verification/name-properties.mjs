@@ -1,5 +1,6 @@
 import { properties as protocolProperties } from './name-protocol/properties.mjs';
 export const nameProperties = [...protocolProperties.map(property => ({ ...property, group: 'HW-07',
+  implementationLocations: property.implementation, implementation: [...new Set(property.implementation.map(value => value.split(':')[0]))],
   state: [...property.persistentState, ...property.memoryState].join(', '), owners: [property.owner], issues: ['KEJ-71'],
   assets: ['test/name-transaction.test.mjs', 'test/name-protocol-http.test.mjs', 'test/name-protocol-replay.test.mjs', 'test-support/name-protocol-browser.mjs'],
   acceptance: [property.requirement], gaps: ['Finite protocol and concrete synthetic SQLite/browser fixtures; no general SQL, real semantic quality or power-loss proof.'] })),
