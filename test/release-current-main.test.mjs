@@ -14,7 +14,7 @@ test('current main crash recovery and offline infrastructure reports are mandato
 test('current main Trace business browser profile cannot disappear behind the older roster', () => {
   assert.equal(browserChecks.filter(name => name === 'trace-business').length, 1);
   assert.deepEqual(browserScreenshots['trace-business'], ['trace-business-desktop.png', 'trace-business-mobile.png', 'trace-business-incomplete.png']);
-  assert.equal(browserChecks.length, 16);
+  assert.equal(browserChecks.length, 17);
 });
 for (const suite of ['process-crash', 'quality-offline']) test(`${suite} missing raw evidence cannot pass`, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'release-current-main-')); t.after(() => rm(directory, { recursive: true, force: true }));
