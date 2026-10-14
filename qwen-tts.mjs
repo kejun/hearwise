@@ -50,7 +50,10 @@ export class QwenTts {
         if (event.type === 'error') return fail(new Error('语音服务拒绝请求，请检查 Key、地域、额度及模型权限'));
         const task = this.pending;
         if (!task) return;
-        if (event.type === 'response.created') task.responseId = event.response?.id;
+        // The first created event owns this request. A delayed/duplicate created
+        // event must not rebind it and admit another response's PCM or done.
+        if (event.type === 'response.created' && !task.responseId && typeof event.response?.id === 'string' && event.response.id.length)
+          task.responseId = event.response.id;
         if (event.type === 'response.audio.delta' && task.responseId && event.response_id === task.responseId) {
           const bytes = Buffer.concat([task.tail, Buffer.from(event.delta || '', 'base64')]);
           task.tail = bytes.subarray(bytes.length - bytes.length % 2);
