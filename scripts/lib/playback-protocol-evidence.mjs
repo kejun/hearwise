@@ -67,14 +67,22 @@ export const playbackEvidenceDefinition = {
   expectedImplementationCounterexample: expectedPlaybackCounterexample
 };
 
-export function playbackCommandShape(result, config, profile) {
-  const cli = path.resolve('node_modules/@informalsystems/quint/dist/src/cli.js');
+const repositoryPaths = root => /^[A-Za-z]:[\\/]/.test(root || '') ? path.win32 : path.posix;
+export function validPlaybackRepositoryRoot(root) {
+  if (typeof root !== 'string' || /[\r\n\0]/.test(root)) return false;
+  const paths = repositoryPaths(root);
+  return paths.isAbsolute(root) && paths.normalize(root) === root && !root.split(/[\\/]/).includes('..');
+}
+export function playbackCommandShape(result, config, profile, repositoryRoot = process.cwd()) {
+  if (!validPlaybackRepositoryRoot(repositoryRoot)) return null;
+  const paths = repositoryPaths(repositoryRoot), modelRoot = paths.join(repositoryRoot, 'verification', 'playback-protocol');
+  const cli = paths.join(repositoryRoot, 'node_modules', '@informalsystems', 'quint', 'dist', 'src', 'cli.js');
   const main = result.id.replace(/^(?:tlc|bounded|witnesses|simulation|negative)-/, '');
   const common = { '--init': config.init, '--step': config.step, '--invariant': config.invariant };
   let command, file, flags = {};
   if (result.kind === 'typecheck') { command = 'typecheck'; file = `${result.id.slice('typecheck-'.length)}.qnt`; }
   if (result.kind === 'finite-state-complete') { command = 'verify'; file = config.completeSpecification;
-    flags = { ...common, '--main': `${main}_complete`, '--backend': 'tlc', '--tlc-config': path.join(playbackModelRoot, 'tlc.json'), '--apalache-version': '0.62.1', '--verbosity': '3' }; }
+    flags = { ...common, '--main': `${main}_complete`, '--backend': 'tlc', '--tlc-config': paths.join(modelRoot, 'tlc.json'), '--apalache-version': '0.62.1', '--verbosity': '3' }; }
   if (result.kind === 'bounded-model-check') { command = 'verify'; file = config.specification;
     flags = { ...common, '--main': main, '--backend': 'apalache', '--max-steps': String(config.profiles[profile]?.apalacheDepth[main]), '--apalache-version': '0.62.1', '--verbosity': '3' }; }
   if (result.kind === 'model-negative') { command = 'verify'; file = config.negativeSpecification;
@@ -84,10 +92,10 @@ export function playbackCommandShape(result, config, profile) {
   if (result.kind === 'simulation') { command = 'run'; file = config.specification;
     flags = { ...common, '--main': main, '--backend': 'typescript', '--seed': config.simulation.seed,
       '--max-samples': String(config.simulation.samples), '--n-traces': String(config.simulation.selectedTraces), '--max-steps': String(config.simulation.maximumSteps), '--verbosity': '1' }; }
-  return command ? { prefix: [cli, command, path.join(playbackModelRoot, file)], flags } : null;
+  return command ? { prefix: [cli, command, paths.join(modelRoot, file)], flags } : null;
 }
-function validCommand(result, config, profile) {
-  const shape = playbackCommandShape(result, config, profile), argv = result.argv;
+function validCommand(result, config, profile, repositoryRoot) {
+  const shape = playbackCommandShape(result, config, profile, repositoryRoot), argv = result.argv;
   if (!shape || !Array.isArray(argv) || !isDeepStrictEqual(argv.slice(0, 3), shape.prefix)) return false;
   if (!Object.entries(shape.flags).every(([key, value]) => argv.filter(arg => arg === key).length === 1 && argv[argv.indexOf(key) + 1] === value)) return false;
   const extras = ['--server-endpoint', '--out-itf'];
@@ -106,7 +114,9 @@ export async function validatePlaybackEvidence(directory, options = {}) {
   try { report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8')); }
   catch { return summary; }
   if (!Array.isArray(report.results) || !Array.isArray(report.artifacts)) return summary;
-  const config = await loadPlaybackConfig();
+  const config = await loadPlaybackConfig(), repositoryRoot = report.execution?.repositoryRoot;
+  if (!validPlaybackRepositoryRoot(repositoryRoot)) summary.reasons.push('invalid_repository_root');
+  const root = validPlaybackRepositoryRoot(repositoryRoot) ? repositoryRoot : process.cwd(), paths = repositoryPaths(root);
   const fail = (id, reason) => { const row = summary.rows.find(entry => entry.id === id); if (row) { row.status = 'incomplete'; row.reasons ||= []; row.reasons.push(reason); } else summary.reasons.push(reason); };
   if (!isDeepStrictEqual(report.results.map(row => row.id).sort(), formalPlan(config).map(row => row.id).sort())) summary.reasons.push('wrong_exact_driver_plan');
   const verified = async file => {
@@ -115,7 +125,7 @@ export async function validatePlaybackEvidence(directory, options = {}) {
     const bytes = await readFile(path.join(directory, file)); if (digest(bytes) !== entry[0].sha256) throw new Error('Changed artifact'); return bytes.toString('utf8');
   };
   for (const result of report.results) {
-    if (playbackCommandShape(result, config, report.profile) && !validCommand(result, config, report.profile)) fail(result.id, 'wrong_formal_command');
+    if (playbackCommandShape(result, config, report.profile, root) && !validCommand(result, config, report.profile, root)) fail(result.id, 'wrong_formal_command');
     if (['finite-state-complete', 'bounded-model-check'].includes(result.kind)) {
       try {
         const bound = config.profiles[report.profile]?.apalacheDepth[result.id.replace(/^bounded-/, '')];
@@ -128,7 +138,7 @@ export async function validatePlaybackEvidence(directory, options = {}) {
         const metrics = tapMetrics(await verified(result.log));
         if (!metrics.tapComplete || metrics.tests !== config.regression.expectedTests || metrics.passed !== config.regression.expectedTests ||
             metrics.failed || metrics.skipped || metrics.todo || metrics.cancelled || config.regression.expectedTests < 1) fail(result.id, 'wrong_strict_regression_count');
-        const expected = ['--test', '--test-reporter=tap', '--test-timeout=30000', ...config.regression.files.map(file => path.resolve(file))];
+        const expected = ['--test', '--test-reporter=tap', '--test-timeout=30000', ...config.regression.files.map(file => paths.join(root, file))];
         if (!isDeepStrictEqual(result.argv, expected)) fail(result.id, 'wrong_regression_driver');
       } catch { fail(result.id, 'missing_regression_artifact'); }
     }

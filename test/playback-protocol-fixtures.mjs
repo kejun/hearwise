@@ -45,7 +45,7 @@ export async function gateFixture(t, traces, profile = 'fast') {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const config = await loadPlaybackConfig(), pinned = JSON.parse(await readFile(path.join(playbackModelRoot, 'toolchain.json'), 'utf8'));
   const report = { ...await playbackMetadata(), fixturePurpose: testOnly, profile, startedAt: stamp, finishedAt: stamp, complete: true, ok: true,
-    execution: { ...execution, complete: true }, domain: config, propertyCoverage: playbackCoverage(config), tools: { quint: pinned.quint.version,
+    execution: { ...execution, repositoryRoot: process.cwd(), complete: true }, domain: config, propertyCoverage: playbackCoverage(config), tools: { quint: pinned.quint.version,
       apalache: pinned.apalache.version, tlc: pinned.apalache.bundledTlcVersion, apalacheJarSha256: pinned.apalache.jarSha256,
       apalacheArchiveSha256: pinned.apalache.archiveSha256, java: 'openjdk version "21.0.0" TEST ONLY', node: process.version, sqlite: process.versions.sqlite }, results: [], artifacts: [] };
   const files = new Map(), row = id => report.results.find(result => result.id === id);

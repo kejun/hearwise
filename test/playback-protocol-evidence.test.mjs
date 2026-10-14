@@ -75,3 +75,13 @@ test('playback gate rejects rehashed actual binary-header loss or corruption ind
     mutate(replay.observations.at(-1).durable); await f.put(data, replays); reject(await f.check());
   }
 });
+
+test('playback gate accepts a consistent recorded CI checkout root but rejects mixed and missing roots', async t => {
+  const f = await gateFixture(t, traces), oldRoot = process.cwd(), ciRoot = '/home/runner/work/hearwise/hearwise';
+  f.report.execution.repositoryRoot = ciRoot;
+  for (const result of f.report.results) if (Array.isArray(result.argv)) result.argv = result.argv.map(arg => arg.startsWith(`${oldRoot}/`) ? ciRoot + arg.slice(oldRoot.length) : arg);
+  assert.equal((await f.check()).ok, true, 'A matching-source CI report is portable across checkout paths');
+  const command = f.row('tlc-pair').argv, original = command[2]; command[2] = oldRoot + original.slice(ciRoot.length);
+  reject(await f.check()); command[2] = original;
+  delete f.report.execution.repositoryRoot; reject(await f.check());
+});

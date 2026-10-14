@@ -26,6 +26,10 @@ simulation/negative/driver process deadlines, 240-second bounded-check deadlines
 and process-group cleanup. Each in-process real replay action has a 3-second
 bound; the adapter's cleanup has its own bounded settlement and restores globals.
 Regression commands run in the repository directory, not the evidence directory.
+The report records `execution.repositoryRoot`. Every formal command and regression
+file is checked against that one original checkout root, while source SHA, model
+and lock digests are checked against the current checkout. This permits independent
+validation of downloaded CI evidence at another path; missing or mixed roots fail.
 The optional deep run has its own 1,200-second parent bound. Interrupted, timed
 out, incomplete or missing evidence fails closed; a longer budget is not a retry
 policy for making a failed run green.

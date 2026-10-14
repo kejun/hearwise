@@ -18,7 +18,7 @@ async function runFormalProtocol(definition) {
   const directory = await mkdtemp(path.join(root, 'run-'));
   const context = await definition.metadata(), startedAt = new Date().toISOString();
   const report = { ...context, profile, startedAt, finishedAt: null, complete: false, ok: false, tools: null,
-    domain: config, propertyCoverage: definition.coverage(config), results: [], artifacts: [], execution: { complete: false, timedOut: false, interrupted: false } };
+    domain: config, propertyCoverage: definition.coverage(config), results: [], artifacts: [], execution: { repositoryRoot: sourceDirectory, complete: false, timedOut: false, interrupted: false } };
   await writeJson(path.join(directory, 'report.json'), report);
   console.log(`${definition.label} evidence: ${directory}`);
   const artifacts = new Set(), fixedTraces = [], simulationTraces = [];
@@ -132,7 +132,7 @@ async function runFormalProtocol(definition) {
     clearTimeout(overall); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
     report.finishedAt = new Date().toISOString();
     report.complete = !timedOut && !interrupted && report.results.length === formalPlan(config).length && report.results.every(row => row.complete);
-    report.execution = { complete: report.complete, timedOut, interrupted, code: report.error ? 1 : 0, signal: null };
+    report.execution = { repositoryRoot: sourceDirectory, complete: report.complete, timedOut, interrupted, code: report.error ? 1 : 0, signal: null };
     for (const file of artifacts) {
       try { report.artifacts.push({ path: file, sha256: digest(await readFile(path.join(directory, file))) }); }
       catch { report.complete = false; report.execution.complete = false; }
