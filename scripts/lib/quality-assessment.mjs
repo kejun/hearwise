@@ -5,6 +5,7 @@ import { hashBytes, hashJson, contractDigest, seriousErrorTypes, qualityBudgetCo
 import { scoreAsr, aggregateErrors } from './quality-metrics.mjs';
 import { sourceVersion } from './verification-evidence.mjs';
 import { asrParameters } from './quality-collector.mjs';
+import { validateQualityObservations } from './quality-observations.mjs';
 const same = (a, b) => assert.equal(contractDigest(a), contractDigest(b));
 const readJson = async filename => JSON.parse(await readFile(filename, 'utf8'));
 const validSha = value => /^[a-f0-9]{64}$/.test(value || '');
@@ -45,6 +46,7 @@ export async function readQualityCollection(directory, frozen, role) {
   for (const name of ['node','sqlite','platform','arch','os']) assert.ok(typeof source[name] === 'string' && source[name]);
   assert.equal(report.maxRunMs, config.maxRunMs);
   assert.ok(Date.parse(report.startedAt) >= Date.parse(frozen.frozenAt)); assert.ok(Date.parse(report.finishedAt) >= Date.parse(report.startedAt));
+  assert.ok(Date.parse(report.finishedAt) <= Date.now());
   assert.ok(Date.parse(report.finishedAt) - Date.parse(report.startedAt) <= report.maxRunMs + 20000);
   const expected = frozen.corpus.samples.filter(row => row.split === 'acceptance').flatMap(sample => sample.tasks.flatMap(kind =>
     Array.from({ length: frozen.config.repetitions }, (_, repetition) => ({ sample, kind, repetition, trialId: `${role}:${sample.id}:${kind}:${repetition}` }))));
@@ -62,14 +64,16 @@ export async function readQualityCollection(directory, frozen, role) {
     same(trial.config, config); assert.equal(trial.outputSha256, hashBytes(trial.result.output));
     assert.ok(Date.parse(trial.startedAt) >= Date.parse(report.startedAt)); assert.ok(Date.parse(trial.finishedAt) <= Date.parse(report.finishedAt));
     assert.ok(Date.parse(trial.finishedAt) >= Date.parse(trial.startedAt));
+    if (trials.length) assert.ok(Date.parse(trial.startedAt) >= Date.parse(trials.at(-1).finishedAt));
     assert.equal(trial.traceBuilds.length, 1); assert.equal(trial.traceBuilds[0].git_sha, source.sha); assert.equal(trial.traceBuilds[0].build_dirty, false); assert.equal(trial.traceBuilds[0].instrumentation_version, 3);
     assert.equal(trial.artifacts.length, 1); assert.equal(trial.artifacts[0].path, 'application.log');
     const log = await readFile(path.join(directory, `trial-${index}`, 'application.log')); assert.equal(hashBytes(log), trial.artifacts[0].sha256);
     const actualBuilds = [...new Set(log.toString().split('\n').filter(row => row.startsWith('execution_trace ')).map(row => JSON.stringify(JSON.parse(row.slice(16)).build)))].map(value => JSON.parse(value));
     same(actualBuilds, trial.traceBuilds);
-    const attempts = trial.provider.filter(row => row.attemptId), success = attempts.filter(row => row.status === 'succeeded');
+    const attempts = validateQualityObservations(trial.provider, { mode: 'live', kind: trial.kind, startedAt: trial.startedAt, finishedAt: trial.finishedAt, maxConnectionMs: config.maxConnectionMs }), success = attempts.filter(row => row.status === 'succeeded');
     assert.ok(attempts.length >= 1 && attempts.length <= (entry.kind === 'asr' ? 2 : 1)); assert.equal(success.length, 1);
     assert.equal(attempts.at(-1).status, 'succeeded');
+    for (let attemptIndex = 1; attemptIndex < attempts.length; attemptIndex++) assert.ok(Date.parse(attempts[attemptIndex].startedAt) >= Date.parse(attempts[attemptIndex - 1].completedAt));
     for (const row of attempts) {
       assert.equal(row.kind, entry.kind); assert.equal(row.mode, 'live'); assert.equal(row.evidenceKind, 'live-provider');
       assert.equal(row.endpoint, new URL(config[entry.kind === 'asr' ? 'asrEndpoint' : 'mtEndpoint']).href);
@@ -84,10 +88,16 @@ export async function readQualityCollection(directory, frozen, role) {
       assert.equal(trial.result.input, entry.sample.text); assert.equal(trial.result.source, entry.sample.language); assert.equal(trial.result.target, entry.sample.target);
       assert.equal(success[0].input, entry.sample.text.trim()); assert.equal(trial.result.output, success[0].output.trim());
       same(success[0].config, { translation_options: { source_lang: 'auto', target_lang: entry.sample.target } });
+      assert.equal(success[0].requestBytes, Buffer.byteLength(success[0].requestWire)); assert.equal(success[0].requestSha256, hashBytes(success[0].requestWire));
+      assert.ok(success[0].requestBytes <= frozen.config.budget.bounds.mt.providerRequestByteLimit);
+      same(JSON.parse(success[0].requestWire), { model: config.mtModel, messages: [{ role: 'user', content: entry.sample.text.trim() }], translation_options: { source_lang: 'auto', target_lang: entry.sample.target } });
     } else {
       const parameters = asrParameters(config, entry.sample.language); assert.ok(attempts.length <= parameters.length);
       for (const [attemptIndex, attempt] of attempts.entries()) same(attempt.config, { parameters: parameters[attemptIndex] });
       if (attempts.length === 2) { assert.equal(attempts[0].status, 'failed'); assert.equal(attempts[0].audioBytes, 0); }
+      const billing = frozen.config.budget.bounds.asr;
+      if (billing.durationBasis === 'provider-hard-session-duration') for (const attempt of attempts)
+        assert.ok(Date.parse(attempt.completedAt) - Date.parse(attempt.upstreamStartedAt) <= billing.providerHardSessionMs + billing.billingTailMs);
       assert.equal(trial.result.audioBytes, entry.sample.audio.bytes); assert.equal(success[0].audioBytes, entry.sample.audio.bytes);
       assert.ok(trial.result.events.some(row => row.event.type === 'finished'));
       assert.ok(!trial.result.events.some(row => row.event.type === 'error'));
@@ -107,17 +117,29 @@ export async function readQualityCollection(directory, frozen, role) {
     assert.equal(snap.id, budgetConfig.id); assert.equal(snap.currency, budgetConfig.currency); assert.equal(snap.ceilingMicros, budgetConfig.ceilingMicros);
     assert.equal(snap.reservedMicros, snap.attempts.reduce((sum, row) => sum + row.reserved_micros, 0)); assert.ok(snap.reservedMicros <= snap.ceilingMicros);
     assert.equal(new Set(snap.attempts.map(row => row.id)).size, snap.attempts.length);
-    for (const row of snap.attempts) assert.equal(row.reserved_micros, budgetConfig.attemptMicros[row.kind]);
+    for (const row of snap.attempts) { assert.equal(row.reserved_micros, budgetConfig.attemptMicros[row.kind]); assert.ok(Date.parse(row.reserved_at) < Date.parse(budgetConfig.expiresAt)); }
     for (const kind of ['asr','mt']) assert.ok(snap.attempts.filter(row => row.kind === kind).length <= budgetConfig.maxAttempts[kind]);
   }
+  const beforeRuns = report.budget.before.runs, afterRuns = report.budget.after.runs;
+  if (role === 'baseline') { assert.deepEqual(beforeRuns, []); assert.equal(report.budget.before.attempts.length, 0); }
+  else { assert.equal(beforeRuns.length, 1); assert.equal(beforeRuns[0].role, 'baseline'); assert.equal(beforeRuns[0].state, 'complete'); assert.ok(validSha(report.baselineCollectionSha256)); }
+  assert.equal(afterRuns.length, beforeRuns.length + 1); same(afterRuns.filter(row => row.role !== role), beforeRuns);
+  const claimed = afterRuns.filter(row => row.role === role); assert.equal(claimed.length, 1);
+  assert.equal(claimed[0].state, 'complete'); assert.equal(claimed[0].source_sha, source.sha); assert.equal(claimed[0].directory, report.outputDirectory);
+  assert.ok(Date.parse(claimed[0].started_at) >= Date.parse(report.startedAt) && Date.parse(claimed[0].started_at) <= Date.parse(trials[0].startedAt));
+  assert.ok(Date.parse(claimed[0].finished_at) >= Date.parse(trials.at(-1).finishedAt) && Date.parse(claimed[0].finished_at) <= Date.parse(report.finishedAt));
   same(report.budget.after.attempts.slice(0, report.budget.before.attempts.length), report.budget.before.attempts);
   const added = report.budget.after.attempts.slice(report.budget.before.attempts.length), observed = trials.flatMap(trial => trial.provider.filter(row => row.attemptId).map(row => ({ trial, row })));
   assert.equal(added.length, observed.length);
+  // Every sequential upstream attempt has its own preceding durable reservation:
+  // no duplicate reference, phantom reservation or order substitution.
+  same(observed.map(({ row }) => row.attemptId), added.map(row => String(row.id)));
   for (const { trial, row } of observed) {
     const reservation = added.filter(item => String(item.id) === row.attemptId); assert.equal(reservation.length, 1);
     assert.equal(reservation[0].kind, trial.kind); assert.equal(reservation[0].trial_id, trial.trialId);
     assert.ok(Date.parse(reservation[0].reserved_at) >= Date.parse(trial.startedAt)); assert.ok(Date.parse(reservation[0].reserved_at) <= Date.parse(row.completedAt));
     assert.ok(Date.parse(reservation[0].reserved_at) <= Date.parse(row.upstreamStartedAt));
+    assert.ok(Date.parse(row.upstreamStartedAt) < Date.parse(budgetConfig.expiresAt));
   }
   return { report, trials };
 }
@@ -156,6 +178,7 @@ export async function assessQuality({ frozen, baselineDirectory, candidateDirect
   try {
     const baseline = await readQualityCollection(baselineDirectory, frozen, 'baseline'), candidate = await readQualityCollection(candidateDirectory, frozen, 'candidate');
     assert.equal(baseline.report.budget.before.attempts.length, 0); same(baseline.report.budget.after, candidate.report.budget.before);
+    assert.equal(candidate.report.baselineCollectionSha256, hashBytes(await readFile(path.join(baselineDirectory, 'collection.json'))));
     assert.ok(Date.parse(candidate.report.startedAt) >= Date.parse(baseline.report.finishedAt));
     const review = await readJson(reviewFile); assert.equal(review.schemaVersion, 1); assert.equal(review.frozenDigest, frozen.digest); assert.equal(review.method, 'human-review');
     const all = [...baseline.trials, ...candidate.trials]; assert.equal(review.rows.length, all.length);
@@ -182,7 +205,7 @@ export async function assessQuality({ frozen, baselineDirectory, candidateDirect
     same(source, sourceVersion());
     return { ...metadata, finishedAt: new Date().toISOString(), complete: true, qualityEvaluated: true, properties,
       qualityStatus: comparison.passed ? 'passed' : 'failed', ...comparison, perSample: scored,
-      releaseEligible: !source.dirty, fullQualityAcceptance: comparison.passed && !source.dirty,
+      releaseEligible: comparison.passed && !source.dirty, fullQualityAcceptance: comparison.passed && !source.dirty,
       roleSources: { baseline: baseline.report.sourceStart, candidate: candidate.report.sourceStart },
       collections: { baseline: { path: path.resolve(baselineDirectory), sha256: hashBytes(await readFile(path.join(baselineDirectory, 'collection.json'))) },
         candidate: { path: path.resolve(candidateDirectory), sha256: hashBytes(await readFile(path.join(candidateDirectory, 'collection.json'))) } },

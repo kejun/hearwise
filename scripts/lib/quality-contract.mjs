@@ -52,7 +52,7 @@ export async function inspectQualityPlan(configFile, { now = Date.now() } = {}) 
     require(c && /^[a-f0-9]{40}$/.test(c.sourceSha || '') && text(c.asrModel) && text(c.mtModel) &&
       providerUrl(c.asrEndpoint, 'wss:') && providerUrl(c.mtEndpoint, 'https:'), `${role}_configuration_missing`);
     require(c?.requestTemplateVersion === 'hearwise-public-routes-v1' &&
-      ['classic', 'realtime'].includes(c?.captionMode) && c?.sentenceSilenceMs === 2500 && c?.maxConnectionMs >= 1000 && c.maxConnectionMs <= 120000 && Number.isSafeInteger(c.maxRunMs) && c.maxRunMs >= 1000 && c.maxRunMs <= 86400000, `${role}_unsupported_adapter_configuration`);
+      ['classic', 'realtime'].includes(c?.captionMode) && c?.sentenceSilenceMs === 2500 && Number.isSafeInteger(c?.maxConnectionMs) && c.maxConnectionMs >= 1000 && c.maxConnectionMs <= 120000 && Number.isSafeInteger(c.maxRunMs) && c.maxRunMs >= 1000 && c.maxRunMs <= 86400000, `${role}_unsupported_adapter_configuration`);
     if (/^[a-f0-9]{40}$/.test(c?.sourceSha || '')) {
       try { c.sourceTree = execFileSync('git', ['rev-parse', `${c.sourceSha}^{tree}`], { encoding: 'utf8', stdio: ['ignore','pipe','ignore'], timeout: 5000 }).trim();
         c.requestBuilderSha256 = hashBytes(execFileSync('git', ['show', `${c.sourceSha}:server.mjs`], { stdio: ['ignore','pipe','ignore'], timeout: 5000 }));
@@ -125,12 +125,15 @@ export async function inspectQualityPlan(configFile, { now = Date.now() } = {}) 
       } catch { require(false, `billing_document_missing:${kind}`); }
     } else require(false, `billing_document_missing:${kind}`);
     if (kind === 'asr') {
-      const maxConnectionMs = Math.max(...Object.values(config.roles || {}).map(role => role.maxConnectionMs || 0));
       const quantum = bound.billingQuantumMs, tail = bound.billingTailMs, minimum = bound.minimumBillableMs;
-      const upper = integer(quantum) && quantum > 0 && integer(tail) && integer(minimum) ? Math.ceil(Math.max(maxConnectionMs + tail, minimum) / quantum) * quantum : NaN;
+      const maxAudioMs = Math.max(...(samples || []).filter(sample => sample.tasks?.includes('asr')).map(sample => sample.audio?.durationMs ?? NaN));
+      const basis = bound.durationBasis === 'received-pcm-duration' && bound.providerChargesOnlyReceivedAudio === true ? maxAudioMs :
+        bound.durationBasis === 'provider-hard-session-duration' && integer(bound.providerHardSessionMs) && bound.providerHardSessionMs > 0 ? bound.providerHardSessionMs : NaN;
+      const upper = integer(quantum) && quantum > 0 && integer(tail) && integer(minimum) ? Math.ceil(Math.max(basis + tail, minimum) / quantum) * quantum : NaN;
       require(bound.inputUnit === 'millisecond' && bound.outputUnitsUpper === 0 && Number.isSafeInteger(upper) && bound.inputUnitsUpper >= upper, 'asr_duration_bound_unproven');
       for (const sample of samples || []) if (sample.tasks?.includes('asr') && sample.audio?.durationMs != null)
-        require(Object.values(config.roles || {}).every(role => sample.audio.durationMs + 15000 <= role.maxConnectionMs), `sample:${sample.id}:audio_exceeds_connection_cap`);
+        require(Object.values(config.roles || {}).every(role => sample.audio.durationMs + 15000 <= role.maxConnectionMs) &&
+          (bound.durationBasis !== 'provider-hard-session-duration' || sample.audio.durationMs + 15000 <= bound.providerHardSessionMs), `sample:${sample.id}:audio_exceeds_connection_cap`);
     } else {
       require(bound.inputUnit === 'token' && bound.outputUnit === 'token' && bound.tokenUpperBoundMethod === 'provider-hard-input-and-output-limits' &&
         integer(bound.providerInputTokenLimit) && bound.providerInputTokenLimit > 0 && integer(bound.providerOutputTokenLimit) && bound.providerOutputTokenLimit > 0 &&
@@ -155,18 +158,22 @@ export async function freezeQualityPlan(configFile, destination) {
     digest: inspected.digest, config: inspected.config, corpus: inspected.corpus, assets: inspected.assets };
   await writeFile(destination, JSON.stringify(frozen, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return frozen;
 }
-export async function readFrozenQualityPlan(filename) {
+export async function readFrozenQualityPlan(filename, { forCollection = true } = {}) {
   const frozen = JSON.parse(await readFile(filename, 'utf8'));
-  if (frozen.kind !== 'frozen-quality-plan' || !time(frozen.frozenAt)) throw new Error('INVALID_FREEZE');
+  if (frozen.schemaVersion !== qualityVersion || frozen.kind !== 'frozen-quality-plan' || !time(frozen.frozenAt) || Date.parse(frozen.frozenAt) > Date.now()) throw new Error('INVALID_FREEZE');
   const configPath = path.resolve(path.dirname(path.resolve(filename)), frozen.configFile);
-  const current = await inspectQualityPlan(configPath);
+  // Spending needs current approval; historical assessment checks approval at
+  // freeze time and every actual upstream start against its original expiry.
+  const current = await inspectQualityPlan(configPath, { now: forCollection ? Date.now() : Date.parse(frozen.frozenAt) });
   if (!current.eligibleForFreeze || current.digest !== frozen.digest || contractDigest({ config: frozen.config, corpus: frozen.corpus, assets: frozen.assets }) !== frozen.digest) throw new Error('FREEZE_CHANGED_OR_EXPIRED');
+  const approvals = [frozen.config.approval.at, frozen.config.budget.approvedAt, ...Object.values(frozen.config.budget.bounds).map(row => row.checkedAt), ...frozen.corpus.samples.map(row => row.gold.reviewedAt)];
+  if (approvals.some(value => Date.parse(value) > Date.parse(frozen.frozenAt))) throw new Error('FREEZE_PRECEDES_APPROVAL');
   return { ...frozen, freezePath: path.resolve(filename), configPath, freezeFileSha256: hashBytes(await readFile(filename)), corpusPath: current.corpusPath, estimate: current.estimate };
 }
 
 export function qualityBudgetConfig(frozen) {
   const b = frozen.config.budget;
-  return { id: b.id, currency: b.currency, ceilingMicros: b.ceilingMicros,
+  return { id: b.id, currency: b.currency, ceilingMicros: b.ceilingMicros, requireRunClaim: true,
     maxAttempts: frozen.estimate.attempts, attemptMicros: frozen.estimate.attemptMicros,
     expiresAt: new Date(Math.min(Date.parse(b.expiresAt), ...Object.values(b.bounds).map(row => Date.parse(row.validUntil)))).toISOString() };
 }

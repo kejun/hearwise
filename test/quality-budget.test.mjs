@@ -41,3 +41,33 @@ test('expiry and per-trial attempts remain fail closed even with unused global m
   assert.throws(() => expired.reserve({ kind: 'mt', trialId: 'one' }), /BUDGET_APPROVAL_EXPIRED/); assert.equal(expired.snapshot().attempts.length, 0);
   assert.throws(() => openQualityBudget(path.join(directory, 'invalid.sqlite'), { ...config, expiresAt: 'not-a-date' }, 'a'.repeat(64)), /INVALID_BUDGET/);
 });
+test('role claims enforce baseline-first order and one owner across connections and reopen', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'quality-claims-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const config = { id: 'roles', currency: 'CNY', ceilingMicros: 100, requireRunClaim: true, maxAttempts: { asr: 10, mt: 10 }, attemptMicros: { asr: 1, mt: 1 } };
+  const filename = path.join(directory, 'ledger.sqlite'); let a = openQualityBudget(filename, config, 'a'.repeat(64));
+  const b = openQualityBudget(filename, config, 'a'.repeat(64)); t.after(() => { a.close(); b.close(); });
+  const claim = (budget, role, expectedSnapshot) => budget.claimRun({ role, sourceSha: 'b'.repeat(40), directory: path.join(directory, role), expectedSnapshot });
+  const empty = a.snapshot();
+  assert.throws(() => claim(a, 'candidate', empty), /RUN_ORDER/); assert.equal(a.snapshot().attempts.length, 0);
+  assert.throws(() => a.reserve({ kind: 'mt', trialId: 'baseline:s:mt:0' }), /RUN_CLAIM_MISSING/);
+  claim(a, 'baseline', empty); assert.throws(() => claim(b, 'baseline', empty), /BUDGET_SNAPSHOT_CHANGED/);
+  assert.throws(() => claim(b, 'candidate', b.snapshot()), /RUN_ORDER/);
+  a.reserve({ kind: 'mt', trialId: 'baseline:s:mt:0' }); a.finishRun('baseline', true);
+  const baselineAfter = a.snapshot(); a.close(); a = openQualityBudget(filename, config, 'a'.repeat(64));
+  assert.deepEqual(a.snapshot(), baselineAfter); claim(a, 'candidate', baselineAfter);
+  assert.throws(() => claim(b, 'candidate', baselineAfter), /BUDGET_SNAPSHOT_CHANGED/);
+  a.reserve({ kind: 'mt', trialId: 'candidate:s:mt:0' }); a.finishRun('candidate', false);
+  assert.throws(() => claim(b, 'candidate', b.snapshot()), /RUN_ORDER/); assert.equal(b.snapshot().attempts.length, 2);
+});
+test('SQLite lock wait cannot reserve after approval expiry', { timeout: 5000 }, async t => {
+  const { Worker } = await import('node:worker_threads'), { once } = await import('node:events');
+  const directory = await mkdtemp(path.join(tmpdir(), 'quality-expiry-lock-')), filename = path.join(directory, 'budget.sqlite'); let budget;
+  const worker = new Worker(`const {parentPort,workerData}=require('node:worker_threads');const {DatabaseSync}=require('node:sqlite');parentPort.postMessage('ready');parentPort.once('message',()=>{const db=new DatabaseSync(workerData);db.exec('BEGIN IMMEDIATE');parentPort.postMessage('locked');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,800);db.exec('COMMIT');db.close();});`, { eval: true, workerData: filename });
+  t.after(async () => { await worker.terminate(); budget?.close(); await rm(directory, { recursive: true, force: true }); });
+  await once(worker, 'message'); const expires = Date.now() + 500;
+  budget = openQualityBudget(filename, { id: 'expiry-lock', currency: 'CNY', ceilingMicros: 10, maxAttempts: { asr: 1, mt: 1 }, attemptMicros: { asr: 1, mt: 1 }, expiresAt: new Date(expires).toISOString() }, 'a'.repeat(64));
+  const locked = once(worker, 'message'); worker.postMessage('lock'); await locked;
+  assert.ok(Date.now() < expires, 'reservation starts while its approval is still valid');
+  assert.throws(() => budget.reserve({ kind: 'mt', trialId: 'before-lock-expiry' }), /BUDGET_APPROVAL_EXPIRED/);
+  assert.ok(Date.now() >= expires); assert.equal(budget.snapshot().attempts.length, 0); assert.equal(budget.snapshot().reservedMicros, 0);
+});

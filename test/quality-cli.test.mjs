@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises'; import path from 'node:path'; import { tmpdir } from 'node:os';
 import { writeQualityPlanFixture } from '../test-support/quality-plan-fixture.mjs';
 import { freezeQualityPlan } from '../scripts/lib/quality-contract.mjs';
-const run = (args, env = {}) => { const { NODE_TEST_CONTEXT, ...base } = process.env;
+const run = (args, env = {}) => { const { NODE_TEST_CONTEXT, HEARWISE_QUALITY_API_KEY, ...base } = process.env;
   return spawnSync(process.execPath, ['scripts/evaluate-asr-translation-quality.mjs', ...args], { env: { ...base, ...env }, encoding: 'utf8', timeout: 15000 }); };
 test('default command only plans and reports unknown real evaluation requirements', () => {
   const result = run([]); assert.equal(result.status, 0, result.stderr); const report = JSON.parse(result.stdout);
@@ -20,4 +20,7 @@ test('incomplete approval, offline/live confusion and ordinary CI refuse live st
   const result = run(['collect','--freeze',freeze,'--role','candidate','--out',path.join(directory,'run'),'--live','--approve-budget',f.config.budget.id], { CI: 'true', HEARWISE_QUALITY_API_KEY: 'synthetic-never-used-key' });
   assert.equal(result.status, 1); assert.match(result.stderr, /EXPLICIT_LIVE_BUDGET_APPROVAL_REQUIRED/);
   assert.doesNotMatch(result.stdout + result.stderr, /synthetic-never-used-key/);
+  const missingBaseline = run(['collect','--freeze',freeze,'--role','candidate','--out',path.join(directory,'run'),'--live','--approve-budget',f.config.budget.id], { CI: '' });
+  assert.equal(missingBaseline.status, 1); assert.match(missingBaseline.stderr, /COMPLETE_BASELINE_REQUIRED/);
+  assert.doesNotMatch(missingBaseline.stderr, /DEDICATED_OPERATOR_KEY_REQUIRED/, 'baseline is rejected before any credential is needed');
 });

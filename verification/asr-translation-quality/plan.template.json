@@ -100,7 +100,10 @@
         "billingQuantumMs": null,
         "billingTailMs": null,
         "minimumBillableMs": null,
-        "appliesTo": []
+        "appliesTo": [],
+        "durationBasis": null,
+        "providerChargesOnlyReceivedAudio": false,
+        "providerHardSessionMs": null
       },
       "mt": {
         "reviewed": false,

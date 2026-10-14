@@ -73,6 +73,7 @@ export async function writeSyntheticAssessmentFixture(directory) {
     budget: { id: 'synthetic-contract-budget', currency: 'CNY', ceilingMicros: 1000, expiresAt: date(3600000),
       bounds: Object.fromEntries(['asr', 'mt'].map(kind => [kind, { inputUnitsUpper: 1, outputUnitsUpper: 1, inputUnitMicros: 1,
         outputUnitMicros: 1, fixedMicros: 1, validUntil: date(3600000) }])) } };
+  config.budget.bounds.mt.providerRequestByteLimit = 12000;
   const corpus = { id: 'synthetic-contract-corpus', samples: [
     { id: 'speech', split: 'acceptance', language: 'en', target: 'Chinese', tasks: ['asr', 'mt'], text: 'Do not pay 15.',
       asrMetric: 'wer', audio: { bytes: 640 }, gold: { transcripts: ['Do not pay 15.'] } },
@@ -89,10 +90,10 @@ export async function writeSyntheticAssessmentFixture(directory) {
   const frozen = { kind: 'synthetic-assessment-contract-fixture', fixtureLabel: contractFixtureLabel,
     frozenAt: date(-60000), config, corpus, digest: contractDigest({ config, corpus }), freezeFileSha256: hashBytes('synthetic freeze file only'),
     estimate: estimateQualityBudget(config, corpus.samples) };
-  const budgetConfig = qualityBudgetConfig(frozen), attempts = [], reviewRows = [];
+  const budgetConfig = qualityBudgetConfig(frozen), attempts = [], reviewRows = [], runs = [];
   const snapshot = () => ({ id: budgetConfig.id, currency: budgetConfig.currency, ceilingMicros: budgetConfig.ceilingMicros,
     binding: hashJson({ config: budgetConfig, freezeDigest: frozen.digest }), freezeDigest: frozen.digest,
-    reservedMicros: attempts.reduce((sum, row) => sum + row.reserved_micros, 0), attempts: structuredClone(attempts) });
+    reservedMicros: attempts.reduce((sum, row) => sum + row.reserved_micros, 0), attempts: structuredClone(attempts), runs: structuredClone(runs) });
   const bundle = { directory, frozen, baselineDirectory: path.join(directory, 'baseline'), candidateDirectory: path.join(directory, 'candidate'),
     reviewFile: path.join(directory, 'synthetic-human-review-contract.json') };
   for (const [roleIndex, role] of ['baseline', 'candidate'].entries()) {
@@ -100,7 +101,7 @@ export async function writeSyntheticAssessmentFixture(directory) {
     const source = structuredClone(sources[roleIndex]);
     const report = { schemaVersion: 1, kind: 'quality-collection', fixtureLabel: contractFixtureLabel, mode: 'live', evidenceKind: 'live-provider', role,
       complete: true, cleanup: true, interrupted: false, qualityEvaluated: false, qualityStatus: 'not_run',
-      frozenDigest: frozen.digest, freezeFileSha256: frozen.freezeFileSha256, frozenAt: frozen.frozenAt,
+      outputDirectory: path.resolve(roleDirectory), frozenDigest: frozen.digest, freezeFileSha256: frozen.freezeFileSha256, frozenAt: frozen.frozenAt,
       sourceStart: source, sourceEnd: structuredClone(source), maxRunMs: roleConfig.maxRunMs,
       startedAt: date(roleStart), finishedAt: date(roleStart + 10000), trials: [], budget: { before: snapshot() } };
     for (const sample of corpus.samples.filter(row => row.split === 'acceptance')) for (const kind of sample.tasks) for (let repetition = 0; repetition < config.repetitions; repetition++) {
@@ -118,6 +119,8 @@ export async function writeSyntheticAssessmentFixture(directory) {
       if (kind === 'mt') {
         Object.assign(trial.result, { input: sample.text, source: sample.language, target: sample.target });
         Object.assign(provider, { input: sample.text, output, config: { translation_options: { source_lang: 'auto', target_lang: sample.target } } });
+        provider.requestWire = JSON.stringify({ model: roleConfig.mtModel, messages: [{ role: 'user', content: sample.text }], translation_options: { source_lang: 'auto', target_lang: sample.target } });
+        provider.requestBytes = Buffer.byteLength(provider.requestWire); provider.requestSha256 = hashBytes(provider.requestWire);
       } else {
         const segment = { id: `synthetic-segment-${index}`, original_text: output, listening_id: 'synthetic-listening', run_id: 'synthetic-run', asr_sentence_id: 'synthetic-sentence' };
         const segments = sample.silence ? [] : [segment];
@@ -135,6 +138,8 @@ export async function writeSyntheticAssessmentFixture(directory) {
       reviewRows.push({ trialId, outputSha256: trial.outputSha256, reviewer: 'synthetic-contract-reviewer', reviewedAt: date(-1000),
         serious: Object.fromEntries(seriousErrorTypes.map(type => [type, false])), ...(kind === 'mt' ? { meaningScore: 4 } : {}) });
     }
+    runs.push({ role, source_sha: roleConfig.sourceSha, directory: path.resolve(roleDirectory), state: 'complete', started_at: report.startedAt, finished_at: report.finishedAt });
+    if (role === 'candidate') report.baselineCollectionSha256 = hashBytes(await readFile(path.join(bundle.baselineDirectory, 'collection.json')));
     report.expectedTrials = report.trials.length; report.budget.after = snapshot();
     await writeFixtureJson(path.join(roleDirectory, 'collection.json'), report);
   }

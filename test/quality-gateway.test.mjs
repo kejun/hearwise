@@ -59,7 +59,7 @@ async function fixtures(t, options = {}) {
     asr: `ws://127.0.0.1:${asr.address().port}`, mt: `http://127.0.0.1:${mt.address().port}`, key },
     expected: { ...expected, ...options.expected }, reserve: options.reserve || (async request => {
       reserved.push(request); return `attempt-${reserved.length}`;
-    }), observe: value => observed.push(value), signal: options.signal });
+    }), observe: value => { observed.push(value); options.observe?.(value); }, signal: options.signal });
   t.after(async () => {
     for (const client of clients) client.terminate();
     await gateway.close();
@@ -402,4 +402,19 @@ test('full MT wire-byte bound rejects equivalent whitespace and escape inflation
   const observation = f.gateway.observations.find(row => row.status === 'succeeded');
   assert.equal(observation.requestBytes, limit); assert.equal(observation.requestWire, normal);
   assert.equal(observation.requestSha256, (await import('node:crypto')).createHash('sha256').update(normal).digest('hex'));
+});
+test('approval expiry while reserving blocks the actual upstream send but keeps its reservation', async t => {
+  const f = await fixtures(t, { expected: { approvalExpiresAt: new Date(Date.now() + 100).toISOString() }, reserve: async () => { await delay(150); return 'already-persisted-attempt'; } });
+  const response = await f.post(translation()); assert.equal(response.status, 403); await response.arrayBuffer();
+  assert.equal(f.count.mt, 0); assert.equal(f.count.asr, 0);
+  const row = f.gateway.observations[0]; assert.equal(row.attemptId, 'already-persisted-attempt'); assert.equal(row.status, 'denied'); assert.equal(row.upstreamStartedAt, undefined);
+});
+test('a synchronous observation crossing expiry cannot open an upstream request', async t => {
+  let blocked = false;
+  const f = await fixtures(t, { expected: { approvalExpiresAt: new Date(Date.now() + 150).toISOString() }, observe: row => {
+    if (row.kind === 'mt' && row.status === 'running') { blocked = true; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 220); }
+  } });
+  const response = await f.post(translation()); assert.equal(response.status, 403); await response.arrayBuffer();
+  assert.equal(blocked, true); assert.equal(f.reserved.length, 1); assert.equal(f.count.mt, 0);
+  const row = f.gateway.observations[0]; assert.equal(row.status, 'denied'); assert.equal(row.upstreamStartedAt, undefined);
 });

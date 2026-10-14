@@ -18,7 +18,7 @@ export async function writeQualityPlanFixture(directory) {
   for (const [kind, bound] of Object.entries(config.budget.bounds)) bound.appliesTo = Object.values(config.roles).map(role => ({ model: role[`${kind}Model`], endpoint: role[`${kind}Endpoint`], currency: config.budget.currency }));
   await writeFile(path.join(directory, 'offline-billing.txt'), 'offline synthetic billing fixture');
   for (const bound of Object.values(config.budget.bounds)) { bound.sourceDocumentFile = 'offline-billing.txt'; bound.sourceDocumentSha256 = hashBytes('offline synthetic billing fixture'); }
-  Object.assign(config.budget.bounds.asr, { inputUnit: 'millisecond', inputUnitsUpper: 121000, outputUnitsUpper: 0, billingQuantumMs: 1000, billingTailMs: 1000, minimumBillableMs: 1000 });
+  Object.assign(config.budget.bounds.asr, { durationBasis: 'received-pcm-duration', providerChargesOnlyReceivedAudio: true, inputUnit: 'millisecond', inputUnitsUpper: 121000, outputUnitsUpper: 0, billingQuantumMs: 1000, billingTailMs: 1000, minimumBillableMs: 1000 });
   Object.assign(config.budget.bounds.mt, { inputUnit: 'token', outputUnit: 'token', inputUnitsUpper: 5000, outputUnitsUpper: 5000, providerInputTokenLimit: 5000, providerOutputTokenLimit: 5000, providerRequestByteLimit: 12000, tokenUpperBoundMethod: 'provider-hard-input-and-output-limits' });
   for (const [index, sample] of corpus.samples.entries()) {
     sample.kind = 'real-recording-and-human-text'; sample.provenance.redistributionApproved = true;

@@ -3,6 +3,7 @@
 import http from 'node:http';
 import { once } from 'node:events';
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 
 const terminal = new Set(['succeeded', 'failed', 'denied', 'cancelled']);
@@ -38,9 +39,11 @@ function validateExpected(value) {
   if (!boundedInt(result.maxAudioBytes, 2, 32 * 1024 * 1024) || result.maxAudioBytes % 2) throw fault('INVALID_AUDIO_LIMIT');
   result.maxConnectionMs ??= 30000;
   result.maxMtInputBytes ??= 256 * 1024;
+  result.maxMtRequestBytes ??= result.maxMtInputBytes + 4096;
   result.maxResponseBytes ??= 1024 * 1024;
+  if (result.approvalExpiresAt !== undefined && !Number.isFinite(Date.parse(result.approvalExpiresAt))) throw fault('INVALID_GATEWAY_LIMIT');
   if (!boundedInt(result.maxConnectionMs, 1, 120000) || !boundedInt(result.maxMtInputBytes, 1, 1024 * 1024) ||
-    !boundedInt(result.maxResponseBytes, 256, 8 * 1024 * 1024)) throw fault('INVALID_GATEWAY_LIMIT');
+    !boundedInt(result.maxMtRequestBytes, 1, 2 * 1024 * 1024) || !boundedInt(result.maxResponseBytes, 256, 8 * 1024 * 1024)) throw fault('INVALID_GATEWAY_LIMIT');
   if (typeof result.mtTarget !== 'string' || !/^[\p{L} -]{1,64}$/u.test(result.mtTarget)) throw fault('INVALID_MT_TARGET');
   result.asrParameters = Array.isArray(result.asrParameters) ? result.asrParameters : [result.asrParameters];
   if (!result.asrParameters.length || result.asrParameters.length > 4) throw fault('INVALID_ASR_PARAMETERS');
@@ -83,14 +86,14 @@ function validTranslation(body, expected, inputs) {
     keysAre(body.translation_options, ['source_lang', 'target_lang']) && body.translation_options.source_lang === 'auto' &&
     body.translation_options.target_lang === expected.mtTarget;
 }
-async function readBody(stream, limit, limitCode = 'BODY_LIMIT') {
+async function readBody(stream, limit, limitCode = 'BODY_LIMIT', asBuffer = false) {
   const chunks = []; let size = 0;
-  for await (const chunk of stream) {
+  for await (const chunk of (stream.iterator?.({ destroyOnReturn: false }) || stream)) {
     size += chunk.length;
     if (size > limit) throw fault(limitCode);
     chunks.push(Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString('utf8');
+  const bytes = Buffer.concat(chunks); return asBuffer ? bytes : bytes.toString('utf8');
 }
 
 /**
@@ -179,17 +182,20 @@ export async function createQualityGateway({ mode, upstream, expected: suppliedE
     const cancelled = () => { if (!res.writableEnded) abort('CLIENT_CANCELLED'); };
     res.on('close', cancelled);
     try {
-      const raw = await readBody(req, expected.maxMtInputBytes + 4096);
+      const wire = await readBody(req, expected.maxMtRequestBytes, 'BODY_LIMIT', true), raw = wire.toString('utf8');
       if (controller.signal.aborted || closed) return;
+      if (!Buffer.from(raw, 'utf8').equals(wire)) throw fault('MT_REQUEST_DENIED');
       let body; try { body = JSON.parse(raw); } catch { throw fault('MT_REQUEST_DENIED'); }
       if (hasSecret(raw) || hasSecret(body) || !validTranslation(body, expected, inputs)) throw fault('MT_REQUEST_DENIED');
       row = record('mt', { translation_options: body.translation_options });
       row.input = body.messages[0].content;
+      row.requestBytes = wire.length; row.requestWire = raw; row.requestSha256 = createHash('sha256').update(wire).digest('hex');
       await reserveCall(row, { inputBytes: Buffer.byteLength(row.input), maxConnectionMs: expected.maxConnectionMs,
-        maxResponseBytes: expected.maxResponseBytes });
+        maxResponseBytes: expected.maxResponseBytes, requestBytes: row.requestBytes, requestSha256: row.requestSha256 });
       if (controller.signal.aborted || closed) return;
-      row.upstreamStartedAt = new Date().toISOString();
       update(row, 'running');
+      if (expected.approvalExpiresAt && Date.now() >= Date.parse(expected.approvalExpiresAt)) throw fault('BUDGET_REJECTED');
+      row.upstreamStartedAt = new Date().toISOString();
       const response = await fetch(urls.mt, { method: 'POST', headers: { Authorization: `Bearer ${upstream.key}`, 'Content-Type': 'application/json' },
         body: raw, signal: controller.signal, redirect: 'error' });
       row.httpStatus = response.status;
@@ -205,6 +211,7 @@ export async function createQualityGateway({ mode, upstream, expected: suppliedE
         responseId: metadataString(result.id, result.response_id), requestId: metadataString(result.request_id) });
       respond(res, 200, { choices: [{ message: { content: output } }], ...(usage && { usage }) });
     } catch (error) {
+      if (!req.complete) res.once('finish', () => req.destroy());
       if (!row) row = record('mt');
       const known = new Set(['MT_REQUEST_DENIED', 'BODY_LIMIT', 'BUDGET_REJECTED', 'MT_UPSTREAM_FAILED', 'MT_RESPONSE_INVALID', 'MT_RESPONSE_LIMIT', 'UPSTREAM_CREDENTIAL_ECHO']);
       const code = known.has(error.code) ? error.code : controller.signal.aborted ? 'GATEWAY_CANCELLED' : 'MT_UPSTREAM_FAILED';
@@ -267,6 +274,7 @@ export async function createQualityGateway({ mode, upstream, expected: suppliedE
         row = record('asr', { parameters: message.payload.parameters }); row.audioBytes = 0; row.outputs = [];
         await reserveCall(row, { maxAudioBytes: expected.maxAudioBytes, maxConnectionMs: expected.maxConnectionMs });
         if (finished || closed) return;
+        if (expected.approvalExpiresAt && Date.now() >= Date.parse(expected.approvalExpiresAt)) throw fault('BUDGET_REJECTED');
         row.upstreamStartedAt = new Date().toISOString();
         provider = new WebSocket(urls.asr, { headers: { Authorization: `Bearer ${upstream.key}` },
           handshakeTimeout: expected.maxConnectionMs, maxPayload: expected.maxResponseBytes, followRedirects: false, perMessageDeflate: false });

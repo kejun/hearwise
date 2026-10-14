@@ -54,10 +54,11 @@ async function main() {
   }
   if (!['collect','prepare-review','assess'].includes(command)) throw new Error('UNKNOWN_COMMAND');
   if (!values.freeze) throw new Error('FREEZE_REQUIRED');
-  const frozen = await readFrozenQualityPlan(values.freeze);
+  const frozen = await readFrozenQualityPlan(values.freeze, { forCollection: command === 'collect' });
   if (command === 'collect') {
     if (!values.live || values['approve-budget'] !== frozen.config.budget.id || process.env.CI) throw new Error('EXPLICIT_LIVE_BUDGET_APPROVAL_REQUIRED');
     if (!['baseline','candidate'].includes(values.role) || !values.out) throw new Error('ROLE_AND_FRESH_OUTPUT_REQUIRED');
+    if (values.role === 'candidate' && !values.baseline) throw new Error('COMPLETE_BASELINE_REQUIRED');
     // This is deliberately after the full frozen plan, source, rights and budget
     // preflight. Never print or copy this value to the application child.
     const key = process.env.HEARWISE_QUALITY_API_KEY;
@@ -67,7 +68,7 @@ async function main() {
     try {
       const role = frozen.config.roles[values.role];
       const report = await collectQualityRun({ frozen, role: values.role, directory: values.out, mode: 'live', liveAuthorized: true,
-        upstream: { asr: role.asrEndpoint, mt: role.mtEndpoint, key: key.trim() }, signal: controller.signal });
+        upstream: { asr: role.asrEndpoint, mt: role.mtEndpoint, key: key.trim() }, signal: controller.signal, baselineDirectory: values.baseline });
       console.log(JSON.stringify({ collectionComplete: report.complete, qualityStatus: 'not_run', qualityEvaluated: false, reviewRequired: true, directory: values.out }));
       process.exitCode = report.complete ? 0 : 1;
     } finally { process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel); }

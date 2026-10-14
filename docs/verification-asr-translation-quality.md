@@ -25,12 +25,14 @@ npm run quality:asr-mt -- check-offline --out verification-evidence/asr-translat
 ```sh
 npm run quality:asr-mt -- freeze --config /approved/plan.json --out /approved/frozen.json
 npm run quality:asr-mt -- collect --freeze /approved/frozen.json --role baseline --out /evidence/baseline --live --approve-budget APPROVED_ID
-npm run quality:asr-mt -- collect --freeze /approved/frozen.json --role candidate --out /evidence/candidate --live --approve-budget APPROVED_ID
+npm run quality:asr-mt -- collect --freeze /approved/frozen.json --role candidate --baseline /evidence/baseline --out /evidence/candidate --live --approve-budget APPROVED_ID
 npm run quality:asr-mt -- prepare-review --freeze /approved/frozen.json --baseline /evidence/baseline --candidate /evidence/candidate --out /evidence/review.json
 npm run quality:asr-mt -- assess --freeze /approved/frozen.json --baseline /evidence/baseline --candidate /evidence/candidate --reviews /evidence/review.json --out /evidence/assessment.json
 ```
 
-每个 role 在其批准的干净 SHA 上构建并运行；两个 Git 对象须本地可读取。两个版本都须包含此采集工具。冻结计划、真实音频、计费文档及输出放在 checkout 外，两个 role 读取同一份冻结文件和同一预算数据库。输出目录/冻结文件只新建，不覆盖。基线必须先完成；候选接续同一持久预算快照。失败/取消后不自动重跑全部采集，不删除预算账本以“恢复额度”。
+每个 role 在其批准的干净 SHA 上构建并运行；两个 Git 对象须本地可读取。两个版本都须包含此采集工具。冻结计划、真实音频、计费文档及输出放在 checkout 外，两个 role 读取同一份冻结文件和同一预算数据库。输出目录/冻结文件只新建，不覆盖。基线必须先完成；候选在任何外呼前独立读回完整 baseline 附件，再接续同一持久预算快照。账本在事务内只允许每个角色 claim 一次；并发运行或重启不能另领同一角色。失败/取消后不自动重跑全部采集，不删除预算账本以“恢复额度”。
+
+批准窗口限制新尝试的发起时间；已在有效期内发出的结果可以稍后人工评审。历史 assessment 按冻结时的批准及每次实际发起时间核验，不通过延长原预算来评审旧结果。
 
 未来操作者通过自己的受控环境提供 `HEARWISE_QUALITY_API_KEY`；不要将密钥写入计划、命令参数、仓库、聊天或报告。创建/配置凭据和真实付费执行需要独立授权，配置里的 `approvedBy` 或 `--approve-budget` 本身不会产生授权。当前实现从未运行该 live 路径。
 
@@ -67,6 +69,8 @@ MT 由具名双语评审者对每条输出打 0–4 分，平均 `score/4` 为�
 - 1：主要含义错误或大幅遗漏。
 - 0：无关、无法理解或没有有效含义。
 
+归一化评分不是被保留事实的精确比例；v1 的绝对阈值按每个语言/指标组独立应用，不把 CER 与 WER 当成跨语言等难度量表。
+
 每条 ASR/MT 输出均必须独立标记 number、negation、condition、attribution、omission 五类严重错误；有错误须附具体说明。数字/单位/否定反转/条件变化/人物归属改变等不能被平均分掩盖。候选任一严重错误直接否决；MT 0/1 分必须标出至少一项严重错误。参考译文不是唯一合法字符串，合理多解由人工按固定规则判断，不能用精确字符串匹配代替语义评价。
 
 候选须同时满足 ASR 绝对错误/遗漏上限和对基线的最大退化、MT 最低含义保留率和最大退化；静音幻觉与严重错误上限固定为零。每个 role 使用相同样本和 2–10 次已冻结重复，报告 distinct output 数及范围。固定顺序、无随机抽样，不声称统计置信区间或总体代表性。若要校准阈值，先用隔离开发集做试点，再在任何候选验收输出产生前确认，不能看结果后降低阈值。
@@ -85,12 +89,12 @@ ASR 的 source/target 设置为同一语言以使用现有直通，避免每个�
 
 ## 费用上限如何成立
 
-预算是同一批准 ID 的独立 SQLite 账本，非生产数据库表。baseline/candidate/restart 共享冻结的绝对路径、批准配置与冻结摘要。`BEGIN IMMEDIATE`、`synchronous=FULL` 将最坏费用和尝试占用提交后，gateway 才连接上游。两连接也不能各自重置额度。余额不足/过期/绑定改变/每试次次数耗尽时零新增上游调用；取消、超时、错误和未确认结果不退款。
+预算是同一批准 ID 的独立 SQLite 账本，非生产数据库表。baseline/candidate/restart 共享冻结的绝对路径、批准配置与冻结摘要。`BEGIN IMMEDIATE`、`synchronous=FULL` 将最坏费用和尝试占用提交后，gateway 才连接上游。两连接也不能各自重置额度。取得 SQLite 写锁后及实际发出前重新检查有效期；余额不足/过期/绑定改变/每试次次数耗尽时零新增上游调用；取消、超时、错误和未确认结果不退款。
 
 费用使用同一币种的整数 micro-unit（1/1,000,000 币种单位），单价须向上取整，不靠折扣或缓存保证上限。每次预留为输入上界×输入单价 + 输出上界×输出单价 + 固定费用；总计划包含两角色、全部重复及每个 ASR 的两次最坏尝试。必须以官方文档快照/哈希、有效期、审核者、具体模型/endpoint/币种和推导说明证明所有收费项目都被覆盖：
 
-- ASR 输入按连接 wall-clock 上限，加已审定结束尾差、最小计费和向上计费粒度计量；不能将 90 秒音频写成 1 秒预算。若服务按其他方式计费，本适配器不支持该未证明的界限。
-- MT 按该供应商实际强制的最大输入/输出 token 数预留，并核实际完整请求字节不超过已审的请求界限。响应 byte cap 和关闭 HTTP 连接都不等于供应商停止生成或计费；隐藏推理/附加费用不明就拒启动。
+- ASR 必须有官方明确依据：仅按已接收 PCM 音频时长计费时，由实际字节数给出上界；否则须有供应商强制的会话时长上限，并按该硬上限预留。两者都加已审定计费尾差、最小收费与向上计费粒度；不能将 90 秒音频写成 1 秒预算。本地 JavaScript timeout 只是采集期限，不证明供应商已停止计费；两种依据均未知或存在未覆盖收费时拒绝 live。
+- MT 按该供应商实际强制的最大输入/输出 token 数预留；gateway 在预留前按真实完整 UTF-8 wire 字节拒绝超界，并记录原 wire/字节数/摘要供评估器重核，空白或转义膨胀不能绕过已审界限。响应 byte cap 和关闭 HTTP 连接都不等于供应商停止生成或计费；隐藏推理/附加费用不明就拒启动。
 - 模型/地区/端点不同必须明确覆盖各配置；一个文档 URL 或 `reviewed:true` 不是自动价格认证，负责人须核实官方硬界限及单价。当前没有填写任何真实计费值，因此 live 默认被拒。
 
 不普遍强制用户另建账户或更改账户限额。如果明确可验证的专用账户硬封顶可作为额外保护，应另行确认；余额提醒/soft quota 不能代替未知最坏费用上界。账本保护本评测工具发出的请求，不保证其他客户端/账户并发消费或供应商账单的全局总额；不删除/复制账本，也不在未新批准的情况下重新开始新预算 ID。

@@ -32,6 +32,8 @@ test('billing bounds cover actual connection duration, payload, model and endpoi
   const f = await fixture(t);
   for (const [change, code] of [
     [c => c.budget.bounds.asr.inputUnitsUpper = 1000, 'asr_duration_bound_unproven'],
+    [c => c.budget.bounds.asr.durationBasis = null, 'asr_duration_bound_unproven'],
+    [c => Object.assign(c.budget.bounds.asr, { durationBasis: 'provider-hard-session-duration', providerHardSessionMs: 180000 }), 'asr_duration_bound_unproven'],
     [c => c.budget.bounds.mt.outputUnitsUpper = 1, 'mt_token_bound_unproven'],
     [c => c.budget.bounds.mt.providerRequestByteLimit = 10, 'mt_request_exceeds_billing_bound'],
     [c => c.roles.candidate.mtModel = 'different-unpriced-model', 'billing_model_or_endpoint_uncovered:mt'],
@@ -63,4 +65,20 @@ test('human gold must state critical facts and cover each severe-error type befo
   const plan = await inspectQualityPlan(f.configFile);
   assert.ok(plan.issues.includes(`sample:${f.corpus.samples[0].id}:gold_unreviewed`)); assert.ok(plan.issues.includes('critical_fact_coverage:number'));
   assert.equal(plan.eligibleForFreeze, false);
+});
+test('frozen schema, future timestamp and freeze-before-approval cannot authorize collection', async t => {
+  const f = await fixture(t), filename = path.join(f.directory, 'frozen.json'); await freezeQualityPlan(f.configFile, filename);
+  const original = JSON.parse(await readFile(filename));
+  for (const mutate of [frozen => frozen.schemaVersion = 999, frozen => frozen.frozenAt = new Date(Date.now() + 3600000).toISOString(), frozen => frozen.frozenAt = '2000-01-01T00:00:00Z']) {
+    const value = structuredClone(original); mutate(value); await writeFile(filename, JSON.stringify(value)); await assert.rejects(readFrozenQualityPlan(filename), /INVALID_FREEZE|FREEZE_PRECEDES_APPROVAL/);
+  }
+});
+test('expired spending approval does not rewrite an already frozen historical assessment contract', async t => {
+  const f = await fixture(t), now = Date.now(), frozenAt = new Date(now - 5000).toISOString();
+  f.config.budget.expiresAt = new Date(now - 1000).toISOString(); await writeFile(f.configFile, JSON.stringify(f.config));
+  const atFreeze = await inspectQualityPlan(f.configFile, { now: Date.parse(frozenAt) }); assert.equal(atFreeze.eligibleForFreeze, true);
+  const filename = path.join(f.directory, 'historical.json');
+  await writeFile(filename, JSON.stringify({ schemaVersion: 1, kind: 'frozen-quality-plan', frozenAt, configFile: 'plan.json', digest: atFreeze.digest, config: atFreeze.config, corpus: atFreeze.corpus, assets: atFreeze.assets }));
+  await assert.rejects(readFrozenQualityPlan(filename), /FREEZE_CHANGED_OR_EXPIRED/);
+  const historical = await readFrozenQualityPlan(filename, { forCollection: false }); assert.equal(historical.digest, atFreeze.digest);
 });

@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
 import { createQualityGateway } from './quality-gateway.mjs';
 import { openQualityBudget } from './quality-budget.mjs';
+import { validateQualityObservations } from './quality-observations.mjs';
 import { hashBytes, contractDigest, languageTargets, qualityBudgetConfig, readFrozenQualityPlan } from './quality-contract.mjs';
 import { deadline, stopChild } from '../../test-support/lifecycle.mjs';
 import { sourceVersion, writeJson } from './verification-evidence.mjs';
@@ -89,7 +90,7 @@ async function captureMt(application, sample, signal) {
   if (typeof response.text !== 'string' || !response.text.trim()) throw new Error('PUBLIC_MT_EMPTY');
   return { output: response.text, input: sample.text, source: sample.language, target: sample.target };
 }
-export async function collectQualityTrial({ sample, kind, repetition, role, config, corpusPath, directory, mode, upstream, reserve, signal, source, liveAuthorized = false }) {
+export async function collectQualityTrial({ sample, kind, repetition, role, config, corpusPath, directory, mode, upstream, reserve, signal, source, liveAuthorized = false, maxMtRequestBytes, approvalExpiresAt }) {
   const trialId = `${role}:${sample.id}:${kind}:${repetition}`, startedAt = new Date().toISOString();
   let gateway, application, result, errorCode, cleanup = false;
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), config.maxConnectionMs + 15000);
@@ -98,11 +99,11 @@ export async function collectQualityTrial({ sample, kind, repetition, role, conf
   try {
     gateway = await createQualityGateway({ mode, upstream, liveAuthorized, signal: combined,
       expected: { asrModel: config.asrModel, mtModel: config.mtModel, maxAudioBytes: sample.audio?.bytes || 2, maxConnectionMs: config.maxConnectionMs,
-        asrParameters: asrParameters(config, sample.language), mtTarget: sample.target, mtInputs: kind === 'mt' ? [sample.text.trim()] : [], allowAsrTranslations: false },
+        asrParameters: asrParameters(config, sample.language), mtTarget: sample.target, mtInputs: kind === 'mt' ? [sample.text.trim()] : [], allowAsrTranslations: false, maxMtRequestBytes, approvalExpiresAt },
       reserve: request => reserve({ ...request, trialId }) });
     application = await app(gateway, directory, config);
     result = kind === 'asr' ? await captureAsr(application, sample, config, corpusPath, combined) : await captureMt(application, sample, combined);
-    const actual = gateway.observations.filter(row => row.attemptId);
+    const actual = validateQualityObservations(gateway.observations, { mode, kind, startedAt, finishedAt: new Date().toISOString(), maxConnectionMs: config.maxConnectionMs });
     assert.ok(actual.length > 0 && actual.every(row => row.kind === kind));
     const success = actual.filter(row => row.status === 'succeeded'); assert.equal(success.length, 1);
     if (kind === 'mt') assert.equal(result.output, success[0].output.trim());
@@ -119,6 +120,11 @@ export async function collectQualityTrial({ sample, kind, repetition, role, conf
   const traceBuilds = [...new Set(logText.split('\n').filter(line => line.startsWith('execution_trace ')).map(line => {
     try { return JSON.stringify(JSON.parse(line.slice(16)).build); } catch { return null; }
   }).filter(Boolean))].map(value => JSON.parse(value));
+  if (gateway) try {
+    const finalAttempts = validateQualityObservations(gateway.observations, { mode, kind, startedAt, finishedAt: new Date().toISOString(), maxConnectionMs: config.maxConnectionMs });
+    assert.ok(finalAttempts.length >= 1 && finalAttempts.length <= (kind === 'asr' ? 2 : 1));
+    assert.equal(finalAttempts.filter(row => row.status === 'succeeded').length, 1);
+  } catch { errorCode ||= 'INVALID_PROVIDER_OBSERVATIONS'; }
   if (log.truncated) errorCode ||= 'TRACE_LOG_TRUNCATED';
   if (source && (traceBuilds.length !== 1 || traceBuilds[0].git_sha !== source.sha || traceBuilds[0].build_dirty !== source.dirty)) errorCode ||= 'TRACE_BUILD_MISMATCH';
   const row = { schemaVersion: 1, evidenceKind: mode === 'offline' ? 'offline-provider-stub' : 'live-provider', mode, trialId, sampleId: sample.id, kind, repetition, role,
@@ -127,7 +133,7 @@ export async function collectQualityTrial({ sample, kind, repetition, role, conf
     artifacts: [{ path: 'application.log', sha256: hashBytes(logText) }], logTruncated: log.truncated };
   await writeJson(path.join(directory, 'trial.json'), row); return row;
 }
-export async function collectQualityRun({ frozen, role, directory, mode, upstream, signal, liveAuthorized = false }) {
+export async function collectQualityRun({ frozen, role, directory, mode, upstream, signal, liveAuthorized = false, baselineDirectory }) {
   if (!['baseline', 'candidate'].includes(role) || !['offline', 'live'].includes(mode)) throw new Error('INVALID_COLLECTION_MODE');
   if (mode === 'live') {
     if (!liveAuthorized || process.env.CI || !frozen.freezePath) throw new Error('LIVE_SOURCE_OR_AUTHORIZATION_REQUIRED');
@@ -137,36 +143,54 @@ export async function collectQualityRun({ frozen, role, directory, mode, upstrea
   }
   const sourceStart = await qualitySources(), config = frozen.config.roles[role];
   if (mode === 'live' && (!liveAuthorized || process.env.CI || sourceStart.dirty || sourceStart.sha !== config.sourceSha)) throw new Error('LIVE_SOURCE_OR_AUTHORIZATION_REQUIRED');
+  let baseline;
+  if (mode === 'live' && role === 'candidate') {
+    if (!baselineDirectory) throw new Error('COMPLETE_BASELINE_REQUIRED');
+    const { readQualityCollection } = await import('./quality-assessment.mjs');
+    baseline = await readQualityCollection(baselineDirectory, frozen, 'baseline');
+  }
   await mkdir(directory, { mode: 0o700 }); // Exclusive run directory: no overwrite/relabel.
   const startedAt = new Date().toISOString(), trials = [];
   const report = { schemaVersion: 1, kind: 'quality-collection', mode, evidenceKind: mode === 'offline' ? 'offline-provider-stub' : 'live-provider', role,
     frozenDigest: frozen.digest, freezeFileSha256: frozen.freezeFileSha256, frozenAt: frozen.frozenAt, sourceStart, sourceEnd: null, startedAt,
-    complete: false, qualityStatus: 'not_run', qualityEvaluated: false, trials: [], cleanup: false };
+    outputDirectory: path.resolve(directory), complete: false, qualityStatus: 'not_run', qualityEvaluated: false, trials: [], cleanup: false,
+    ...(baseline && { baselineCollectionSha256: hashBytes(await readFile(path.join(baselineDirectory, 'collection.json'))) }) };
   await writeJson(path.join(directory, 'collection.json'), report);
   const b = frozen.config.budget, estimate = frozen.estimate;
   const ledgerPath = mode === 'offline' ? path.join(directory, 'offline-budget.sqlite') : path.resolve(path.dirname(frozen.configPath), b.ledgerFile);
   await mkdir(path.dirname(ledgerPath), { recursive: true, mode: 0o700 });
-  const budget = openQualityBudget(ledgerPath, qualityBudgetConfig(frozen), frozen.digest);
-  const budgetBefore = budget.snapshot(); let cleanup = false;
+  const budgetConfig = { ...qualityBudgetConfig(frozen), requireRunClaim: mode === 'live' };
+  const budget = openQualityBudget(ledgerPath, budgetConfig, frozen.digest);
+  const budgetBefore = budget.snapshot(); let cleanup = false, claimed = false;
   const controller = new AbortController(), runTimer = setTimeout(() => controller.abort(), config.maxRunMs);
   const runSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   report.maxRunMs = config.maxRunMs;
   try {
+    if (mode === 'live') {
+      if (contractDigest(sourceStart) !== contractDigest(await qualitySources())) throw new Error('LIVE_SOURCE_CHANGED_BEFORE_COLLECTION');
+      budget.claimRun({ role, sourceSha: sourceStart.sha, directory: report.outputDirectory, expectedSnapshot: baseline?.report.budget.after || budgetBefore }); claimed = true;
+    }
     outer: for (const sample of frozen.corpus.samples.filter(row => row.split === 'acceptance')) for (const kind of sample.tasks) for (let repetition = 0; repetition < frozen.config.repetitions; repetition++) {
       runSignal.throwIfAborted();
       const name = `trial-${trials.length}`, row = await collectQualityTrial({ sample, kind, repetition, role, config, corpusPath: frozen.corpusPath,
-        directory: path.join(directory, name), mode, upstream, signal: runSignal, source: sourceStart, liveAuthorized, reserve: request => String(budget.reserve(request)) });
+        directory: path.join(directory, name), mode, upstream, signal: runSignal, source: sourceStart, liveAuthorized,
+        maxMtRequestBytes: Math.min(b.bounds.mt.providerRequestByteLimit ?? 256 * 1024 + 4096, 2 * 1024 * 1024), approvalExpiresAt: budgetConfig.expiresAt,
+        reserve: request => String(budget.reserve(request)) });
       trials.push(row); report.trials.push({ path: `${name}/trial.json`, sha256: hashBytes(await readFile(path.join(directory, name, 'trial.json'))) });
       await writeJson(path.join(directory, 'collection.json'), report);
       if (!row.complete) break outer;
     }
   } finally {
     clearTimeout(runTimer); report.interrupted = runSignal.aborted;
-    report.budget = { before: budgetBefore, after: budget.snapshot() }; budget.close(); cleanup = trials.every(row => row.cleanup);
-    report.sourceEnd = await qualitySources(); report.finishedAt = new Date().toISOString(); report.cleanup = cleanup;
-    const expected = frozen.corpus.samples.filter(row => row.split === 'acceptance').reduce((n, sample) => n + sample.tasks.length * frozen.config.repetitions, 0);
-    report.complete = !runSignal.aborted && trials.length === expected && trials.every(row => row.complete) && cleanup && contractDigest(sourceStart) === contractDigest(report.sourceEnd);
-    report.collectionStatus = report.complete ? 'collected' : 'incomplete'; report.expectedTrials = expected;
+    try {
+      cleanup = trials.every(row => row.cleanup); report.sourceEnd = await qualitySources(); report.cleanup = cleanup;
+      const expected = frozen.corpus.samples.filter(row => row.split === 'acceptance').reduce((n, sample) => n + sample.tasks.length * frozen.config.repetitions, 0);
+      report.complete = !runSignal.aborted && trials.length === expected && trials.every(row => row.complete) && cleanup && contractDigest(sourceStart) === contractDigest(report.sourceEnd);
+      report.collectionStatus = report.complete ? 'collected' : 'incomplete'; report.expectedTrials = expected;
+    } catch { report.complete = false; report.collectionStatus = 'incomplete'; }
+    try { if (claimed) budget.finishRun(role, report.complete); report.budget = { before: budgetBefore, after: budget.snapshot() }; }
+    finally { budget.close(); }
+    report.finishedAt = new Date().toISOString();
     await writeJson(path.join(directory, 'collection.json'), report);
   }
   return report;

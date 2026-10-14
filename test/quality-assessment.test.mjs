@@ -4,9 +4,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { assessQuality, compareQualityMetrics, readQualityCollection } from '../scripts/lib/quality-assessment.mjs';
-import { contractDigest, estimateQualityBudget, hashBytes, seriousErrorTypes } from '../scripts/lib/quality-contract.mjs';
+import { contractDigest, estimateQualityBudget, hashBytes, hashJson, qualityBudgetConfig, seriousErrorTypes } from '../scripts/lib/quality-contract.mjs';
 import { scoreAsr } from '../scripts/lib/quality-metrics.mjs';
-import { collectQualityRun, qualitySources } from '../scripts/lib/quality-collector.mjs';
+import { collectQualityRun, qualitySources, asrParameters } from '../scripts/lib/quality-collector.mjs';
 import { qualityOfflineProvider } from '../test-support/quality-offline.mjs';
 import { comparisonThresholds, contractFixtureLabel, mutateFixtureJson, mutateFixtureLog, mutateFixtureTrial,
   readFixtureJson, writeSyntheticAssessmentFixture } from '../test-support/quality-assessment-fixture.mjs';
@@ -209,6 +209,9 @@ const invalidCollectionCases = [
   ['offline trial evidence kind under a live collection header', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.evidenceKind = 'offline-provider-stub'; })],
   ['offline provider mode under live collection and trial headers', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.provider[0].mode = 'offline'; })],
   ['offline provider evidence kind under live collection and trial headers', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.provider[0].evidenceKind = 'offline-provider-stub'; })],
+  ['unreserved successful upstream cannot be filtered out', bundle => mutateFixtureTrial(bundle, 'candidate', 2, trial => { const row = clone(trial.provider[0]); delete row.attemptId; trial.provider.push(row); })],
+  ['unreserved local failure cannot carry upstream usage', bundle => mutateFixtureTrial(bundle, 'candidate', 2, trial => { trial.provider.push({ ...clone(trial.provider[0]), attemptId: undefined, status: 'denied', code: 'BUDGET_REJECTED', upstreamStartedAt: undefined, usage: { total_tokens: 1 } }); })],
+  ['actual connection duration exceeds frozen bound', bundle => mutateFixtureTrial(bundle, 'candidate', 5, trial => { trial.provider[0].completedAt = new Date(Date.parse(trial.provider[0].upstreamStartedAt) + trial.config.maxConnectionMs + 1000).toISOString(); trial.finishedAt = new Date(Date.parse(trial.provider[0].completedAt) + 10).toISOString(); })],
   ['wrong provider endpoint', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.provider[0].endpoint = 'https://forged.example.invalid/'; })],
   ['ASR parameters differ from frozen mode and source', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.provider[0].config.parameters.language_hints = ['zh']; })],
   ['wrong provider model', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.provider[0].model = 'forged-model'; })],
@@ -217,8 +220,13 @@ const invalidCollectionCases = [
   ['missing canonical ASR completion', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.result.events = trial.result.events.filter(row => row.event.type !== 'finished'); })],
   ['ASR audio count differs from frozen sample', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.result.audioBytes++; })],
   ['ASR canonical final differs from raw provider output', bundle => mutateFixtureTrial(bundle, 'candidate', 0, trial => { trial.provider[0].outputs[0].text = 'different raw provider output'; })],
+  ['MT actual wire size differs from raw bytes', bundle => mutateFixtureTrial(bundle, 'candidate', 2, trial => { trial.provider[0].requestBytes--; })],
+  ['MT actual wire hash is changed', bundle => mutateFixtureTrial(bundle, 'candidate', 2, trial => { trial.provider[0].requestSha256 = hashBytes('not the request'); })],
   ['MT request differs from frozen sample', bundle => mutateFixtureTrial(bundle, 'candidate', 2, trial => { trial.result.input = 'changed input'; })],
   ['MT output differs from raw provider output', bundle => mutateFixtureTrial(bundle, 'candidate', 2, trial => { trial.provider[0].output = 'changed output'; })],
+  ['missing completed run claim', bundle => mutateFixtureJson(reportFile(bundle), report => { report.budget.after.runs.pop(); })],
+  ['candidate never had a complete baseline claim', bundle => mutateFixtureJson(reportFile(bundle), report => { report.budget.before.runs[0].state = 'incomplete'; })],
+  ['run claim belongs to a different source', bundle => mutateFixtureJson(reportFile(bundle), report => { report.budget.after.runs.at(-1).source_sha = 'a'.repeat(40); })],
   ['budget reservation sum forged', bundle => mutateFixtureJson(reportFile(bundle), report => { report.budget.after.reservedMicros--; })],
   ['budget binding changed', bundle => mutateFixtureJson(reportFile(bundle), report => { report.budget.after.binding = hashBytes('different budget'); })],
   ['budget reservation assigned to another trial', bundle => mutateFixtureJson(reportFile(bundle), report => { report.budget.after.attempts.at(-1).trial_id = 'forged-trial'; })]
@@ -359,4 +367,52 @@ test('a completed failed quality assessment is never release eligible, including
   const result = await assessQuality(bundle);
   assert.equal(result.complete, true); assert.equal(result.passed, false); assert.equal(result.qualityStatus, 'failed');
   assert.equal(result.releaseEligible, false); assert.equal(result.fullQualityAcceptance, false);
+});
+
+test('ASR fallback cannot reuse a reservation while an unreferenced phantom keeps counts equal', async t => {
+  const bundle = await fixture(t);
+  bundle.frozen.config.roles.candidate.captionMode = 'realtime';
+  bundle.frozen.digest = contractDigest({ config: bundle.frozen.config, corpus: bundle.frozen.corpus });
+  const config = bundle.frozen.config.roles.candidate;
+  for (let index = 0; index < 6; index++) await mutateFixtureTrial(bundle, 'candidate', index, trial => {
+    trial.config = config; if (trial.kind === 'asr') trial.provider[0].config = { parameters: asrParameters(config, 'en')[0] };
+  });
+  for (const role of ['baseline','candidate']) await mutateFixtureJson(reportFile(bundle, role), report => {
+    report.frozenDigest = bundle.frozen.digest;
+    for (const snapshot of [report.budget.before,report.budget.after]) {
+      snapshot.freezeDigest = bundle.frozen.digest; snapshot.binding = hashJson({ config: qualityBudgetConfig(bundle.frozen), freezeDigest: bundle.frozen.digest });
+    }
+  });
+  await mutateFixtureJson(bundle.reviewFile, review => { review.frozenDigest = bundle.frozen.digest; });
+  const original = await readFixtureJson(path.join(bundle.candidateDirectory, 'trial-0/trial.json'));
+  await mutateFixtureTrial(bundle, 'candidate', 0, trial => {
+    const failed = clone(trial.provider[0]); failed.status = 'failed'; failed.audioBytes = 0; failed.outputs = [];
+    failed.completedAt = new Date(Date.parse(failed.startedAt) + 9).toISOString();
+    const success = trial.provider[0]; success.config = { parameters: asrParameters(config, 'en')[1] };
+    success.startedAt = new Date(Date.parse(failed.completedAt) + 1).toISOString(); success.upstreamStartedAt = new Date(Date.parse(success.startedAt) + 1).toISOString();
+    trial.provider = [failed,success];
+  });
+  await mutateFixtureJson(reportFile(bundle), report => {
+    const phantom = clone(report.budget.after.attempts.find(row => row.trial_id === original.trialId)); phantom.id = 999;
+    phantom.reserved_at = new Date(Date.parse(original.startedAt) + 12).toISOString();
+    report.budget.after.attempts.push(phantom); report.budget.after.reservedMicros += phantom.reserved_micros;
+  });
+  await assert.rejects(readQualityCollection(bundle.candidateDirectory, bundle.frozen, 'candidate'));
+  await assertNotQualityPass(bundle);
+});
+test('a serialized collection cannot claim two completed trials at the same time', async t => {
+  const bundle = await fixture(t), first = await readFixtureJson(path.join(bundle.candidateDirectory, 'trial-0/trial.json'));
+  let delta;
+  await mutateFixtureTrial(bundle, 'candidate', 1, trial => {
+    delta = Date.parse(first.startedAt) - Date.parse(trial.startedAt);
+    const shift = value => new Date(Date.parse(value) + delta).toISOString();
+    trial.startedAt = shift(trial.startedAt); trial.finishedAt = shift(trial.finishedAt);
+    for (const attempt of trial.provider) for (const key of ['startedAt','upstreamStartedAt','completedAt']) attempt[key] = shift(attempt[key]);
+  });
+  await mutateFixtureJson(reportFile(bundle), report => {
+    const reservation = report.budget.after.attempts.find(row => row.trial_id.endsWith(':asr:1') && row.trial_id.includes(':speech:'));
+    reservation.reserved_at = new Date(Date.parse(reservation.reserved_at) + delta).toISOString();
+  });
+  await assert.rejects(readQualityCollection(bundle.candidateDirectory, bundle.frozen, 'candidate'));
+  await assertNotQualityPass(bundle);
 });
