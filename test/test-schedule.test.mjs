@@ -24,9 +24,11 @@ test('stop drains running files without dispatching later exclusive or ordinary 
 });
 
 test('actual nested profile and compiler files are isolated and parent deadlines cover cleanup', () => {
-  for (const file of ['edit-consistency-evidence', 'generation-protocol-adapter', 'generation-protocol-evidence', 'generation-protocol-report', 'generation-protocol-interrupt', 'generation-protocol-trace', 'knowledge-model-guards', 'playback-evidence', 'playback-protocol-evidence', 'playback-protocol-replay', 'quality-collector', 'quality-offline-evidence', 'trace-business-evidence', 'process-crash-trace', 'relation-result-evidence', 'session-evidence', 'verification-evidence'])
+  for (const file of ['edit-consistency-evidence', 'import-atomicity-crash', 'generation-protocol-adapter', 'generation-protocol-evidence', 'generation-protocol-report', 'generation-protocol-interrupt', 'generation-protocol-trace', 'knowledge-model-guards', 'playback-evidence', 'playback-protocol-evidence', 'playback-protocol-replay', 'quality-collector', 'quality-offline-evidence', 'trace-business-evidence', 'process-crash-trace', 'relation-result-evidence', 'session-evidence', 'verification-evidence'])
     assert.equal(testExecutionPlan(`test/${file}.test.mjs`).exclusive, true, file);
   assert.deepEqual(testExecutionPlan('test/relations.test.mjs'), { exclusive: false, timeoutMs: 90000 });
+  assert.deepEqual(testExecutionPlan('test/import-atomicity-crash.test.mjs'), { exclusive: true, timeoutMs: 90000 });
+  assert.deepEqual(testExecutionPlan('test/import-atomicity-audit.test.mjs'), { exclusive: false, timeoutMs: 90000 });
   assert.equal(nestedProfileDeadlineMs, 150000 + 30000);
   assert.ok(nestedProfileTestDeadlineMs > nestedProfileDeadlineMs + 1500);
   for (const file of ['playback-evidence', 'relation-result-evidence', 'session-evidence'])
