@@ -92,6 +92,27 @@ node --test --test-timeout=30000 verification/generation-protocol/model.test.mjs
 
 这些对应仅声明模型覆盖。真实实现的对应观察、持久字段及首差异由适配器报告另行提供。
 
+## 实际驱动与显式准入 refinement
+
+`replay-refinement.qnt` 单独声明固定 ready 环境，不修改上述八个完整安全域。每次 `permit` 把虚拟时钟推进 6000ms 并打开一次供应商准入许可；其生命周期投影是原模型 `stutter`。下一步真实 scheduler 的 `provider.readyAt()` 消费唯一许可，实际 running 日志或关系 execute 入口记录 job、listening、时钟及 attempt/epoch。关闭许可阻止 workflow finally 自动额外准入；没有隐藏密钥、伪造预留或跳过真实 RR/同会话排序。CAP2 的两次许可可留下两个同时在途的逻辑任务。此域不证明一般自动调度、公平性或任意任务到达。
+
+六个 refinement 域提供 39 条原生固定 ITF 和每域 3 条带种子模拟轨迹（seed=20261014，每域50样本、35步）。它们与原过近似的39固定/18模拟分开记录；前述无法重放的原轨迹仍保留，不能改称 matched。原模型的全域安全结论不依赖这57条抽样实现轨迹。另保留10条没有许可节流的真实任务矩阵。
+
+`test-support/generation-protocol-adapter.mjs` 只根据动作操作实际 runtime/scheduler/workflow。它不把 expected 状态写入数据库。观察映射如下：
+
+- `physical`、`calls`：可忽略 abort 的供应商 Promise、显式 send、实际结算和重复 resolve 调用。重复 Promise resolve 不等于供应商再次返回；关系 `onUsage` 回调另有独立动作和持久账本核验。
+- `activeOwner`、`callbackCount`、`outcome`：实际 execute 的结算与业务返回；知识另核 TaskRuntime.activeCount。取消释放的是本地所有权，不限制仍在外部等待的物理请求数。
+- `reserved`：知识 extraction_parts.initial_requests；关系不可变 job/epoch/attempt 的 relation_requests。`usage` 只为关系记录，知识没有持久 usage 表，不能虚构。
+- `business`：知识真实 accepted itemId/事实；关系 assertion/support 的原 job_id。门禁同时核对完整持久条目、事实、mention、alias/revision、关系/断言/证据，以及公开 detail/graph 的对应内容。
+- `generation`：关系真实新 round 的 epoch；知识同收听追加的新 job ID 和调度上下文，不能把它说成同一 job 的 cycle 重试。知识 cancelListening 测试是内部构造契约；没有新增用户 cancel API。在途 restore 被真实安全守卫拒绝，不用于制造同 UUID 新代次。
+- `restartCount`：真实关闭并重建 runtime/scheduler/store，同时独立新 server PID 打开同一数据库并通过 HTTP 查询。记录文件/device/inode、旧逻辑资源为零、新 PID 和退出信号、时间区间及公开200/404。仍在原宿主的旧供应商回调不可能跨 SIGKILL 存活；本票重建不能替代 KEJ-65 的进程崩溃矩阵。
+
+每个动作都有实际完成屏障：execute结算、scheduler idle、供应商 transport结算及 usage持久调用返回。没有以固定 event-loop 次数作为稳定依据。公开结果和供应商 wire/解析值由门禁重新计算，不能仅信 adapter.project 或空 violations。取消后的回调除其原 attempt 的允许 usage/outcome 外，不得更改任何已观察持久表或新 owner。
+
+实际预算负控分别省略知识初始请求预留和关系请求预留，正常同轨迹通过而变体在预留步产生首差异。代次负控使用完整 `relation-storage.mjs` 的唯一旧上下文事务 guard 源码副本，记录原/变体/module SHA256 和精确替换 anchor。正常旧 job/解析 payload/新 round 在途快照先被原 commit 拒绝；实际原 onUsage 恢复同一输入后，唯一 guard 变体写入旧关系并被相同驱动检出。它明确是定向旧上下文 commit 调用，不声称正常 workflow 穿透了 abort。另有实际知识事实内容损坏负控，避免只数条目便算成功。
+
+当前原始轨迹与测试代码不自动构成 M1 完成。最终入口必须绑定干净目标源码、工具版本、域/深度、命令、退出状态和附件；AC-P01–P12 汇总还必须在相同目标上验证 KEJ-63/64/65 的独立报告，缺失或旧源报告保持 not_run/stale。
+
 ## 明确不证明的事项
 
 - 三个以上 actor、第三代次或无限域安全性。
