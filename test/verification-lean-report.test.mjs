@@ -107,6 +107,7 @@ test('offline Lean evidence independently revalidates corruption and execution o
     ['raw-projection', fixture => { const rows = fixture.files.get('lean-projections.ndjson').trimEnd().split('\n'); rows[0] = '[65]'; fixture.files.set('lean-projections.ndjson', rows.join('\n') + '\n'); }, 'incomplete', 'invalid_differential_evidence'],
     ['oracle-timeout', fixture => { fixture.files.set('oracle-execution.json', JSON.stringify({ ...JSON.parse(fixture.files.get('oracle-execution.json')), timedOut: true })); }, 'incomplete', 'invalid_oracle_evidence'],
     ['axiom-cache', fixture => { const value = JSON.parse(fixture.files.get('axioms.json')); value.audits[0] = 'unchecked'; fixture.files.set('axioms.json', JSON.stringify(value)); }, 'incomplete', 'invalid_axiom_evidence'],
+    ['never-started', fixture => { fixture.report.complete = false; fixture.report.steps.forEach(step => { step.status = 'not_run'; delete step.execution; }); }, 'not_run', 'step:proof-build'],
     ['incomplete', fixture => { fixture.report.complete = false; }, 'incomplete', 'incomplete']
   ];
   for (const [name, mutate, status, reason] of cases) await t.test(name, async () => {

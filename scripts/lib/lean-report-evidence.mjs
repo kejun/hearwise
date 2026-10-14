@@ -251,7 +251,11 @@ export async function validateLeanEvidence(kind, directory, { release = true } =
   summary.stale = summary.reasons.some(reason => ['source_changed', 'source_content_changed', 'profile_changed', 'wrong_toolchain'].includes(reason));
   const interrupted = report.interrupted || report.steps.some(step => step.execution?.timedOut || step.execution?.interrupted || step.execution?.signal);
   const failed = report.steps.some(step => step.status === 'failed' || (Number.isInteger(step.execution?.code) && step.execution.code !== 0)) || metrics?.failed > 0 || differential?.ok === false;
-  summary.status = interrupted ? 'incomplete' : failed ? 'failed' : report.complete === true ? 'passed' : 'incomplete';
+  const notRun = report.complete === false && contract.requiredSteps.every(name => {
+    const rows = report.steps.filter(step => step.name === name);
+    return rows.length === 1 && rows[0].status === 'not_run' && rows[0].execution?.code == null;
+  });
+  summary.status = interrupted ? 'incomplete' : failed ? 'failed' : notRun ? 'not_run' : report.complete === true ? 'passed' : 'incomplete';
   const integrityFailure = summary.reasons.some(reason => !['source_changed', 'source_content_changed', 'profile_changed', 'wrong_toolchain', 'uncommitted_source'].includes(reason));
   if (integrityFailure && summary.status === 'passed') summary.status = 'incomplete';
   summary.ok = summary.status === 'passed' && summary.reasons.length === 0;
