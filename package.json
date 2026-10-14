@@ -26,7 +26,11 @@
     "verify": "node scripts/verify.mjs",
     "verify:report": "node scripts/verify-report.mjs",
     "preverify:revision": "npm run build",
-    "verify:revision": "node scripts/verify-revision.mjs"
+    "verify:revision": "node scripts/verify-revision.mjs",
+    "setup:relation-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:relation-protocol": "npm run build",
+    "verify:relation-protocol": "node scripts/verify-relation-protocol.mjs",
+    "verify:relation-protocol:report": "node scripts/verify-relation-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
@@ -34,6 +38,7 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@informalsystems/quint": "0.33.0",
     "@types/node": "24.19.1",
     "esbuild": "0.28.2",
     "playwright": "1.63.0",
