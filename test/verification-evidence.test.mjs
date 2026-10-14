@@ -6,6 +6,29 @@ import path from 'node:path';
 import { properties, pilot } from '../verification/properties.mjs';
 import { summarize, validateResult } from '../scripts/lib/verification-evidence.mjs';
 import { runProcess } from '../scripts/lib/process.mjs';
+import { onceOutputContains } from '../scripts/lib/output-marker.mjs';
+
+test('interrupt output marker survives every chunk boundary and triggers only once', () => {
+  const marker = 'PROVIDER_PENDING';
+  const chunkings = [[marker], ...Array.from({ length: marker.length - 1 }, (_, index) => [marker.slice(0, index + 1), marker.slice(index + 1)]), [...marker]];
+  for (const chunks of chunkings) {
+    let interruptions = 0;
+    const consume = onceOutputContains(marker, () => { interruptions++; });
+    consume('unrelated output\n'.repeat(2000));
+    for (const chunk of chunks.slice(0, -1)) consume(chunk);
+    assert.equal(interruptions, 0, 'A partial marker cannot interrupt the run');
+    consume(chunks.at(-1));
+    assert.equal(interruptions, 1, `Missed marker split as ${JSON.stringify(chunks)}`);
+    consume(`\n${marker}\n`);
+    assert.equal(interruptions, 1, 'Repeated markers must not send another signal');
+  }
+});
+test('unrelated output and incomplete interrupt markers never interrupt the run', () => {
+  let interruptions = 0;
+  const consume = onceOutputContains('PROVIDER_PENDING', () => { interruptions++; });
+  for (const chunk of ['unrelated output\n'.repeat(2000), 'PROVIDER_', '', '\nPENDING', 'PROVIDER_PENDIN']) consume(chunk);
+  assert.equal(interruptions, 0);
+});
 
 async function run(t, scenario) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hearwise-verification-'));
@@ -98,6 +121,7 @@ for (const scenario of ['timeout', 'interrupt']) test(`${scenario} kills the rea
   assert.equal(report.complete, false); assert.equal(report.ok, false);
   assert.equal(report.summary.rows[0].status, 'incomplete');
   assert.equal(report.execution[scenario === 'timeout' ? 'timedOut' : 'interrupted'], true);
+  assert.equal(report.execution[scenario === 'timeout' ? 'interrupted' : 'timedOut'], false);
   assert.equal(observations.providerCalls, 1);
   assert.equal(observations.checkpoints.at(-1).job.request_count, 1);
   assert.equal(observations.businessResult, undefined);

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { pilot } from '../verification/properties.mjs';
 import { metadata, writeJson, digest, sourceVersion, summarize, checkArtifacts } from './lib/verification-evidence.mjs';
 import { runProcess } from './lib/process.mjs';
+import { onceOutputContains } from './lib/output-marker.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => arg !== '--release' && !/^--scenario=(success|business-failure|timeout|interrupt)$/.test(arg))) {
@@ -21,9 +22,7 @@ let execution;
 try {
   execution = await runProcess(process.execPath, ['test-support/verification-relation.mjs', scenario, directory], {
     logFile: path.join(directory, 'worker.log'), timeoutMs: scenario === 'timeout' ? 1500 : 15000, graceMs: 300,
-    onOutput: text => {
-      if (scenario === 'interrupt' && text.includes('PROVIDER_PENDING')) process.kill(process.pid, 'SIGTERM');
-    }
+    onOutput: scenario === 'interrupt' ? onceOutputContains('PROVIDER_PENDING', () => process.kill(process.pid, 'SIGTERM')) : undefined
   });
 } finally {
   // Parent cleans the file-backed SQLite database even after a killed worker.
