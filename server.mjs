@@ -483,12 +483,18 @@ async function runKnowledgeEditJob(id, itemId, jobId, prepared, key) {
   } finally { knowledgeEdits.delete(id); }
 }
 function notifyNameCorrection(id) {
+  // The business transaction and its receipt are already committed. A failed
+  // best-effort notification cannot turn that outcome into "saved: false".
   // Name changes must not authorize, resume or pump background model work.
-  broadcast(id, { type: 'knowledge-name-corrected', listeningId: id });
-  const graphRevision = store.graphMetadata(id)?.graphRevision;
-  if (graphRevision != null) {
-    graphRevisions.set(id, graphRevision);
-    broadcast(id, { type: 'graph-invalidated', listeningId: id, graphRevision });
+  try {
+    broadcast(id, { type: 'knowledge-name-corrected', listeningId: id });
+    const graphRevision = store.graphMetadata(id)?.graphRevision;
+    if (graphRevision != null) {
+      graphRevisions.set(id, graphRevision);
+      broadcast(id, { type: 'graph-invalidated', listeningId: id, graphRevision });
+    }
+  } catch {
+    console.warn('knowledge_name_notification_failed', JSON.stringify({ listening_id: id }));
   }
 }
 async function runNameCorrectionJob(id, itemId, jobId, prepared, key) {
