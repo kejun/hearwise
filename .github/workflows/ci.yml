@@ -27,6 +27,11 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Select the runner's Java 21
+        run: |
+          test -x "$JAVA_HOME_21_X64/bin/java"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
       - run: npm ci --ignore-scripts
       - run: npm run preflight
       - run: npm run check:format

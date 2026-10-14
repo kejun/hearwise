@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { probeJavaVersion, validProtocolToolProbe } from '../scripts/lib/relation-protocol-tools.mjs';
+import { probeJavaVersion, validProtocolToolProbe, toolchain } from '../scripts/lib/relation-protocol-tools.mjs';
 import { runProcess } from '../scripts/lib/process.mjs';
 import { nameDeadlineAt, nameRemainingMs } from '../scripts/lib/name-protocol-budget.mjs';
 const fileDeadline = nameDeadlineAt(80000);
@@ -39,7 +39,15 @@ async function realReplay(source, negative = null, deadlineAt = Math.min(fileDea
 }
 const tap = () => 'TAP version 13\n# Subtest: parent\n    # Subtest: child\n    ok 1 - child\n      ---\n      duration_ms: 1\n      ...\n    1..1\nok 1 - parent\n  ---\n  duration_ms: 2\n  ...\n1..1\n# tests 2\n# suites 0\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 3\n';
 
-test(nameGateTests[0], () => {
+test(nameGateTests[0], async () => {
+  const workflow = await readFile('.github/workflows/ci.yml', 'utf8');
+  const nodeJob = workflow.slice(workflow.indexOf('  test:'), workflow.indexOf('  relation-protocol:'));
+  const java = `JAVA_HOME_${toolchain.java.minimumMajor}_X64`;
+  const selection = `test -x "$${java}/bin/java"`;
+  assert.ok(nodeJob.includes(selection), 'Node regressions need the same configured minimum Java as the formal profile');
+  assert.ok(nodeJob.indexOf(selection) < nodeJob.indexOf('- run: npm test'));
+  assert.ok(nodeJob.includes(`echo "JAVA_HOME=$${java}" >> "$GITHUB_ENV"`));
+  assert.ok(nodeJob.includes(`echo "$${java}/bin" >> "$GITHUB_PATH"`));
   assert.equal(plan.length, 23); assert.equal(new Set(plan.map(row => row.id)).size, 23);
   assert.deepEqual(plan.filter(row => row.kind === 'bounded-model-check').map(row => row.bound), [6, 6]);
   assert.equal(config.limits.overallMs, 480000); assert.equal(plan.at(-1).timeoutMs, 90000); assert.equal(config.witnesses.expectedTestCount, 22);
