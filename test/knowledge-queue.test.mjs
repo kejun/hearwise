@@ -322,3 +322,78 @@ test('v2 数据库升级为 v8，旧运行中 v2 任务隔离等待历史恢复'
   assert.match(migrated.last_error, /LEGACY_RECOVERY_REQUIRED/);
   assert.equal(store.detail(r.listeningId).listening.knowledge_policy_version, 2);
 });
+
+function delayedFinalization(t, h) {
+  const original = h.store.markJob.bind(h.store), writes = [];
+  let locked = true;
+  t.mock.method(h.store, 'markJob', (id, state, error, retryAt, guard) => {
+    if (guard) {
+      writes.push({ id, state, guard });
+      if (locked) throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR', errcode: 5 });
+    }
+    return original(id, state, error, retryAt, guard);
+  });
+  return { original, writes, unlock: () => { locked = false; } };
+}
+
+test('待写失败终态先于新 admission，SQLite 解锁后 timer 自动收尾而不重放已付费任务', async t => {
+  const h = harness(t, { minStartIntervalMs: 0, onError() {} }), r = h.run('test-key', 2);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  const first = h.calls[0].job, pending = delayedFinalization(t, h);
+  h.calls[0].reject(new TypeError('paid response commit failed')); await settle();
+  assert.equal(h.store.knowledgeCheckpoint(first.id).job.state, 'running');
+  assert.equal(h.scheduler.hasWork(r.listeningId), true);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  t.mock.timers.tick(1000); await settle();
+  assert.equal(h.calls.length, 1, 'locked finalization must block later work');
+  pending.unlock(); t.mock.timers.tick(1000); await settle();
+  assert.equal(h.store.knowledgeCheckpoint(first.id).job.state, 'failed');
+  assert.equal(h.calls.length, 2);
+  assert.notEqual(h.calls[1].job.id, first.id, 'only the later batch may be admitted');
+});
+
+test('旧失败终态待写不能覆盖同一任务已经提交的成功', async t => {
+  const h = harness(t, { onError() {} }), r = h.run('test-key', 2);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  const job = h.calls[0].job, pending = delayedFinalization(t, h);
+  h.calls[0].reject(new TypeError('paid response commit failed')); await settle();
+  pending.original(job.id, 'complete');
+  pending.unlock(); t.mock.timers.tick(1000); await settle();
+  assert.equal(h.store.knowledgeCheckpoint(job.id).job.state, 'complete');
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.scheduler.hasWork(r.listeningId), false);
+});
+
+test('旧失败终态待写不能覆盖显式重试的新周期，即使 attempt 数再次相同', async t => {
+  const h = harness(t, { onError() {} }), r = h.run('test-key', 2);
+  h.add(r, 3);
+  const segments = h.store.extractionRange(r.listeningId), job = h.store.createExtractionJob(r.listeningId, segments);
+  h.store.initializeKnowledgeParts(job.id, [{ part_no: 0, focus_refs: segments.map(segment => ({ segment_id: segment.id, start: 0, end: segment.original_text.length })) }], 'v2.1');
+  h.scheduler.pump();
+  const attempt = h.calls[0].job.attempts, pending = delayedFinalization(t, h);
+  h.calls[0].reject(new TypeError('paid response commit failed')); await settle();
+  pending.original(job.id, 'failed');
+  assert.equal(h.store.retry(r.listeningId), 1);
+  pending.original(job.id, 'running');
+  assert.equal(h.store.knowledgeCheckpoint(job.id).job.attempts, attempt);
+  assert.equal(h.store.knowledgeCheckpoint(job.id).progress.cycle, 2);
+  pending.unlock(); t.mock.timers.tick(1000); await settle();
+  assert.equal(h.store.knowledgeCheckpoint(job.id).job.state, 'running');
+  assert.equal(h.store.knowledgeCheckpoint(job.id).progress.cycle, 2);
+  assert.equal(h.calls.length, 1);
+});
+
+for (const cleanup of ['remove', 'close']) test(`${cleanup} 清理待写失败终态，不再写入旧任务`, async t => {
+  const h = harness(t, { onError() {} }), r = h.run('test-key', 2);
+  h.add(r, 3); h.scheduler.schedule(r.listeningId);
+  const pending = delayedFinalization(t, h);
+  h.calls[0].reject(new TypeError('paid response commit failed')); await settle();
+  assert.equal(h.scheduler.hasWork(r.listeningId), true);
+  if (cleanup === 'remove') {
+    h.store.finishRun(r.runId); h.store.removeListening(r.listeningId); h.keys.delete(r.listeningId); h.scheduler.remove(r.listeningId);
+  } else await h.scheduler.close();
+  const count = pending.writes.length;
+  pending.unlock(); t.mock.timers.tick(10000); await settle();
+  assert.equal(pending.writes.length, count);
+  assert.equal(h.scheduler.hasWork(r.listeningId), false);
+});
