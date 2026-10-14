@@ -57,7 +57,11 @@
     "setup:process-crash": "node scripts/setup-relation-protocol.mjs",
     "preverify:process-crash": "npm run build",
     "verify:process-crash": "node scripts/verify-process-crash.mjs",
-    "verify:process-crash:report": "node scripts/verify-process-crash-report.mjs"
+    "verify:process-crash:report": "node scripts/verify-process-crash-report.mjs",
+    "setup:playback-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:playback-protocol": "npm run build",
+    "verify:playback-protocol": "node scripts/verify-playback-protocol.mjs",
+    "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
