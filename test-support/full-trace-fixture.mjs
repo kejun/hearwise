@@ -2,6 +2,8 @@ import WebSocket from 'ws';
 import { once } from 'node:events';
 import { speechFixture } from './speech-fixture.mjs';
 import { relationWireEnvelope } from './relation-wire-fixture.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { deadline } from './lifecycle.mjs';
 
 export const traceEvents = logs => logs.split('\n').filter(line => line.startsWith('execution_trace ')).map(line => JSON.parse(line.slice(16)));
 export async function until(check, timeout = 12000) {
@@ -12,14 +14,16 @@ export async function until(check, timeout = 12000) {
   }
 }
 async function socket(base, route) {
-  const ws = new WebSocket(base.replace('http', 'ws') + route), events = [];
-  ws.on('message', (raw, binary) => { if (!binary) events.push(JSON.parse(raw.toString())); });
-  await once(ws, 'open');
-  return { ws, events, send: message => ws.send(JSON.stringify(message)) };
+  const ws = new WebSocket(base.replace('http', 'ws') + route), events = [], frames = [];
+  ws.on('message', (raw, binary) => { if (!binary) events.push(JSON.parse(raw.toString()));
+    else frames.push({ epoch: raw.readUInt32LE(0), unit: raw.readUInt32LE(4), bytes: raw.length }); });
+  try { await deadline(() => once(ws, 'open'), 3000, 'Full Trace WebSocket startup'); }
+  catch (error) { ws.terminate(); throw error; }
+  return { ws, events, frames, send: message => ws.send(JSON.stringify(message)) };
 }
 
 // Complete application boundaries, with only paid services substituted locally.
-export async function fullTraceFixture() {
+export async function fullTraceFixture({ observations = false } = {}) {
   const f = await speechFixture({ extraEnv: { HEARWISE_TRACE: '' }, seed: store => {
     const run = store.createRun(null, { source: 'en', targetLang: 'Chinese', audioSource: 'tab' }, 'Full trace fixture');
     const segment = store.addSegment(run.listeningId, run.runId, { id: 'seed', text: 'Eastman Kodak released the Brownie camera in 1900.' }).segment;
@@ -28,13 +32,14 @@ export async function fullTraceFixture() {
       aliases: [], dialogue_summary: '对话中提到的对象。', background_note: null, certainty: 'clear', decision: 'create', existing_item_id: null,
       correction_reason: null, evidence: [{ segment_id: segment.id, quote: name }] }]);
     const job = store.createExtractionJob(run.listeningId, store.extractionRange(run.listeningId));
-    store.markJob(job.id, 'complete'); store.finishRun(run.runId); return run;
+    store.markJob(job.id, 'complete'); store.finishRun(run.runId);
+    return { ...run, filename: store.db.prepare('PRAGMA database_list').get().file, seededJobId: job.id };
   }, modelResponse: body => {
     if (body.model === 'qwen-mt-flash') return '本轮真实适配器经过本地模拟模型。';
     const input = JSON.parse(body.messages.at(-1).content);
     return input.candidates ? relationWireEnvelope(input) : { items: [] };
   } });
-  const sockets = [];
+  const sockets = []; let observed;
   try {
     const relation = await fetch(`${f.base}/api/listenings/${f.seeded.listeningId}/graph`, { method: 'POST',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'TRACE_SECRET_KEY' }) });
@@ -52,7 +57,16 @@ export async function fullTraceFixture() {
     await until(() => speech.events.some(e => e.type === 'speech.unit-end'));
     const end = speech.events.find(e => e.type === 'speech.unit-end');
     speech.send({ type: 'speech.progress', epoch: 7, playedUnit: end.unit, consumedSamples: end.samples });
-    const asrClosed = once(asr.ws, 'close'); asr.send({ type: 'stop' }); await asrClosed;
+    if (observations) speech.send({ type: 'speech.progress', epoch: 7, playedUnit: end.unit, consumedSamples: end.samples });
+    // A speech unit is not a terminal signal for the queued final translation.
+    // Stop only after this run's persisted final and its terminal Trace agree.
+    await until(() => asr.events.some(e => e.type === 'segment-final' && e.runId === run.runId && e.segment.asr_sentence_id === 'trace-final'));
+    const finalSegment = asr.events.find(e => e.type === 'segment-final' && e.runId === run.runId && e.segment.asr_sentence_id === 'trace-final').segment;
+    await until(() => asr.events.some(e => e.type === 'translation-updated' && e.runId === run.runId &&
+      e.segment.id === finalSegment.id && e.segment.translation_state === 'complete') &&
+      traceEvents(f.logs()).some(e => e.step_key === 'translation.execute' && e.state === 'succeeded' &&
+        e.attributes?.job_id === finalSegment.id && e.attributes?.run_id === run.runId));
+    const asrClosed = once(asr.ws, 'close'); asr.send({ type: 'stop' }); await deadline(() => asrClosed, 3000, 'Full Trace ASR stop');
     await until(() => speech.events.some(e => e.type === 'speech.finished'));
     await until(() => traceEvents(f.logs()).some(e => e.step_key === 'knowledge.execute' && e.state === 'succeeded'));
     // Cover the second TTS provider and HTTP preview translation independently.
@@ -70,6 +84,26 @@ export async function fullTraceFixture() {
     });
     await until(() => fish.events.some(e => e.type === 'speech.finished'));
     await until(() => traceEvents(f.logs()).filter(e => e.step_key === 'speech.session' && e.state === 'succeeded').length === 2);
+    if (observations) {
+      const get = async route => { const response = await fetch(f.base + route); if (response.status !== 200) throw new Error('Trace query failed'); return response.json(); };
+      let detail, graph;
+      const end = Date.now() + 12000;
+      do {
+        detail = await get(`/api/listenings/${run.listeningId}`); graph = await get(`/api/listenings/${run.listeningId}/graph`);
+        if (!graph.status.pendingJobs && !graph.status.runningJobs && detail.jobs.every(job => ['complete', 'failed'].includes(job.state))) break;
+        if (Date.now() > end) throw new Error('Trace business queries did not settle');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      } while (true);
+      const db = new DatabaseSync(f.seeded.filename, { readOnly: true });
+      let durable;
+      try { durable = Object.fromEntries(['listening_runs', 'segments', 'extraction_jobs', 'relation_jobs', 'relation_requests'].map(table =>
+        [table, db.prepare(`SELECT * FROM ${table} ORDER BY ${table === 'relation_requests' ? 'job_id,attempt' : 'id'}`).all()])); }
+      finally { db.close(); }
+      observed = { listeningId: run.listeningId, runId: run.runId, seededJobId: f.seeded.seededJobId,
+        detail, graph, durable, asrEvents: asr.events, speechEvents: speech.events, fishEvents: fish.events,
+        frames: [...speech.frames, ...fish.frames], provider: { mt: f.stats.mtRequests.length, knowledge: f.stats.providerRequests.filter(row => row.model !== 'qwen-mt-flash').length,
+          qwen: f.stats.commits.length, fish: f.stats.fishRequests.length } };
+    }
   } finally { for (const ws of sockets) ws.terminate(); await f.close(); }
-  return f.logs();
+  return observations ? { logs: f.logs(), ...observed, cleanup: true } : f.logs();
 }
