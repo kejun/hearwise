@@ -7,6 +7,7 @@ import { createNameProtocolFixture } from './name-protocol-fixture.mjs';
 import { installNameWriteFault, removeNameWriteFault } from './name-transaction-fixture.mjs';
 import { deadline } from './lifecycle.mjs';
 import { digest, writeJson, sourceVersion } from '../scripts/lib/verification-evidence.mjs';
+import { nameBrowserFailure } from './name-browser-failure.mjs';
 import { inspectNameBusinessTables } from '../scripts/lib/name-protocol-durable.mjs';
 const directory = path.resolve(process.argv[2]); await mkdir(directory, { recursive: true });
 const scenarios = ['held-double-submit', 'receipt-recovery', 'unknown-502', 'unknown-lost', 'rollback-retry', 'cancel-noop'];
@@ -17,17 +18,21 @@ const persist = () => writeJson(path.join(directory, 'browser.json'), report);
 let browser;
 function identities(f) { const s = f.seeded; return { listeningId: f.listeningId, itemId: f.itemId, segmentId: s.segment.id,
   unlinkedId: s.other.id, unrelatedId: s.unrelated.listeningId, staleId: s.staleId, cameraId: s.camera.id, factId: s.factId }; }
-async function client(f, width, mutant) {
+async function client(f, width, mutant, created) {
   const context = await browser.newContext({ viewport: { width, height: 950 } }), page = await context.newPage(); page.setDefaultTimeout(7000);
-  const value = { context, page, requests: [], responses: [], sources: [], pending: [], errors: [], explicitSaves: 0 };
+  const value = { context, page, requests: [], responses: [], sources: [], pending: [], errors: [], requestFailures: [], explicitSaves: 0 };
+  created(value);
   page.on('pageerror', error => value.errors.push(error.message));
   page.on('request', request => {
     if (request.url().startsWith(f.url)) value.requests.push({ method: request.method(), url: request.url(), headers: { 'idempotency-key': request.headers()['idempotency-key'] ?? null }, body: request.postDataJSON() });
   });
+  page.on('requestfailed', request => { if (request.url().startsWith(f.url)) value.requestFailures.push({ method: request.method(), url: request.url(), error: request.failure()?.errorText ?? null }); });
   page.on('response', response => {
     const url = response.url();
-    if (url.startsWith(f.url)) value.pending.push((async () => { let text; try { text = await response.text(); } catch { return; }
-      value.responses.push({ url, status: response.status(), text }); })());
+    if (url.startsWith(f.url)) {
+      const entry = { url, status: response.status() }; value.responses.push(entry);
+      value.pending.push((async () => { try { entry.text = await response.text(); } catch (error) { entry.bodyError = error.message; } })());
+    }
     if (['/app.js', '/knowledge-editor.js', '/knowledge-graph.js'].includes(new URL(url).pathname)) value.pending.push((async () => {
       const bytes = await response.body(); value.sources.push({ url, status: response.status(), sha256: digest(bytes), bytes: bytes.length });
     })());
@@ -54,7 +59,7 @@ async function editor(value) {
   return value.page.evaluate(() => {
     const d = document.querySelector('#knowledge-editor'), box = d.getBoundingClientRect();
     return { open: d.open, draft: document.querySelector('#knowledge-edit-name').value, source: document.querySelector('#knowledge-edit-source').value,
-      status: document.querySelector('#knowledge-edit-status').textContent, saveDisabled: document.querySelector('#knowledge-edit-save').disabled,
+      status: document.querySelector('#knowledge-edit-status').textContent, busy: d.getAttribute('aria-busy'), saveDisabled: document.querySelector('#knowledge-edit-save').disabled,
       closeDisabled: document.querySelector('#knowledge-edit-close').disabled, fits: box.left >= 0 && box.right <= innerWidth && d.scrollWidth <= d.clientWidth };
   });
 }
@@ -84,14 +89,15 @@ async function views(value, fixture, expected) {
 }
 async function run(width, scenario, mutant = false) {
   const f = await createNameProtocolFixture(), baseline = f.tables(), ids = identities(f), release = deferred(), committed = deferred();
-  const row = { scenario, identities: ids, baseline, checkpoints: [], upstream: [], width }; let a;
+  const row = { scenario, identities: ids, baseline, checkpoints: [], upstream: [], width, complete: false }; let a, failed = false;
+  if (mutant) report.negative = row; else report.widths.find(value => value.width === width).results.push(row);
   const capture = async label => {
     const tables = f.tables(), inspection = inspectNameBusinessTables({ baseline, tables, identities: ids });
     assert.equal(inspection.ok, true, JSON.stringify(inspection));
     row.checkpoints.push({ label, tables, snapshot: f.snapshot(), editor: await editor(a) });
   };
   try {
-    a = await client(f, width, mutant); await capture('opened');
+    a = await client(f, width, mutant, value => { a = value; }); await capture('opened');
     if (scenario === 'held-double-submit') {
       await a.page.route(f.url + '/name-replacements', async route => {
         const response = await route.fetch(), text = await response.text(); row.upstream.push({ request: route.request().postDataJSON(), id: route.request().headers()['idempotency-key'], status: response.status(), text });
@@ -146,12 +152,22 @@ async function run(width, scenario, mutant = false) {
       explicitSaves: a.explicitSaves, providerCalls: f.stats.providerRequests, mutation: a.mutation ?? null, complete: true });
     assert.equal(row.requests.filter(request => request.method === 'POST').length, row.explicitSaves + (mutant ? 1 : 0));
     return row;
-  } finally { release.resolve(); await a?.context.close(); await f.close(); }
+  } catch (error) {
+    failed = true; row.failure = { name: error.name, message: error.message }; await persist();
+    try { await nameBrowserFailure({ row, client: a, fixture: f, error, inspectEditor: editor }); }
+    catch (cause) { row.diagnosticError = cause.message; }
+    await persist(); console.error('NAME_BROWSER_FAILURE ' + JSON.stringify(row)); throw error;
+  } finally {
+    release.resolve();
+    const cleanup = await Promise.allSettled([deadline(() => a?.context.close(), 3000, 'Name browser context close'), f.close()]);
+    const failures = cleanup.filter(value => value.status === 'rejected').map(value => value.reason?.message ?? String(value.reason));
+    if (failures.length) { row.cleanupErrors = failures; await persist(); if (!failed) throw new Error(failures.join('; ')); }
+  }
 }
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args: ['--no-sandbox', '--no-zygote', '--disable-gpu'] });
   report.chromium = browser.version();
-  for (const width of [1280, 390]) { const row = { width, results: [] }; report.widths.push(row); for (const scenario of scenarios) { row.results.push(await run(width, scenario)); await persist(); } }
-  report.negative = await run(390, 'held-double-submit', true); report.complete = true;
+  for (const width of [1280, 390]) { const row = { width, results: [] }; report.widths.push(row); for (const scenario of scenarios) { await run(width, scenario); await persist(); } }
+  await run(390, 'held-double-submit', true); report.complete = true;
 } catch (error) { report.error = { name: error.name, message: error.message }; process.exitCode = 1; }
 finally { await browser?.close(); await persist(); }

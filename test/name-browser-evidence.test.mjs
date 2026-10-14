@@ -61,3 +61,36 @@ test('name profile packages two generic artifacts and verifies every actual refe
   }
   result = await packageEvidence(structuredClone(observations)); await writeFile(path.join(directory, nameBrowserAssets[1]), 'tampered'); assert.equal(await checkNameEvidence(directory, result), false);
 });
+
+test('name browser failure diagnostics retain original failed exchange and only read its actual committed receipt', { timeout: 15000 }, async () => {
+  const { createNameProtocolFixture } = await import('../test-support/name-protocol-fixture.mjs');
+  const { nameBrowserFailure } = await import('../test-support/name-browser-failure.mjs');
+  const { randomUUID } = await import('node:crypto');
+  const fixture = await createNameProtocolFixture();
+  try {
+    const id = randomUUID(), body = { name: 'Tibo', revision: fixture.snapshot().revision };
+    const response = await fetch(fixture.url + '/name-replacements', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': id }, body: JSON.stringify(body) });
+    assert.equal(response.status, 200); const committed = fixture.tables(), calls = [];
+    const requests = [{ method: 'POST', url: fixture.url + '/name-replacements', headers: { 'idempotency-key': id }, body }];
+    const responses = [{ url: requests[0].url, status: 502, text: 'lost committed response' }];
+    const requestFailures = [{ method: 'GET', url: fixture.url + '/edits/' + id, error: 'net::ERR_ABORTED' }];
+    const client = { requests, responses, requestFailures, sources: [], errors: [], explicitSaves: 1, page: { request: { async get(url, options) {
+      calls.push(url); const result = await fetch(url, { signal: AbortSignal.timeout(options.timeout) });
+      return { status: () => result.status, text: () => result.text() };
+    } } } };
+    const row = { scenario: 'receipt-recovery', complete: false };
+    const editor = { open: true, busy: 'false', status: '保存结果尚未确认', draft: 'Tibo' };
+    await nameBrowserFailure({ row, client, fixture, error: new Error('Original hidden assertion timed out'), inspectEditor: async () => editor });
+    assert.equal(row.complete, false); assert.equal(row.failure.message, 'Original hidden assertion timed out');
+    assert.deepEqual(row.requests, requests); assert.deepEqual(row.responses, responses); assert.deepEqual(row.requestFailures, requestFailures);
+    assert.deepEqual(row.diagnostics.editor, editor); assert.deepEqual(row.diagnostics.tables, committed); assert.deepEqual(fixture.tables(), committed);
+    assert.deepEqual(calls, [fixture.url, fixture.url + '/edits/' + id]);
+    const receipt = row.diagnostics.reads.find(value => value.url.endsWith('/edits/' + id));
+    assert.equal(receipt.status, 200); assert.equal(JSON.parse(receipt.text).job.id, id); assert.equal(JSON.parse(receipt.text).job.saved, true);
+    assert.equal(row.requests.filter(value => value.method === 'POST').length, 1);
+    const overdue = {};
+    await nameBrowserFailure({ row: overdue, fixture, client: { ...client, page: { request: { get: () => new Promise(() => {}) } } },
+      error: new Error('Retain primary failure'), inspectEditor: () => new Promise(() => {}), timeoutMs: 5 });
+    assert.equal(overdue.failure.message, 'Retain primary failure'); assert.match(overdue.diagnostics.observationError, /exceeded/); assert.equal(overdue.complete, false);
+  } finally { await fixture.close(); }
+});
