@@ -56,7 +56,7 @@ test('atomicity browser release adapter binds its separately recorded outer orig
 
 test('atomicity release discovery requires one existing Node artifact attempt and preserves collector scheduling budgets', async t => {
   for (const suites of [technicalSuites, purposes.pr, purposes.release]) assert.equal(suites.filter(name => name === 'import-atomicity').length, 1);
-  assert.ok(domainSuites['HW-09'].includes('import-atomicity')); assert.equal(technicalSuites.length, 17);
+  assert.ok(domainSuites['HW-09'].includes('import-atomicity')); assert.equal(technicalSuites.length, 18);
   for (const file of ['test/release-atomicity-evidence.test.mjs', 'test/runner-report-evidence.test.mjs'])
     assert.deepEqual(testExecutionPlan(file), { exclusive: true, timeoutMs: 90000 });
   const directory = await mkdtemp(path.join(os.tmpdir(), 'release-atomicity-discovery-')); t.after(() => rm(directory, { recursive: true, force: true }));
@@ -67,7 +67,7 @@ test('atomicity release discovery requires one existing Node artifact attempt an
     if (count) { const candidate = path.join(artifact, `run-${count}`); await mkdir(candidate, { recursive: true }); await json(path.join(candidate, 'report.json'), { profile: 'import-atomicity', nodeOnly: true }); }
     const execution = await runProcess(process.execPath, ['scripts/release-manifest.mjs', `--artifact-root=${directory}`, `--output=${output}`], { timeoutMs: 10000 });
     assert.equal(execution.ok, true, execution.tail); const manifest = JSON.parse(await readFile(output)), row = manifest.evidence.find(row => row.suite === 'import-atomicity');
-    assert.equal(manifest.evidence.length, 17);
+    assert.equal(manifest.evidence.length, 18);
     if (count === 1) { assert.equal(row.discoveryError, undefined); assert.equal(row.directory, path.join(artifact, 'run-1')); }
     else assert.equal(row.discoveryError, count ? 'ambiguous_report_artifacts' : 'missing_report_artifact');
   }

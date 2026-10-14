@@ -11,7 +11,7 @@ import { sourceVersion } from '../scripts/lib/verification-evidence.mjs';
 const json = (file, value) => writeFile(file, JSON.stringify(value));
 test('upgrade is a mandatory scoped technical slot without closing external platform acceptance', () => {
   for (const suites of [technicalSuites, purposes.pr, purposes.release]) assert.equal(suites.filter(name => name === 'install-upgrade').length, 1);
-  assert.equal(technicalSuites.length, 17);
+  assert.equal(technicalSuites.length, 18);
   assert.deepEqual(budgets['install-upgrade'], { overallMs: 300000, dataMs: 60000, installMs: 240000 });
   for (const domain of ['HW-09', 'HW-10', 'HW-14']) assert.ok(domainSuites[domain].includes('install-upgrade'));
 });
@@ -33,7 +33,7 @@ test('upgrade artifact discovery includes every attempt and the dedicated job is
     if (count) { const candidate = path.join(artifact, `run-${count}`); await mkdir(candidate, { recursive: true }); await json(path.join(candidate, 'report.json'), { profile: 'install-upgrade' }); }
     const execution = await runProcess(process.execPath, ['scripts/release-manifest.mjs', `--artifact-root=${directory}`, `--output=${output}`], { timeoutMs: 10000 });
     assert.equal(execution.ok, true, execution.tail); const manifest = JSON.parse(await readFile(output)), row = manifest.evidence.find(row => row.suite === 'install-upgrade');
-    assert.equal(manifest.evidence.length, 17);
+    assert.equal(manifest.evidence.length, 18);
     if (count === 1) { assert.equal(row.discoveryError, undefined); assert.equal(row.directory, path.join(artifact, 'run-1')); }
     else assert.equal(row.discoveryError, count ? 'ambiguous_report_artifacts' : 'missing_report_artifact');
   }
