@@ -36,3 +36,11 @@ All observations before the first divergence must pass the normal helper. The fi
 ## Scope
 
 This evidence supports HW-07-07 through HW-07-10 only for the declared bounded protocol and actual replay scope. The separate KEJ-70 interval/Unicode proof and generated SQLite coverage remain required. Actual list/detail/graph/reopen browser evidence is separate. The report always has `fullProjectAcceptance: false`; it makes no unbounded, liveness, hash-collision, process-kill/power-loss, paid-provider or real-device claim.
+
+## Actual browser boundary
+
+The separate `verify:name-browser` profile records six actual editor/list/detail/graph scenarios at 1280px and 390px: held commit plus double submit, successful receipt recovery after a real commit followed by proxy 502, unavailable receipt after committed proxy 502 or lost response, real receipt-write rollback followed by explicit Unicode-name retry, and cancel/no-op. The rollback retry includes a fullwidth name with repeated whitespace; independent table normalization uses NFKC and whitespace folding. A production editor source copy removes only the `save` busy guard; two actual requests reveal the extra submission. No model-only flag substitutes for the browser.
+
+The browser raw reader independently checks all full-table deltas, immutable identities/stale supports/unrelated listening, actual submitted bodies/UUIDs/receipts, visible draft/control states and list/detail/graph names. It binds the three actually loaded source modules, source/build bytes before and after, precise child commands and complete named HTTP TAP. Generic results keep exactly observations.json and worker.log; all thirteen screenshots plus browser.json are separately hashed and reread. The shared 150s child budget reserves 30s of the parent180s deadline for cleanup/reporting.
+
+The Node contract fixture explicitly synthesizes UI observations around real HTTP/SQLite transactions. It is only a reader regression and is never evidence that Chromium or a physical device ran. Actual browser acceptance requires the separate current-source CI artifact.

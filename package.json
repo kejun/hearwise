@@ -53,7 +53,13 @@
     "verify:edit-protocol": "node scripts/verify-edit-protocol.mjs",
     "verify:edit-protocol:report": "node scripts/verify-edit-protocol-report.mjs",
     "prequality:asr-mt": "npm run build",
-    "quality:asr-mt": "node scripts/evaluate-asr-translation-quality.mjs"
+    "quality:asr-mt": "node scripts/evaluate-asr-translation-quality.mjs",
+    "setup:name-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:name-protocol": "npm run build",
+    "verify:name-protocol": "node scripts/verify-name-protocol.mjs",
+    "verify:name-protocol:report": "node scripts/verify-name-protocol-report.mjs",
+    "preverify:name-browser": "npm run build",
+    "verify:name-browser": "node scripts/verify-name-protocol-browser.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
