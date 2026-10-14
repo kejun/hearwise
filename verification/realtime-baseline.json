@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "scope": "offline-loopback-server-baseline",
+  "input": { "version": 1, "pcm": "one 3200-byte zero-filled PCM16 frame per synthetic sentence; ASR final emitted only after local provider receives frame", "source": "en", "target": "Chinese", "translationDelayMs": 20, "extractionWaitMs": 1500 },
+  "profiles": {
+    "smoke": { "continuousMs": 1000, "intervalMs": 250, "warmupMs": 500, "repeats": 1, "restartCycles": 2, "switchCycles": 2, "backgroundSentences": 6, "sampleMs": 100, "phaseTimeoutMs": 12000, "cleanupObservationMs": 3000, "workerTimeoutMs": 45000 },
+    "baseline": { "continuousMs": 30000, "intervalMs": 250, "warmupMs": 2000, "repeats": 3, "restartCycles": 4, "switchCycles": 4, "backgroundSentences": 12, "sampleMs": 100, "phaseTimeoutMs": 15000, "cleanupObservationMs": 3000, "workerTimeoutMs": 110000 }
+  },
+  "quantiles": { "method": "nearest-rank", "values": [50, 95, 99] },
+  "acceptance": { "status": "not_run", "reason": "Release owner has not frozen supported devices, resource budgets, latency thresholds or permitted variability. These versioned measurement inputs do not approve acceptance.", "resourceBudgets": null, "latencyThresholds": null, "permittedVariability": null },
+  "notRun": ["real-vendor-end-to-end", "browser-caption-paint", "actual-audible-first-sound", "physical-device-background-lockscreen", "multi-hour-resource-stability", "candidate-comparison"]
+}
