@@ -177,9 +177,10 @@ test('Qwen reconnects before first audio, never replays after partial audio, and
         commits++;
         if (commits === 1) return ws.close();
         if (commits === 4) return; // Hold a response until the local cancel closes it.
-        ws.send(JSON.stringify({ type: 'response.created', response: { id: 'r' } }));
-        ws.send(JSON.stringify({ type: 'response.audio.delta', response_id: 'r', delta: Buffer.alloc(8).toString('base64') }));
-        if (commits === 2) ws.send(JSON.stringify({ type: 'response.done', response: { id: 'r', status: 'completed' } }));
+        const responseId = `r-${commits}`; // Distinct tasks have distinct IDs on this connection.
+        ws.send(JSON.stringify({ type: 'response.created', response: { id: responseId } }));
+        ws.send(JSON.stringify({ type: 'response.audio.delta', response_id: responseId, delta: Buffer.alloc(8).toString('base64') }));
+        if (commits === 2) ws.send(JSON.stringify({ type: 'response.done', response: { id: responseId, status: 'completed' } }));
         else ws.close();
       }
     });
