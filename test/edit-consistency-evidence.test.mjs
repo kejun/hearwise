@@ -8,10 +8,12 @@ import { metadata, validateResult } from '../scripts/lib/verification-evidence.m
 import { editConsistencyProfile } from '../verification/edit-consistency-properties.mjs';
 import { editScenarios, editBrowserAssets, writeEditEvidence, checkEditEvidence, summarizeEditResults } from '../test-support/edit-consistency-evidence.mjs';
 
-test('node-only edit evidence runs the real HTTP cases but leaves every UI-dependent property not run', { timeout: 30000 }, async t => {
+// Sequential child budgets total 50s; allow 15s for startup, cleanup and report output,
+// then 10s for assertions/fixture teardown, below the unchanged 90s file watchdog.
+test('node-only edit evidence runs the real HTTP cases but leaves every UI-dependent property not run', { timeout: 75000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'edit-report-')); t.after(() => rm(root, { recursive: true, force: true }));
   const execution = await runProcess(process.execPath, ['scripts/verify-edit-consistency-browser.mjs', '--node-only'],
-    { env: { ...process.env, EDIT_CONSISTENCY_EVIDENCE_DIR: root }, timeoutMs: 25000 });
+    { env: { ...process.env, EDIT_CONSISTENCY_EVIDENCE_DIR: root }, timeoutMs: 65000 });
   assert.equal(execution.code, 1, execution.tail); assert.equal(execution.timedOut, false);
   const names = await readdir(root); assert.equal(names.length, 1); const directory = path.join(root, names[0]);
   const report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8'));
