@@ -36,7 +36,9 @@
     "setup:knowledge-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:knowledge-protocol": "npm run build",
     "verify:knowledge-protocol": "node scripts/verify-knowledge-protocol.mjs",
-    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs"
+    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs",
+    "preverify:security": "npm run build",
+    "verify:security": "node scripts/verify-security-browser.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
