@@ -21,7 +21,10 @@
     "preflight": "node scripts/preflight.mjs",
     "preflight:browser": "node scripts/preflight.mjs --browser",
     "setup:browser": "node scripts/setup-browser.mjs",
-    "check:format": "node scripts/check-text-format.mjs"
+    "check:format": "node scripts/check-text-format.mjs",
+    "preverify": "npm run build",
+    "verify": "node scripts/verify.mjs",
+    "verify:report": "node scripts/verify-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
