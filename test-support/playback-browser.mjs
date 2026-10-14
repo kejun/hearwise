@@ -7,9 +7,22 @@ import { chromium } from 'playwright';
 import { playbackFixture, playbackWait, playbackGolden } from './playback-speech-fixture.mjs';
 import { speechIntervalLedger } from './playback-text-contract.mjs';
 import { playbackControllerVariant } from './playback-controller-variant.mjs';
+import { playbackSourceSnapshot, playbackProvenance, playbackServedFiles } from './playback-provenance.mjs';
+import { digest } from '../scripts/lib/verification-evidence.mjs';
+import { deadline } from './lifecycle.mjs';
 
 const directory = process.argv[2];
-const observations = { complete: false, widths: [], negative: null };
+const sourceStart = await playbackSourceSnapshot(), provenance = await playbackProvenance(sourceStart);
+const observations = { complete: false, widths: [], negative: null, sourceStart, sourceEnd: null, mutation: { mutation: provenance.mutation,
+  normalControllerSha256: provenance.normalControllerSha256, mutantControllerSha256: provenance.mutantControllerSha256 } };
+function monitorServed(page) {
+  const responses = [], errors = [], pending = [];
+  page.on('response', response => {
+    const file = 'public' + new URL(response.url()).pathname; if (!playbackServedFiles.includes(file)) return;
+    pending.push(response.body().then(body => responses.push({ file, status: response.status(), sha256: digest(body) })).catch(error => errors.push(error.message)));
+  });
+  return async () => { await deadline(() => Promise.all(pending), 3000, 'served playback module hashes'); return { responses, errors }; };
+}
 let browser;
 async function prepare(page, { delayedUnlock = false, mutation = false } = {}) {
   page.setDefaultTimeout(10000);
@@ -25,7 +38,7 @@ async function prepare(page, { delayedUnlock = false, mutation = false } = {}) {
       constructor(...args) {
         super(...args);
         if (!String(args[0]).endsWith('/ws/tts')) return;
-        this.received = []; this.sent = []; probe.sockets.push(this);
+        this.received = []; this.sent = []; this.fixtureId = probe.sockets.length + 1; probe.sockets.push(this);
         this.addEventListener('message', ({ data }) => {
           if (typeof data === 'string') this.received.push(JSON.parse(data));
           else if (data instanceof ArrayBuffer) {
@@ -56,8 +69,8 @@ async function prepare(page, { delayedUnlock = false, mutation = false } = {}) {
   }, { delayedUnlock });
 }
 const snapshot = page => page.evaluate(() => ({
-  sockets: window.playbackProbe.sockets.map(socket => ({ readyState: socket.readyState, sent: socket.sent, received: socket.received })),
-  contexts: window.playbackProbe.contexts.map(context => context.state),
+  sockets: window.playbackProbe.sockets.map(socket => ({ id: socket.fixtureId, readyState: socket.readyState, sent: socket.sent, received: socket.received })),
+  contexts: window.playbackProbe.contexts.map(context => context.state), contextIds: window.playbackProbe.contexts.map((_context, index) => index + 1),
   status: document.querySelector('#transcript-speech-status').textContent,
   paused: document.querySelector('#transcript-speech-pause').textContent === '继续播报',
   enabled: !document.querySelector('#transcript-speech-stop').hidden
@@ -77,6 +90,7 @@ async function screenshot(page, width, scenario) {
 async function unlockScenario(width, mutation = false) {
   const fixture = await playbackFixture({ hold: true, audioSamples: 12000 });
   const page = await browser.newPage({ viewport: { width, height: 900 } });
+  const served = monitorServed(page);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await prepare(page, { delayedUnlock: true, mutation }); await open(page, fixture, 'A'); await start(page);
@@ -95,7 +109,7 @@ async function unlockScenario(width, mutation = false) {
     if (mutation) {
       assert.equal(after.sockets.length, 2, 'the actual controller mutant incorrectly opens an old transport');
       await screenshot(page, width, 'negative-unlock');
-      return { caught: true, mutation: 'late-unlock', expectedSockets: 1, actualSockets: after.sockets.length, before, after, errors };
+      return { caught: true, mutation: 'late-unlock', expectedSockets: 1, actualSockets: after.sockets.length, before, after, served: await served(), errors };
     }
     assert.equal(after.sockets.length, 1); assert.equal(after.enabled, true); assert.equal(after.paused, false);
     assert.deepEqual(fixture.stats.commits, ['丙。']);
@@ -104,7 +118,7 @@ async function unlockScenario(width, mutation = false) {
     await page.waitForFunction(() => window.playbackProbe.contexts.every(context => context.state === 'closed') &&
       window.playbackProbe.sockets.every(socket => socket.readyState === 3));
     assert.deepEqual(errors, []);
-    return { scenario: 'unlock-race', before, after, stopped: await snapshot(page), commits: fixture.stats.commits, errors };
+    return { scenario: 'unlock-race', before, after, stopped: await snapshot(page), commits: fixture.stats.commits, served: await served(), errors };
   } finally { await page.close(); await fixture.close(); }
 }
 try {
@@ -115,11 +129,12 @@ try {
     const cases = [];
     const textFixture = await playbackFixture({ audioSamples: 6000 });
     const textPage = await browser.newPage({ viewport: { width, height: 900 } });
+    const textServed = monitorServed(textPage);
     const textErrors = []; textPage.on('pageerror', error => textErrors.push(error.message));
     try {
       await prepare(textPage); await open(textPage, textFixture, 'Text'); await start(textPage);
       await textPage.locator('#transcript-speech-status').filter({ hasText: '译文全文播报完成' }).waitFor();
-      await textPage.waitForFunction(() => window.playbackProbe.contexts.every(context => context.state === 'closed'));
+      await textPage.waitForFunction(() => window.playbackProbe.contexts.every(context => context.state === 'closed') && window.playbackProbe.sockets.every(socket => socket.readyState === 3));
       const ledger = speechIntervalLedger(playbackGolden, textFixture.stats.commits, { graphemeSafe: true });
       const state = await snapshot(textPage), socket = state.sockets[0];
       const units = socket.received.filter(event => event.type === 'speech.unit');
@@ -131,11 +146,12 @@ try {
       assert.equal(progress.playedUnit, units.length); assert.equal(progress.consumedSamples, units.length * 6000);
       assert.equal(state.enabled, false); assert.ok(state.contexts.every(value => value === 'closed'));
       await screenshot(textPage, width, 'text'); assert.deepEqual(textErrors, []);
-      cases.push({ scenario: 'text', normalized: playbackGolden, requests: textFixture.stats.commits, ledger, state, errors: textErrors });
+      cases.push({ scenario: 'text', normalized: playbackGolden, requests: textFixture.stats.commits, ledger, state, served: await textServed(), errors: textErrors });
     } finally { await textPage.close(); await textFixture.close(); }
 
     const fixture = await playbackFixture({ hold: true, audioSamples: 12000 });
     const page = await browser.newPage({ viewport: { width, height: 900 } });
+    const served = monitorServed(page);
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     try {
       await prepare(page); await open(page, fixture, 'A'); await start(page);
@@ -144,8 +160,9 @@ try {
       await page.waitForFunction(() => document.querySelector('#transcript-speech-pause').textContent === '继续播报');
       await page.locator('#transcript-speech-seek').focus(); await page.keyboard.press('End');
       await page.waitForFunction(() => window.playbackProbe.sockets.length === 2 &&
-        window.playbackProbe.sockets[1].received.some(event => event.type === 'speech.ready'));
-      const paused = await snapshot(page);
+        window.playbackProbe.sockets[1].received.some(event => event.type === 'speech.ready') &&
+        window.playbackProbe.sockets[0].readyState === 3 && window.playbackProbe.contexts.at(-1).state === 'suspended');
+      const paused = await snapshot(page), commitsWhilePaused = fixture.stats.commits.slice();
       assert.equal(paused.paused, true); assert.equal(paused.sockets[1].sent[0].startPosition, 2);
       assert.equal(paused.sockets[1].sent[0].paused, true); assert.deepEqual(fixture.stats.commits, ['甲。']);
       assert.equal(await page.locator('#transcript-speech-seek').evaluate(element => element === document.activeElement), true);
@@ -160,7 +177,7 @@ try {
         for (const type of ['speech.error', 'speech.finished']) old.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type, epoch, message: 'INVALID OLD CALLBACK' }) }));
         old.dispatchEvent(new Event('close')); old.dispatchEvent(new Event('error'));
       });
-      const afterLate = await snapshot(page);
+      const afterLate = await snapshot(page), commitsAfterLate = fixture.stats.commits.slice();
       assert.equal(afterLate.enabled, true); assert.equal(afterLate.paused, true); assert.equal(afterLate.status, paused.status);
       assert.deepEqual(fixture.stats.commits, ['甲。']);
       await screenshot(page, width, 'stale-events');
@@ -171,8 +188,9 @@ try {
       assert.equal(fixture.held[0].sendDefault(), false);
       fixture.held[1].sendDefault();
       await page.locator('#transcript-speech-status').filter({ hasText: '译文全文播报完成' }).waitFor();
+      await page.waitForFunction(() => window.playbackProbe.contexts.every(context => context.state === 'closed') && window.playbackProbe.sockets.every(socket => socket.readyState === 3));
       const finished = await snapshot(page); assert.equal(finished.enabled, false); assert.deepEqual(errors, []);
-      cases.push({ scenario: 'paused-seek', paused, afterLate, finished, commits: fixture.stats.commits, errors });
+      cases.push({ scenario: 'paused-seek', paused, afterLate, finished, commitsWhilePaused, commitsAfterLate, commits: fixture.stats.commits, served: await served(), errors });
     } finally { await page.close(); await fixture.close(); }
     cases.push(await unlockScenario(width)); observations.widths.push({ width, cases });
   }
@@ -181,6 +199,7 @@ try {
   observations.complete = true;
   console.log(JSON.stringify({ complete: true, widths: observations.widths.map(row => row.width), negativeCaught: observations.negative.caught }));
 } finally {
+  observations.sourceEnd = await playbackSourceSnapshot();
   await writeFile(path.join(directory, 'browser.json'), JSON.stringify(observations, null, 2) + '\n');
   await browser?.close();
 }

@@ -6,6 +6,7 @@ import os from 'node:os';
 import { runProcess } from '../scripts/lib/process.mjs';
 import { metadata, validateResult } from '../scripts/lib/verification-evidence.mjs';
 import { playbackProfile } from '../verification/playback-properties.mjs';
+import { playbackProvenance, playbackServedFiles, stablePlaybackSources } from '../test-support/playback-provenance.mjs';
 import { playbackGolden } from '../test-support/playback-speech-fixture.mjs';
 import { speechIntervalLedger } from '../test-support/playback-text-contract.mjs';
 import { playbackAssets, playbackCounts, playbackTap, checkPlaybackBrowser, writePlaybackEvidence, checkPlaybackEvidence,
@@ -14,19 +15,29 @@ import { playbackAssets, playbackCounts, playbackTap, checkPlaybackBrowser, writ
 const tap = (tests, { pass = tests, fail = 0, skipped = 0, todo = 0, cancelled = 0 } = {}) => `1..${tests}\n` +
   Object.entries({ tests, suites: 0, pass, fail, cancelled, skipped, todo, duration_ms: 1 }).map(([key, value]) => `# ${key} ${value}\n`).join('');
 const execution = changes => ({ code: 0, signal: null, ok: true, timedOut: false, interrupted: false, ...changes });
-function syntheticBrowser() {
+function syntheticBrowser(provenance) {
   const cut = playbackGolden.indexOf('。') + 1;
   const requests = [playbackGolden.slice(0, cut), playbackGolden.slice(cut).trim().slice(0, -4), 'END'];
-  const socket = { readyState: 3, sent: [{ type: 'speech.transcript', epoch: 1 }, { type: 'speech.progress', playedUnit: 3, consumedSamples: 18000 }],
-    received: requests.flatMap((text, i) => [{ type: 'speech.unit', unit: i + 1, text }, { type: 'pcm', epoch: 1, unit: i + 1, frame: 0, samples: 6000, bytes: 12016 }, { type: 'speech.unit-end', unit: i + 1 }]).concat({ type: 'speech.finished' }) };
-  return { complete: true, chromium: 'synthetic-contract-only', widths: [1280, 390].map(width => ({ width, cases: [
-    { scenario: 'text', normalized: playbackGolden, requests, ledger: speechIntervalLedger(playbackGolden, requests, { graphemeSafe: true }),
-      state: { enabled: false, contexts: ['closed'], sockets: [socket] }, errors: [] },
-    { scenario: 'paused-seek', paused: { enabled: true, paused: true, status: 'paused', sockets: [{}, { sent: [{ paused: true, startPosition: 2 }] }] },
-      afterLate: { enabled: true, paused: true, status: 'paused' }, finished: { enabled: false }, commits: ['甲。', '乙。'], errors: [] },
-    { scenario: 'unlock-race', before: { sockets: [{}] }, after: { enabled: true, paused: false, sockets: [{}] },
-      stopped: { enabled: false, contexts: ['closed'], sockets: [{ readyState: 3 }] }, commits: ['丙。'], errors: [] }
-  ] })), negative: { caught: true, mutation: 'late-unlock', expectedSockets: 1, actualSockets: 2, before: { sockets: [{}] }, after: { sockets: [{}, {}] }, errors: [] } };
+  const served = mutant => ({ errors: [], responses: playbackServedFiles.map(file => ({ file, status: 200,
+    sha256: mutant && file === 'public/speech-controller.js' ? provenance.mutantControllerSha256 : provenance.snapshot.digests[file] })) });
+  const socket = { id: 1, readyState: 3, sent: [{ type: 'speech.transcript', epoch: 1 }, { type: 'speech.progress', epoch: 1, playedUnit: 3, consumedSamples: 18000 }],
+    received: requests.flatMap((text, i) => [{ type: 'speech.unit', epoch: 1, unit: i + 1, text }, { type: 'pcm', epoch: 1, unit: i + 1, frame: 0, samples: 6000, bytes: 12016 },
+      { type: 'speech.unit-end', epoch: 1, unit: i + 1, samples: 6000 }]).concat({ type: 'speech.finished', epoch: 1 }) };
+  const paused = { enabled: true, paused: true, status: 'paused', contexts: ['closed', 'suspended'], contextIds: [1, 2],
+    sockets: [{ id: 1, readyState: 3, sent: [], received: [] }, { id: 2, readyState: 1, sent: [{ paused: true, startPosition: 2 }], received: [] }] };
+  const finished = { ...structuredClone(paused), enabled: false, contexts: ['closed', 'closed'] }; finished.sockets[1].readyState = 3;
+  const unlocked = { enabled: true, paused: false, contexts: ['closed', 'running'], contextIds: [1, 2], sockets: [{ id: 1, readyState: 1, sent: [], received: [] }] };
+  const stopped = { ...structuredClone(unlocked), enabled: false, contexts: ['closed', 'closed'] }; stopped.sockets[0].readyState = 3;
+  return { complete: true, chromium: 'synthetic-contract-only', sourceStart: structuredClone(provenance.snapshot), sourceEnd: structuredClone(provenance.snapshot),
+    mutation: { mutation: provenance.mutation, normalControllerSha256: provenance.normalControllerSha256, mutantControllerSha256: provenance.mutantControllerSha256 },
+    widths: [1280, 390].map(width => ({ width, cases: [
+      { scenario: 'text', normalized: playbackGolden, requests, ledger: speechIntervalLedger(playbackGolden, requests, { graphemeSafe: true }),
+        state: { enabled: false, contexts: ['closed'], contextIds: [1], sockets: [structuredClone(socket)] }, served: served(false), errors: [] },
+      { scenario: 'paused-seek', paused: structuredClone(paused), afterLate: structuredClone(paused), finished: structuredClone(finished),
+        commitsWhilePaused: ['甲。'], commitsAfterLate: ['甲。'], commits: ['甲。', '乙。'], served: served(false), errors: [] },
+      { scenario: 'unlock-race', before: structuredClone(unlocked), after: structuredClone(unlocked), stopped: structuredClone(stopped), commits: ['丙。'], served: served(false), errors: [] }
+    ] })), negative: { caught: true, mutation: 'late-unlock', expectedSockets: 1, actualSockets: 2, before: structuredClone(unlocked),
+      after: { ...structuredClone(unlocked), sockets: [...structuredClone(unlocked.sockets), { id: 2, readyState: 1, sent: [], received: [] }] }, served: served(true), errors: [] } };
 }
 
 test('playback profile runs the exact actual Node stages but keeps missing Chromium not_run', { timeout: 40000 }, async t => {
@@ -58,7 +69,7 @@ test('playback TAP checks bind the canonical final footer to the exact declared 
 // Synthetic records and bytes exercise packaging/schema only, never count as UI evidence.
 test('playback packaging verifies every referenced asset and preserves the shared two-artifact contract', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'playback-asset-contract-')); t.after(() => rm(directory, { recursive: true, force: true }));
-  const browser = syntheticBrowser(); assert.equal(checkPlaybackBrowser(browser), true);
+  const provenance = await playbackProvenance(), browser = syntheticBrowser(provenance); assert.equal(checkPlaybackBrowser(browser, provenance), true);
   const checks = Object.entries(playbackCounts).map(([name, count]) => ({ name, execution: execution(playbackTap(tap(count), name)) }));
   checks.push({ name: 'browser', execution: execution() });
   for (const [name, count] of Object.entries(playbackCounts)) await writeFile(path.join(directory, `${name}.log`), tap(count));
@@ -67,21 +78,22 @@ test('playback packaging verifies every referenced asset and preserves the share
   for (const file of playbackAssets.filter(name => name.endsWith('.png'))) await writeFile(path.join(directory, file), 'synthetic image bytes');
   const result = { ...await metadata(), property: { id: playbackProfile[0], version: 1 }, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
     complete: true, status: 'passed', scope: { description: 'Synthetic artifact contract only', scenario: 'unit-test', samples: 1, seed: null },
-    artifacts: await writePlaybackEvidence(directory, { browser, checks }) };
+    artifacts: await writePlaybackEvidence(directory, { sourceStart: provenance.snapshot, sourceEnd: provenance.snapshot, browser, checks }) };
   assert.equal(validateResult(result), true); assert.equal(result.artifacts.length, 2); assert.equal(await checkPlaybackEvidence(directory, result), true);
   for (const file of playbackAssets) {
     const original = await readFile(path.join(directory, file)); await writeFile(path.join(directory, file), 'tampered');
     assert.equal(await checkPlaybackEvidence(directory, result), false, file); await writeFile(path.join(directory, file), original);
     await rm(path.join(directory, file)); assert.equal(await checkPlaybackEvidence(directory, result), false, file);
-    await assert.rejects(writePlaybackEvidence(directory, { browser, checks }), /ENOENT/);
+    await assert.rejects(writePlaybackEvidence(directory, { sourceStart: provenance.snapshot, sourceEnd: provenance.snapshot, browser, checks }), /ENOENT/);
     await writeFile(path.join(directory, file), original);
   }
   await writeFile(path.join(directory, 'identity.log'), tap(1));
-  result.artifacts = await writePlaybackEvidence(directory, { browser, checks });
+  result.artifacts = await writePlaybackEvidence(directory, { sourceStart: provenance.snapshot, sourceEnd: provenance.snapshot, browser, checks });
   assert.equal(await checkPlaybackEvidence(directory, result), false, 'Rehashing cannot hide a replaced raw TAP log');
 });
 
-test('playback browser contract rejects false completion, missing coverage and inconsistent raw frames or text', () => {
+test('playback browser contract rejects false completion, missing coverage and inconsistent raw frames or text', async () => {
+  const provenance = await playbackProvenance();
   const mutations = [
     b => { b.complete = false; }, b => { b.widths.pop(); }, b => { b.widths[1].width = 1280; }, b => { b.widths[0].cases.pop(); },
     b => { b.widths[0].cases[0].requests.pop(); }, b => { b.widths[0].cases[0].ledger.accepted[0].start = 1; },
@@ -96,9 +108,16 @@ test('playback browser contract rejects false completion, missing coverage and i
     b => { b.widths[0].cases[1].finished.contexts = ['running']; },
     b => { b.widths[0].cases[1].afterLate.sockets = [{}, {}, {}]; },
     b => { delete b.widths[0].cases[2].stopped.contexts; },
+    b => { b.widths[0].cases[1].commitsWhilePaused.push('乙。'); },
+    b => { b.widths[0].cases[1].afterLate.contextIds[1] = 999; },
+    b => { b.widths[0].cases[0].served.responses[0].sha256 = '0'.repeat(64); },
+    b => { b.widths[0].cases[0].served.responses.pop(); },
+    b => { b.negative.served.responses.find(row => row.file === 'public/speech-controller.js').sha256 = provenance.normalControllerSha256; },
+    b => { b.sourceEnd.digests['public/app.js'] = '0'.repeat(64); },
+    b => { b.mutation.mutantControllerSha256 = b.mutation.normalControllerSha256; },
     b => { b.negative.caught = false; }, b => { b.negative.after.sockets.pop(); }, b => { b.negative.errors.push('page crash'); }
   ];
-  for (const mutate of mutations) { const browser = syntheticBrowser(); mutate(browser); assert.equal(checkPlaybackBrowser(browser), false, mutate.toString()); }
+  for (const mutate of mutations) { const browser = syntheticBrowser(provenance); mutate(browser); assert.equal(checkPlaybackBrowser(browser, provenance), false, mutate.toString()); }
 });
 
 test('playback property execution remains scoped while the aggregate fails closed', async () => {
@@ -121,4 +140,14 @@ test('playback child budgets share the 150s deadline and stop after timeout with
   }, { now: () => now, cleanup: () => { cleaned = true; } });
   assert.deepEqual(budgets, [30000, 20000, 30000, 70000]); assert.equal(cleaned, true);
   assert.equal(result.checks.length, 4); assert.equal(result.checks.at(-1).execution.timedOut, true);
+});
+
+test('playback source snapshots reject dirty-to-dirty content changes and missing build provenance', async () => {
+  const { snapshot } = await playbackProvenance(); const start = structuredClone(snapshot); start.source.dirty = true;
+  assert.equal(stablePlaybackSources(start, structuredClone(start)), true);
+  for (const key of ['public/app.js', 'dist/server/index.js', 'test-support/playback-evidence.mjs']) {
+    const changed = structuredClone(start); changed.digests[key] = '0'.repeat(64);
+    assert.equal(stablePlaybackSources(start, changed), false);
+    delete changed.digests[key]; assert.equal(stablePlaybackSources(changed, changed), false);
+  }
 });

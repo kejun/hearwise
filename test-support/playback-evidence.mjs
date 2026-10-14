@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { digest, writeJson, checkArtifacts } from '../scripts/lib/verification-evidence.mjs';
 import { tapSummary, summarizeChecks } from '../scripts/lib/verification-checks.mjs';
 import { speechIntervalLedger } from './playback-text-contract.mjs';
+import { playbackProvenance, validPlaybackProvenance, stablePlaybackSources } from './playback-provenance.mjs';
 import { playbackGolden } from './playback-speech-fixture.mjs';
 
 export { runChecks as runPlaybackChecks } from '../scripts/lib/verification-checks.mjs';
@@ -20,9 +21,42 @@ export function summarizePlaybackResults(options) {
     checksForProperty: id => playbackRequiredChecks(id, options.nodeOnly) });
 }
 const cleanErrors = value => Array.isArray(value) && value.length === 0;
-export function checkPlaybackBrowser(browser) {
+const resourceShape = state => Array.isArray(state?.contexts) && state.contexts.length > 0 && Array.isArray(state.contextIds) &&
+  state.contextIds.length === state.contexts.length && new Set(state.contextIds).size === state.contextIds.length && state.contextIds.every(id => Number.isSafeInteger(id) && id > 0) &&
+  state.contexts.every(value => ['running', 'suspended', 'closed'].includes(value)) && Array.isArray(state.sockets) && state.sockets.length > 0 &&
+  new Set(state.sockets.map(socket => socket.id)).size === state.sockets.length && state.sockets.every(socket => Number.isSafeInteger(socket.id) && socket.id > 0 && [0, 1, 2, 3].includes(socket.readyState));
+const closedResources = state => resourceShape(state) && state.enabled === false && state.contexts.every(value => value === 'closed') && state.sockets.every(socket => socket.readyState === 3);
+const sameResources = (before, after) => resourceShape(before) && resourceShape(after) && isDeepStrictEqual(before.contextIds, after.contextIds) &&
+  isDeepStrictEqual(before.contexts, after.contexts) && isDeepStrictEqual(before.sockets.map(socket => [socket.id, socket.readyState]), after.sockets.map(socket => [socket.id, socket.readyState]));
+export function checkPlaybackFrames(socket, requests, samplesPerUnit = 6000) {
+  try {
+    const starts = socket.sent.filter(event => event.type === 'speech.transcript'); if (starts.length !== 1) return false;
+    const epoch = starts[0].epoch; if (!Number.isInteger(epoch) || epoch < 1 || epoch > 0xffffffff) return false;
+    let active = 0, count = 0, frame = 0, samples = 0, total = 0, ends = 0, finished = 0;
+    for (const event of socket.received) {
+      if (event.type === 'speech.unit') {
+        if (active || finished || event.epoch !== epoch || event.unit !== count + 1 || event.text !== requests[count]) return false;
+        active = ++count; frame = samples = 0;
+      } else if (event.type === 'pcm') {
+        if (!active || event.epoch !== epoch || event.unit !== active || event.frame !== frame++ || !Number.isSafeInteger(event.samples) || event.samples <= 0 || event.bytes !== 16 + event.samples * 2) return false;
+        samples += event.samples; total += event.samples;
+      } else if (event.type === 'speech.unit-end') {
+        if (!active || event.epoch !== epoch || event.unit !== active || event.samples !== samples || samples !== samplesPerUnit) return false;
+        active = 0; ends++;
+      } else if (event.type === 'speech.finished') {
+        if (active || event.epoch !== epoch || count !== requests.length || ++finished !== 1) return false;
+      }
+    }
+    const progress = socket.sent.filter(event => event.type === 'speech.progress').at(-1);
+    return active === 0 && count === requests.length && ends === count && finished === 1 && total === count * samplesPerUnit &&
+      progress?.epoch === epoch && progress.playedUnit === count && progress.consumedSamples === total;
+  } catch { return false; }
+}
+
+export function checkPlaybackBrowser(browser, provenance) {
   try {
     if (browser?.complete !== true || typeof browser.chromium !== 'string' || !browser.chromium.length || browser.widths?.length !== 2) return false;
+    if (!validPlaybackProvenance(browser, provenance)) return false;
     for (const width of [1280, 390]) {
       const rows = browser.widths.filter(row => row.width === width); if (rows.length !== 1 || rows[0].cases?.length !== 3) return false;
       const cases = rows[0].cases;
@@ -30,24 +64,16 @@ export function checkPlaybackBrowser(browser) {
       const text = cases.find(row => row.scenario === 'text'), seek = cases.find(row => row.scenario === 'paused-seek'), unlock = cases.find(row => row.scenario === 'unlock-race');
       if (!text || !seek || !unlock || text.normalized !== playbackGolden || text.requests?.length < 3) return false;
       if (!isDeepStrictEqual(text.ledger, speechIntervalLedger(playbackGolden, text.requests, { graphemeSafe: true }))) return false;
-      if (text.state?.enabled !== false || !text.state.contexts?.length || text.state.contexts.some(state => state !== 'closed') || text.state.sockets?.length !== 1) return false;
-      const socket = text.state.sockets[0], units = socket.received.filter(event => event.type === 'speech.unit'), pcm = socket.received.filter(event => event.type === 'pcm');
-      if (!isDeepStrictEqual(units.map(unit => unit.text), text.requests) || !pcm.length || pcm.reduce((n, frame) => n + frame.samples, 0) !== units.length * 6000) return false;
-      const start = socket.sent.find(event => event.type === 'speech.transcript'); let unit = 0, frame = 0;
-      for (const packet of pcm) {
-        if (packet.unit !== unit) { if (packet.unit !== unit + 1) return false; unit = packet.unit; frame = 0; }
-        if (packet.epoch !== start.epoch || packet.frame !== frame++ || !Number.isSafeInteger(packet.samples) || packet.samples <= 0 || packet.bytes !== 16 + packet.samples * 2) return false;
-      }
-      if (unit !== units.length || socket.received.filter(event => event.type === 'speech.unit-end').length !== units.length || !socket.received.some(event => event.type === 'speech.finished')) return false;
-      const progress = socket.sent.filter(event => event.type === 'speech.progress').at(-1);
-      if (progress?.playedUnit !== units.length || progress.consumedSamples !== units.length * 6000) return false;
+      if (!closedResources(text.state) || text.state.sockets?.length !== 1) return false;
+      const socket = text.state.sockets[0];
+      if (socket.readyState !== 3 || !checkPlaybackFrames(socket, text.requests)) return false;
       if (seek.paused?.enabled !== true || seek.paused.paused !== true || seek.paused.sockets?.length !== 2 ||
         seek.paused.sockets[1].sent[0]?.paused !== true || seek.paused.sockets[1].sent[0]?.startPosition !== 2 ||
         seek.afterLate?.enabled !== true || seek.afterLate.paused !== true || seek.afterLate.status !== seek.paused.status ||
-        seek.finished?.enabled !== false || !isDeepStrictEqual(seek.commits, ['甲。', '乙。'])) return false;
-      if (unlock.before?.sockets?.length !== 1 || unlock.after?.sockets?.length !== 1 || unlock.after.enabled !== true || unlock.after.paused !== false ||
-        unlock.stopped?.enabled !== false || unlock.stopped.contexts?.some(state => state !== 'closed') || unlock.stopped.sockets?.some(socket => socket.readyState !== 3) ||
-        !isDeepStrictEqual(unlock.commits, ['丙。'])) return false;
+        !sameResources(seek.paused, seek.afterLate) || !isDeepStrictEqual(seek.commitsWhilePaused, ['甲。']) || !isDeepStrictEqual(seek.commitsAfterLate, ['甲。']) ||
+        !closedResources(seek.finished) || !isDeepStrictEqual(seek.commits, ['甲。', '乙。'])) return false;
+      if (unlock.before?.enabled !== true || unlock.before?.sockets?.length !== 1 || unlock.after?.sockets?.length !== 1 || unlock.after.enabled !== true || unlock.after.paused !== false ||
+        !sameResources(unlock.before, unlock.after) || !closedResources(unlock.stopped) || !isDeepStrictEqual(unlock.commits, ['丙。'])) return false;
     }
     const negative = browser.negative;
     return negative?.caught === true && negative.mutation === 'late-unlock' && negative.expectedSockets === 1 && negative.actualSockets === 2 &&
@@ -66,6 +92,8 @@ export async function checkPlaybackEvidence(directory, result) {
   if (!await checkArtifacts(directory, result)) return false;
   try {
     const observations = JSON.parse(await readFile(path.join(directory, 'observations.json'), 'utf8')), refs = observations.attachments;
+    const provenance = await playbackProvenance();
+    if (!stablePlaybackSources(observations.sourceStart, observations.sourceEnd) || !isDeepStrictEqual(observations.sourceStart, provenance.snapshot)) return false;
     if (!Array.isArray(refs) || new Set(refs.map(item => item?.path)).size !== refs.length) return false;
     if (result.status === 'passed' && !observations.browser?.complete) return false;
     if (!Array.isArray(observations.checks) || new Set(observations.checks.map(check => check.name)).size !== observations.checks.length) return false;
@@ -84,7 +112,7 @@ export async function checkPlaybackEvidence(directory, result) {
       check.name === name && check.execution?.ok === true && check.execution.code === 0 && check.execution.signal == null &&
       check.execution.timedOut === false && check.execution.interrupted === false))) return false;
     if (observations.browser?.complete) {
-      if (!checkPlaybackBrowser(observations.browser) || refs.length !== playbackAssets.length || playbackAssets.some(name => refs.filter(ref => ref?.path === name).length !== 1)) return false;
+      if (!checkPlaybackBrowser(observations.browser, provenance) || refs.length !== playbackAssets.length || playbackAssets.some(name => refs.filter(ref => ref?.path === name).length !== 1)) return false;
       if (!isDeepStrictEqual(observations.browser, JSON.parse(await readFile(path.join(directory, 'browser.json'), 'utf8')))) return false;
     }
     return refs.length === 0 || await checkArtifacts(directory, { artifacts: refs });

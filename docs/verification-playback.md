@@ -49,4 +49,4 @@ Qwen 协议按 response ID 关联 created/delta/done，参考[官方服务端事
 
 共用严格 canonical TAP footer 解析器；本 profile 另绑定每阶段精确项数。整体检查共享150s deadline，父180s保留30s清理/报告余量；超时立即停止后续步骤。按性质应用的 execution 独立汇总，单项失败不污染不相关性质，但整体仍失败。
 
-每个 result 严格只有 `observations.json` 与 `worker.log`。observations 内引用 browser JSON 与9张截图，所有10件附件都验证路径存在和 SHA256；browser JSON 与内嵌观测必须相等。门禁独立重算 golden区间、帧序列/累计样本/最终消费、暂停和旧解锁边界，复核原始阶段日志与完整 worker.log 的绑定。合成结构回归覆盖所有附件删除/篡改、计数减少/增加、skip/todo/缺footer、重复/缺失性质、错text/PCM/状态，以及超时清理。合成结构回归不是浏览器通过证据。
+每个 result 严格只有 `observations.json` 与 `worker.log`。observations 内引用 browser JSON 与9张截图，所有10件附件都验证路径存在和 SHA256；browser JSON 与内嵌观测必须相等。门禁逐单元绑定 unit/PCM/end 的 epoch、编号、帧序列、样本和最终消费，独立重算 golden 区间；暂停前后保留供应商调用快照，旧事件前后资源数量/身份不变，完成后 sockets 和 contexts 必须实际关闭。原始阶段日志必须与完整 worker.log 绑定。首尾保存全部源码文件和实际 server build 的内容 hash，拒绝 dirty→dirty 内容变化；Chromium 实际收到的 app/controller/player/worklet/buffer 响应逐个核 hash，正常/固定 controller 变体分别与源码计算结果绑定。合成结构回归覆盖所有附件删除/篡改、计数减少/增加、skip/todo/缺footer、重复/缺失性质、错text/PCM/状态，以及超时清理。合成结构回归不是浏览器通过证据。

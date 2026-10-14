@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { runProcess } from './lib/process.mjs';
 import { metadata, sourceVersion, writeJson } from './lib/verification-evidence.mjs';
+import { playbackSourceSnapshot, playbackProvenance, stablePlaybackSources } from '../test-support/playback-provenance.mjs';
 import { playbackProperties, playbackProfile } from '../verification/playback-properties.mjs';
 
 import { writePlaybackEvidence, checkPlaybackEvidence, playbackTap, runPlaybackChecks, summarizePlaybackResults, playbackRequiredChecks, checkPlaybackBrowser } from '../test-support/playback-evidence.mjs';
@@ -12,6 +13,7 @@ const nodeOnly = args.includes('--node-only');
 const root = process.env.PLAYBACK_EVIDENCE_DIR || 'browser-evidence';
 await mkdir(root, { recursive: true });
 const directory = await mkdtemp(path.join(root, 'playback-'));
+const sourceStart = await playbackSourceSnapshot(), provenance = await playbackProvenance(sourceStart);
 const context = await metadata(), startedAt = new Date().toISOString();
 const report = { ...context, profile: 'playback', startedAt, finishedAt: null, complete: false, ok: false, results: [] };
 await writeJson(path.join(directory, 'report.json'), report);
@@ -40,7 +42,8 @@ const { checks, budgetExpired } = await runPlaybackChecks(specifications, async 
 
 let browser;
 try { browser = JSON.parse(await readFile(path.join(directory, 'browser.json'), 'utf8')); } catch { /* A failed launch has no completed browser observations. */ }
-const observations = { checks, browser: browser || { complete: false, status: nodeOnly ? 'not_run' : 'incomplete' },
+const sourceEnd = await playbackSourceSnapshot();
+const observations = { sourceStart, sourceEnd, checks, browser: browser || { complete: false, status: nodeOnly ? 'not_run' : 'incomplete' },
   boundary: 'Playback protocol and independently normalized text with stub providers. Finite formal gate is separate; no audible/device/real-service quality acceptance.' };
 const artifacts = await writePlaybackEvidence(directory, observations);
 const finishedAt = new Date().toISOString();
@@ -51,14 +54,14 @@ report.results = playbackProperties.map(property => {
   const complete = applicable.length === requiredChecks.length && applicable.every(({ execution: e }) =>
     !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code) && e.testComplete !== false);
   const status = nodeOnly && browserRequired(property.id) ? 'not_run' : !complete ? 'incomplete' :
-    applicable.every(({ execution: e }) => e.ok) && (!browserRequired(property.id) || checkPlaybackBrowser(browser)) ? 'passed' : 'failed';
+    applicable.every(({ execution: e }) => e.ok) && (!browserRequired(property.id) || checkPlaybackBrowser(browser, provenance)) ? 'passed' : 'failed';
   return { ...context, ...(browser?.chromium ? { tools: { ...context.tools, chromium: browser.chromium } } : {}),
     property: { id: property.id, version: property.version }, startedAt, finishedAt, complete,
     status, scope: { description: property.domain, scenario: 'playback-generation-text', samples: 1, seed: null }, artifacts };
 });
 const target = sourceVersion();
 const { execution, summary } = summarizePlaybackResults({ results: report.results, target, checks, nodeOnly, budgetExpired,
-  required: playbackProfile, sourceStable: target.sha === context.source.sha && target.dirty === context.source.dirty,
+  required: playbackProfile, sourceStable: stablePlaybackSources(sourceStart, sourceEnd) && target.sha === context.source.sha && target.dirty === context.source.dirty,
   release: args.includes('--release') || process.env.CI === 'true', artifactsValid: await Promise.all(report.results.map(result => checkPlaybackEvidence(directory, result))) });
 Object.assign(report, { finishedAt, complete: execution.complete, ok: summary.ok, execution, summary });
 await writeJson(path.join(directory, 'report.json'), report);
