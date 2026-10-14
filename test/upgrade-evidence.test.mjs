@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { historicalUpgrade, migrationFault, historicalRestore } from '../test-support/upgrade-scenarios.mjs';
-import { semanticSchema } from '../test-support/upgrade-fixture.mjs';
+import { semanticSchema, readHistoricalFixtures, historical } from '../test-support/upgrade-fixture.mjs';
 import { validateUpgradeCase, assertUpgradeWindow, passedExecution, expectedCases } from '../test-support/upgrade-evidence.mjs';
 
 test('upgrade schema tokenizer preserves word boundaries and quoted identifiers', () => {
@@ -91,4 +92,16 @@ test('upgrade report rejects overlapping data and installer execution windows', 
   assertSerialUpgradeChecks(checks);
   assert.throws(() => assertSerialUpgradeChecks([{ ...checks[0] }, { ...checks[1], startedAt: 19 }]));
   assert.throws(() => assertSerialUpgradeChecks(checks.toReversed()));
+});
+
+test('historical manifest binds every exact version and both immutable fixture parts', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../test/fixtures/upgrade/manifest.json', import.meta.url)));
+  assert.deepEqual(readHistoricalFixtures(manifest), historical);
+  for (const mutate of [value => value.fixtures.pop(), value => { value.fixtures[1] = value.fixtures[0]; },
+    value => { value.fixtures[0].rows = value.fixtures[1].rows; },
+    value => { value.fixtures[0].schema.sha256 = '0'.repeat(64); },
+    value => { value.fixtures[0].rows.path = '../outside.json'; }]) {
+    const copy = structuredClone(manifest); mutate(copy); assert.throws(() => readHistoricalFixtures(copy));
+  }
+  assert.throws(() => readHistoricalFixtures(manifest, () => Buffer.from('{}\n')));
 });
