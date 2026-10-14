@@ -45,11 +45,13 @@ async function run(t, scenario) {
   return { directory, report, observations, processResult };
 }
 test('all 15 capability cards map actual assets and implementation without claiming execution', async () => {
-  assert.equal(properties.length, 15);
-  assert.equal(new Set(properties.map(p => p.id)).size, 15);
+  assert.equal(new Set(properties.map(p => p.id)).size, properties.length);
+  assert.deepEqual([...new Set(properties.map(p => p.group))].sort(), Array.from({ length: 15 }, (_, i) => `HW-${String(i + 1).padStart(2, '0')}`));
+  assert.equal(properties.filter(p => p.id.endsWith('-01')).length, 15);
   for (let i = 0; i < properties.length; i++) {
     const card = properties[i];
-    assert.equal(card.group, `HW-${String(i + 1).padStart(2, '0')}`);
+    assert.equal(card.group, card.id.slice(0, 5));
+    assert.match(card.id, /^HW-\d{2}-\d{2}$/);
     for (const key of ['requirement', 'consequence', 'preconditions', 'state', 'domain', 'assumptions']) assert.ok(card[key]);
     for (const key of ['owners', 'methods', 'issues', 'invalidatedBy', 'acceptance', 'gaps']) assert.ok(card[key].length);
     for (const file of [...card.assets, ...card.implementation]) await access(file);
@@ -71,7 +73,7 @@ test('real relation workflow produces durable business evidence; gate rejects ab
   assert.equal(observations.checkpoints.at(-1).relations.length, 1);
   assert.equal(observations.checkpoints.at(-1).hasWork, false);
   assert.equal(report.summary.fullProjectAcceptance, false);
-  assert.equal(report.summary.coverage.filter(row => row.status === 'not_run').length, 14);
+  assert.equal(report.summary.coverage.filter(row => row.status === 'not_run').length, properties.length - pilot.length);
   const input = { results: [result], target: result.source, required: pilot, execution: report.execution, artifactsValid: [true] };
   assert.equal(summarize({ ...input, results: [] }).rows[0].reasons[0], 'missing');
   for (const mutate of [value => { value.source.sha = '0'.repeat(40); },
