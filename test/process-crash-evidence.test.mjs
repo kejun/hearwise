@@ -1,3 +1,4 @@
+import { syntheticFormalTap } from '../test-support/synthetic-formal-tap.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -186,7 +187,7 @@ async function fixture(t, profile = 'fast') {
     if (entry.kind === 'bounded-model-check') log += `Step ${config.profiles[profile].apalacheDepth[entry.id.slice('bounded-'.length)]}: transition\nThe outcome is: NoError\n[ok] No violation found\n`;
     if (entry.kind === 'simulation') log += '[ok] No violation found\n';
     if (entry.kind === 'model-negative') log += 'error: found a counterexample\n';
-    if (entry.kind === 'implementation-regression') log += 'TAP version 13\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1.0\n';
+    if (entry.kind === 'implementation-regression') log = await syntheticFormalTap('process-crash');
     await put(result.log, log);
     if (!['model-witness', 'simulation', 'model-negative'].includes(entry.kind)) continue;
     const main = entry.id.replace(/^(witnesses|simulation|negative)-/, '');

@@ -24,7 +24,7 @@ test('semantic offline is mandatory and missing or ambiguous existing Node artif
     if (count) { const candidate = path.join(artifact, `offline-${count}`); await mkdir(candidate, { recursive: true }); await json(path.join(candidate, 'summary.json'), { kind: 'semantic-offline-summary' }); }
     const run = await runProcess(process.execPath, ['scripts/release-manifest.mjs', `--artifact-root=${directory}`, `--output=${output}`], { timeoutMs: 10000 });
     assert.equal(run.ok, true, run.tail); const manifest = JSON.parse(await readFile(output, 'utf8')), row = manifest.evidence.find(row => row.suite === 'semantic-offline');
-    assert.equal(manifest.evidence.length, 17);
+    assert.equal(manifest.evidence.length, 18);
     if (count === 1) { assert.equal(row.discoveryError, undefined); assert.equal(row.directory, path.join(artifact, 'offline-1')); }
     else assert.equal(row.discoveryError, count ? 'ambiguous_report_artifacts' : 'missing_report_artifact');
   }
