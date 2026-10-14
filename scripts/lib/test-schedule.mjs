@@ -5,6 +5,9 @@
 const exclusiveFiles = new Set([
   'test/edit-consistency-evidence.test.mjs',
   'test/knowledge-model-guards.test.mjs',
+  'test/name-browser-evidence.test.mjs',
+  'test/name-protocol-evidence.test.mjs',
+  'test/name-protocol-replay.test.mjs',
   'test/playback-evidence.test.mjs',
   'test/playback-protocol-evidence.test.mjs',
   'test/playback-protocol-replay.test.mjs',
