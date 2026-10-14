@@ -1,3 +1,4 @@
+import { addedNestedFixture } from '../test-support/release-added-profile-fixtures.mjs';
 import { nodeTestArgv } from '../scripts/lib/node-test-evidence.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -83,6 +84,7 @@ async function browserFixture(directory) {
   for (const name of browserChecks) {
     const log = `synthetic ${name} contract\n`; await writeFile(path.join(directory, run, `${name}.log`), log);
     rows.push({ name, log: `/different-ci-root/browser-evidence/${run}/${name}.log`, argv: [`scripts/verify-${name}-browser.mjs`], ...execution(log) });
+    if (['security', 'import-protocol', 'edit-consistency'].includes(name)) { await addedNestedFixture(name, path.join(directory, run, `${name}-contract`)); continue; }
     if (['session', 'relation-result'].includes(name)) { await nestedFixture(name, path.join(directory, run, `${name}-contract`)); continue; }
     const assets = name === 'speech' ? directory : path.join(directory, run, name); await mkdir(assets, { recursive: true });
     for (const file of browserScreenshots[name]) await writeFile(path.join(assets, file), png);
@@ -107,7 +109,7 @@ test('Node release reader requires every current test file and full raw logs, no
     assert.equal((await validateNodeEvidence(directory, { release: false })).ok, false);
   }
 });
-test('browser aggregate binds all twelve suites, screenshots, child log tails and nested complete reports', async t => {
+test('browser aggregate binds all fifteen suites, screenshots, child log tails and nested complete reports', async t => {
   const directory = await temporary(t), baseline = await browserFixture(directory);
   const good = await validateBrowserEvidence(directory, { release: false }); assert.equal(good.ok, true, JSON.stringify(good));
   for (const mutate of [r => { r.results.pop(); }, r => { r.results[0].argv = ['scripts/unrelated.mjs']; }, r => { r.results[0].tail = 'wrong log'; },

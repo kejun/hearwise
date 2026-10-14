@@ -2,7 +2,7 @@
 export const policyVersion = 1;
 export const specificationVersion = 'hearwise-enhanced-verification-v1.0';
 export const groups = Array.from({ length: 15 }, (_, index) => `HW-${String(index + 1).padStart(2, '0')}`);
-export const technicalSuites = ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval'];
+export const technicalSuites = ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval', 'import-protocol', 'edit-protocol'];
 export const purposes = Object.freeze({
   'foundation-demo': ['relation-protocol', 'revision'],
   pr: technicalSuites,
@@ -23,19 +23,21 @@ export const budgets = Object.freeze({
   node: { fileMs: 90000, testMs: 30000, concurrency: 4 }, browser: { profileMs: 180000 },
   'relation-protocol': { fastMs: 480000, deepMs: 1200000, processMs: 60000, boundedMs: 240000 },
   'knowledge-protocol': { fastMs: 480000, deepMs: 1200000, processMs: 60000, boundedMs: 240000 },
+  'import-protocol': { fastMs: 720000, deepMs: 1200000, processMs: 60000, tlcMs: { single: 60000, two_tokens: 240000 }, boundedMs: 240000 },
+  'edit-protocol': { overallMs: 480000, tlcMs: 60000, boundedMs: 120000, simulationMs: 30000, witnessMs: 30000, mutationMs: 120000 },
   revision: { overallMs: 360000 }, 'name-interval': { overallMs: 360000 }, pilot: { processMs: 15000 }
 });
 export const domainSuites = {
   'HW-01': ['browser'], 'HW-02': ['browser'], 'HW-03': ['knowledge-protocol', 'relation-protocol'],
   'HW-04': ['pilot', 'knowledge-protocol', 'relation-protocol'], 'HW-05': ['browser', 'knowledge-protocol', 'relation-protocol'],
-  'HW-06': ['revision', 'browser'], 'HW-07': ['name-interval', 'revision', 'browser'],
-  'HW-08': ['browser'], 'HW-09': ['browser'], 'HW-10': ['knowledge-protocol', 'relation-protocol', 'browser'],
-  'HW-11': ['browser'], 'HW-12': ['browser'], 'HW-13': ['browser'], 'HW-14': technicalSuites, 'HW-15': technicalSuites
+  'HW-06': ['revision', 'edit-protocol', 'browser'], 'HW-07': ['name-interval', 'revision', 'browser'],
+  'HW-08': ['browser'], 'HW-09': ['import-protocol', 'browser'], 'HW-10': ['knowledge-protocol', 'relation-protocol', 'browser'],
+  'HW-11': ['edit-protocol', 'browser'], 'HW-12': ['browser'], 'HW-13': ['browser'], 'HW-14': technicalSuites, 'HW-15': technicalSuites
 };
 // First-match is deliberately not used. A shared file may affect several domains.
 export const impactRules = [
   { id: 'dependency-environment', category: 'dependencies-support', match: /^(?:package(?:-lock)?\.json|\.github\/|\.agents\/|\.nvmrc$|\.node-version$|Dockerfile|.*(?:docker|runtime|platform|support-matrix|toolchain|setup-|preflight).*)/, domains: groups },
-  { id: 'verification-infrastructure', category: 'evidence-rules', match: /^(?:scripts\/(?:lib\/(?:process|verification|formal-protocol|tap-|release|impact)|run-|verify(?:-report)?\.)|verification\/(?:properties|release)|AGENTS\.md$)/, domains: groups },
+  { id: 'verification-infrastructure', category: 'evidence-rules', match: /^(?:scripts\/(?:lib\/(?:process|verification|formal-|tap-|release|impact|runner-|node-test|.*(?:release|evidence))|run-|verify(?:-report)?\.)|verification\/(?:properties|release)|AGENTS\.md$)/, domains: groups },
   { id: 'server-storage', category: 'identity-persistence', match: /^(?:server\.mjs|storage\.mjs|src\/server\/)/, domains: groups },
   { id: 'runtime-security-performance', category: 'security-performance', match: /^(?:public\/.*\.(?:js|html)|[^/]+\.(?:mjs|js)|src\/)/, domains: ['HW-12', 'HW-13'] },
   { id: 'relation', category: 'rules-budget-protocol', match: /(?:^|\/)(?:relation[-.]|relations\.|identity-grounding)/, domains: ['HW-03', 'HW-04', 'HW-05', 'HW-10'] },
@@ -43,7 +45,8 @@ export const impactRules = [
   { id: 'revision-proof', category: 'identity-text-coordinates', match: /(?:revision|NameInterval|name-interval|name-replacement|knowledge-edit|knowledge-name|AxiomAudit|verification\/lean)/, domains: ['HW-06', 'HW-07'] },
   { id: 'audio-session', category: 'protocol-identity-provider', match: /(?:asr|listening|session|interim-translation|caption|translation|translation-queue)/, domains: ['HW-01', 'HW-02', 'HW-03', 'HW-08'] },
   { id: 'speech', category: 'protocol-text-provider', match: /(?:speech|playback|qwen|fish|tts)/, domains: ['HW-03', 'HW-08', 'HW-11'] },
-  { id: 'transfer', category: 'persistence-protocol', match: /(?:data-transfer|migration|migrate|backup|restore|append-import)/, domains: ['HW-09', 'HW-10', 'HW-14'] },
+  { id: 'edit-protocol', category: 'identity-transaction-interaction', match: /(?:edit-protocol|edit-consistency|edit-commit-notification|knowledge-editor)/, domains: ['HW-06', 'HW-11'] },
+  { id: 'transfer', category: 'persistence-protocol', match: /(?:data-transfer|migration|migrate|backup|restore|append-import|import-protocol)/, domains: ['HW-09', 'HW-10', 'HW-14'] },
   { id: 'provider-admission', category: 'budget-provider-protocol', match: /(?:provider|retry|cooldown|queue|scheduler)/, domains: ['HW-01', 'HW-02', 'HW-03', 'HW-04', 'HW-05', 'HW-08'] },
   { id: 'prompts-models', category: 'prompt-model', match: /(?:prompt|model-config|model-selection)/, domains: ['HW-01', 'HW-02', 'HW-04', 'HW-05', 'HW-08'] },
   { id: 'ui-graph', category: 'interaction', match: /^(?:public\/app\.js|public\/index\.html)$|(?:knowledge-graph|cytoscape|transcript|pinned-caption)/, domains: ['HW-01', 'HW-02', 'HW-05', 'HW-06', 'HW-07', 'HW-08', 'HW-09', 'HW-11'] },

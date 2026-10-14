@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { digest, sourceVersion } from './verification-evidence.mjs';
 
-export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result'];
+export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency'];
 export async function findNodeTests(directory = 'test') {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(entries.map(entry => entry.isDirectory() ? findNodeTests(path.join(directory, entry.name)) :
@@ -34,6 +34,11 @@ export const browserScreenshots = {
     'relation-progress-desktop-complete', 'relation-progress-desktop-partial', 'relation-diagnostics-mobile-retry-confirmation', 'relation-diagnostics-mobile-unknown'].map(name => `${name}.png`),
   trace: ['trace-desktop.png', 'trace-mobile.png', 'business-overview.png', 'trace-full-pipeline.png'],
   ...Object.fromEntries(['transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision'].map(name => [name, [1280, 390].map(width => `${name}-${width}.png`)])),
+  security: ['security-stored-text.png', 'security-reopened-graph.png', 'security-live-provider-text.png'],
+  'import-protocol': [...['append', 'replace'].flatMap(mode => [
+    ...[1280, 390, 320].map(width => `${mode}-stale-review-requires-second-confirmation-${width}.png`),
+    `${mode}-expired-upload-expired-1280.png`]), 'append-stale-refresh-expiry-expired-preview-error-1280.png'],
+  'edit-consistency': [...[1280, 390].flatMap(width => ['conflict', 'unknown-502', 'unknown-lost', 'rollback', 'late-success'].map(name => `edits-${width}-${name}.png`)), 'edits-390-auto-resend-negative.png'],
   session: [...[1280, 390].flatMap(width => ['permission', 'disconnect', 'recovered'].map(scenario => `session-${width}-${scenario}.png`)), 'session-source-version.png'],
   'relation-result': [1280, 390].flatMap(width => ['shortage', 'empty', 'filtered', 'qualified', 'partial', 'error'].map(scenario => `relations-${width}-${scenario}.png`))
 };

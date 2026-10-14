@@ -18,7 +18,7 @@ export async function runFormalProtocol(definition) {
   const directory = await mkdtemp(path.join(root, 'run-'));
   const context = await definition.metadata(), startedAt = new Date().toISOString();
   const report = { ...context, profile, startedAt, finishedAt: null, complete: false, ok: false, tools: null,
-    executionContext: { repositoryRoot: process.cwd(), evidenceDirectory: directory, quintCli, overallTimeoutMs: profile === 'deep' ? 1200000 : 480000, jvmArgs: '-Xmx2G' },
+    executionContext: { repositoryRoot: process.cwd(), evidenceDirectory: directory, quintCli, overallTimeoutMs: definition.overallTimeoutMs?.[profile] ?? (profile === 'deep' ? 1200000 : 480000), jvmArgs: '-Xmx2G' },
     domain: config, propertyCoverage: definition.coverage(config), results: [], artifacts: [], execution: { complete: false, timedOut: false, interrupted: false } };
   await writeJson(path.join(directory, 'report.json'), report);
   console.log(`${definition.label} evidence: ${directory}`);

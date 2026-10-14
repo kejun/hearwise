@@ -54,7 +54,7 @@ export async function importProtocolFixture({ tokens = 1, serverFile = 'server.m
       const hash = text => createHash('sha256').update(text).digest('hex');
       mutationEvidence = { id: mutation, file: 'server.mjs', from, to, sourceSha256: hash(source), mutantSha256: hash(mutated), runnableSha256: hash(runnable) };
     }
-    const seeds = [], backups = [], calls = [], lifecycle = [], clockEvents = [];
+    const seeds = [], backups = [], backupSnapshots = [], calls = [], lifecycle = [], clockEvents = [];
     const seedStore = new ListeningStore(filename);
     try { seeds[0] = seedNameReplacement(seedStore); } finally { seedStore.close(); }
     for (let token = 0; token < tokens; token++) {
@@ -75,7 +75,7 @@ export async function importProtocolFixture({ tokens = 1, serverFile = 'server.m
             revision, 'Tibo', 'Deebo', new Date().toISOString(), new Date().toISOString(), '{}');
         }
         const backup = path.join(directory, `backup-${token}.sqlite`);
-        exportDatabase(source, backup); backups.push(backup);
+        exportDatabase(source, backup); backups.push(backup); backupSnapshots.push(databaseSnapshot(backup));
       } finally { source.close(); }
     }
     provider = http.createServer(async (req, res) => {
@@ -148,7 +148,7 @@ export async function importProtocolFixture({ tokens = 1, serverFile = 'server.m
       await start();
     }
     await start();
-    return { directory, filename, backups, seeds, calls, lifecycle, clockEvents, mutationEvidence, control, request, businessIds, write, restart, close,
+    return { directory, filename, backups, backupSnapshots, seeds, calls, lifecycle, clockEvents, mutationEvidence, control, request, businessIds, write, restart, close,
       snapshot: () => databaseSnapshot(filename), base: () => server.base, logs: () => server.logs(),
       upload: async (token, mode) => request(`/api/data/import/validate?mode=${mode}`, { body: await readFile(backups[token]) }) };
   } catch (error) {

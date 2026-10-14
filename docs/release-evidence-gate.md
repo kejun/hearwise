@@ -5,7 +5,7 @@ This implements HW-15-10/11/12 under the original enhanced-verification v1.0 spe
 ## Fixed purposes
 
 - `foundation-demo` requires actual current relation-protocol Quint/SQLite replay and revision Lean/JavaScript bridge reports. A successful demonstration explicitly has `fullProjectAcceptance: false` and is not PR/release approval.
-- `pr` requires all seven current technical suites: complete Node file discovery, pilot, all twelve Chromium profiles, relation protocol, knowledge protocol, revision and name-interval. Existing five CI jobs remain unconditional; a sixth offline aggregation job reads their artifacts. No paid service is invoked.
+- `pr` requires all nine current technical suites: complete Node file discovery, pilot, all fifteen Chromium profiles, relation protocol, knowledge protocol, revision, name-interval, import protocol and edit protocol. All existing CI jobs remain unconditional; the offline aggregation job additionally requires the import/edit artifacts. No paid service is invoked.
 - `release` requires the same technical suites plus all fifteen original business domains and the separate real ASR/MT/knowledge/relation/TTS quality, performance, physical-device and upgrade/recovery obligations. On this baseline those whole-domain/external validators or frozen thresholds are not registered. They remain `not_run`; full release cannot pass. Unmerged local branches are not capabilities of this baseline.
 
 Purpose is explicit in every output. Switching to `foundation-demo` cannot produce a release-eligible result. Unknown suites, missing/duplicate reports, unsupported profiles and ambiguous artifact discovery fail closed. Every submitted attempt is checked: a failed or incomplete deep report cannot be hidden behind a fast pass.
@@ -21,8 +21,10 @@ The current reader is used only with this identical source closure. Historical o
 ## Raw evidence contracts
 
 - Node/browser runners bind source content and built server/vendor outputs before and after execution, complete logs, actual argv and execution status. Actual disabled-runtime diagnostics bind embedded build SHA/dirty/instrumentation to the checkout; stable old bytes cannot pass. Native Node reporter events bind TAP body/plan/footer, parent/child numbers and actual entry/helper locations; stdout JSON cannot impersonate this channel. Node clears inherited `NODE_TEST_CONTEXT`, explicitly emits TAP, preserves four workers/30s test/90s file limits and rejects a selected subset as full coverage.
-- Browser aggregation requires all twelve original profiles, known screenshot files and hashes, and complete nested session/relation-result reports. Those nested readers reparse full TAP, bind raw child tails/worker logs, inspect concrete desktop/narrow observations, verify the strict two-artifact generic contract and all referenced assets. Synthetic contract tests do not claim Chromium ran.
+- Browser aggregation requires all fifteen registered profiles, known screenshot files and hashes, and complete nested session/relation-result/security/import/edit reports. Those nested readers reparse full TAP, bind raw child tails/worker logs, inspect concrete desktop/narrow observations, verify the strict two-artifact generic contract and all referenced assets. Synthetic contract tests do not claim Chromium ran.
 - Formal evidence retains the existing profile gate, then checks exact commands, model files, tools, seeds, sample counts, depths, expected negative exits and resource budgets. It independently reconstructs real relation/knowledge projections from raw durable observations, validates budgets/ledgers/terminal state and knowledge preservation, and requires actual negative expected/actual disagreement.
+- Import evidence additionally binds immutable original backup snapshots, every imported table row, cumulative HTTP/lifecycle/clock histories and actual production mutation source. Its 42 regression tests (24 top-level, 18 nested) are matched as a full TAP tree in Node’s actual lexical file order. Import fast retains its actual 720s limit and two-token TLC240s limit.
+- Edit evidence binds the exact fixed 480s commands and all source/build digests, existing strict durable/ITF checks, and raw browser UI/table checkpoints for conflict, unknown close/reopen, rollback and late success. A requested deep edit profile is explicitly unsupported; the fixed report cannot substitute for a deep run.
 - Lean evidence independently reads proof/oracle/axiom logs, current source hashes, concrete corpus projections and SQLite witness. Exact current 8/9 regression names and counts are required. Negative patches/source hashes/fixed witnesses are reconstructed; illegal-import before/after rows and boundary rosters are checked rather than trusting `detected` or `unchanged` flags. SHA collision freedom is not proved.
 - Pilot independently checks the one real SQLite reservation/response/commit scenario. It is not general concurrency evidence.
 
@@ -30,7 +32,7 @@ The threat boundary is accidental mixing, stale/partial results and malformed or
 
 ## Frozen execution and methods
 
-`verification/release/policy.mjs` records the existing budgets. Formal fast overall 480s/deep 1200s; ordinary commands 60s, bounded checks 240s (existing deep multi-case 900s); JVM 2 GiB. Both Lean profiles retain independent 360s limits. Chromium retains 180s/profile and existing CI job limits. No domain/depth/timeout was reduced or inflated here. Deep is an explicit separate CLI run and never inferred from fast; its existing finite TLC domains remain unchanged.
+`verification/release/policy.mjs` records the existing budgets. Relation/knowledge fast overall 480s/deep 1200s; import fast720s/deep1200s; edit fixed480s; ordinary commands 60s, bounded checks 240s (existing deep multi-case 900s); JVM 2 GiB. Both Lean profiles retain independent 360s limits. Chromium retains 180s/profile and existing CI job limits. No domain/depth/timeout was reduced or inflated here. Deep is an explicit separate CLI run and never inferred from fast; its existing finite TLC domains remain unchanged.
 
 Reports distinguish complete finite-state enumeration (with generated/distinct/queue/depth), bounded checking (exact bounds), seeded simulation, model witnesses, implementation replay/negative controls, Lean kernel proofs and finite JavaScript/SQLite differential evidence. Exclusions and assumptions remain attached. No unbounded induction, real semantic quality, physical audio/device or measured performance is inferred.
 
@@ -45,6 +47,8 @@ npm test
 npm run verify -- --release
 npm run verify:relation-protocol -- --release
 npm run verify:knowledge-protocol -- --release
+npm run verify:import-protocol -- --release
+npm run verify:edit-protocol -- --release
 npm run verify:revision -- --release
 npm run verify:name-interval -- --release
 npm run test:browser
@@ -58,3 +62,5 @@ Manifest schema 1 contains `evidence: [{suite, directory}]`; paths resolve relat
 `release-demo.mjs` first requires the genuine current clean two-suite success. It then writes isolated, explicitly corrupted copies to demonstrate a raw regression failure and incomplete/timeout refusal. These copies are gate demonstrations, not additional formal executions. Original reports are untouched. All three outputs retain detailed causes, source, methods and remaining project gaps.
 
 Real Chromium must run in CI. This task's local environment did not run Chromium. Current-source final evidence and independent review must be recorded separately from synthetic contract tests or reports belonging to earlier SHAs.
+
+This integration slice is based on 35b8 and covers import/edit/security only. Later main profiles (process-crash, trace-business and offline quality infrastructure) must be integrated separately before claiming the final current-main mandatory roster is complete. No full-domain or external acceptance obligation is removed.

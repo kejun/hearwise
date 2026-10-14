@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { importProtocolFixture, importedWorkObservation } from '../test-support/import-protocol-fixture.mjs';
 import { deadline } from '../test-support/lifecycle.mjs';
 import { observeImportFetch } from '../test-support/import-protocol-browser-observer.mjs';
-import { importBrowserCases, summarizeImportBrowserEvidence } from '../test-support/import-protocol-browser-evidence.mjs';
+import { importBrowserSourceStamp, importBrowserCases, summarizeImportBrowserEvidence } from '../test-support/import-protocol-browser-evidence.mjs';
 
 const timeout = 10000;
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -32,29 +31,6 @@ async function writeJson(name, value) {
 }
 function failure(error) {
   return { name: error.name, message: String(error.message).replaceAll('local-test-only', '[synthetic key omitted]') };
-}
-async function sourceStamp() {
-  const git = args => execFileSync('git', args, { encoding: 'utf8', timeout: 5000 }).trim();
-  const files = new Map(), pending = ['scripts/verify-import-protocol-browser.mjs', 'scripts/run-browser-tests.mjs',
-    'server.mjs', 'test-support/import-protocol-control.mjs', 'public/app.js', 'public/index.html', 'public/style.css',
-    'scripts/build.mjs', 'verification/import-protocol/properties.mjs', 'package.json', 'package-lock.json'];
-  // Bind the actual generated server bundle and local transitive helpers, not
-  // merely HEAD or the dirty boolean. The fixture loads the server via a child.
-  while (pending.length) {
-    const file = pending.pop();
-    if (files.has(file)) continue;
-    const bytes = await readFile(file);
-    files.set(file, digest(bytes));
-    if (!/\.(?:mjs|js)$/.test(file)) continue;
-    for (const match of bytes.toString().matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)['"](\.[^'"]+)['"]/g)) {
-      const dependency = path.normalize(path.join(path.dirname(file), match[1]));
-      assert.ok(!path.isAbsolute(dependency) && !dependency.startsWith('..'), 'source stays inside checkout');
-      pending.push(dependency);
-    }
-  }
-  return { sha: git(['rev-parse', '--verify', 'HEAD']),
-    dirty: Boolean(git(['status', '--porcelain', '--untracked-files=normal'])),
-    digests: Object.fromEntries([...files].sort(([a], [b]) => a.localeCompare(b))) };
 }
 function snapshotSummary(snapshot) {
   return { sha256: digest(JSON.stringify(snapshot)),
@@ -229,7 +205,7 @@ async function committed(page, scenario, fixture, before, status, bodyFor) {
 let browser;
 await save();
 try {
-  observations.sourceStart = await sourceStamp();
+  observations.sourceStart = await importBrowserSourceStamp();
   await save();
   browser = await chromium.launch({ headless: true, timeout: 15000,
     executablePath: process.env.CHROMIUM_EXECUTABLE || undefined,
@@ -243,7 +219,7 @@ try {
     await save();
     let fixture, context, drain, bodyFor;
     try {
-      fixture = await importProtocolFixture({ unfinished: true });
+      fixture = await importProtocolFixture({ unfinished: true }); scenario.backup = fixture.backupSnapshots[0];
       context = await browser.newContext({ viewport: { width: 1280, height: 950 } });
       const page = await context.newPage();
       page.setDefaultTimeout(timeout); page.setDefaultNavigationTimeout(timeout);
@@ -416,7 +392,7 @@ try {
     observations.cleanup.push({ target: 'Chromium', ok: true });
   } catch (error) { observations.cleanup.push({ target: 'Chromium', ok: false, error: failure(error) }); }
   try {
-    observations.sourceEnd = await sourceStamp();
+    observations.sourceEnd = await importBrowserSourceStamp();
     assert.deepEqual(observations.sourceEnd, observations.sourceStart, 'executed source/helper digests stayed unchanged');
   } catch (error) { observations.errors.push(failure(error)); }
   observations.finishedAt = new Date().toISOString();
