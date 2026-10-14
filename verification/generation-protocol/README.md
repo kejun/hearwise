@@ -121,3 +121,5 @@ node --test --test-timeout=30000 verification/generation-protocol/model.test.mjs
 - 仍存在的被取消知识任务在进程恢复后的自动重试；该路径由独立恢复/预算检查处理。
 - 在途 restore：生产 `restoreSafety` 会拒绝。显式用户恢复已删除备份是另一个授权动作，不能混作「删除后自动复活」。
 - 模型轨迹自动等同真实 SQLite/workflow/scheduler 轨迹。
+
+The reproducible runner, supervisor and same-source AC-P01–P12 gate are documented in [generation verification](../../docs/generation-verification.md).

@@ -14,7 +14,9 @@
     "knowledge-budget.qnt",
     "relation-finite.qnt",
     "knowledge-finite.qnt",
-    "negative-configurations.qnt"
+    "negative-configurations.qnt",
+    "replay-refinement.qnt",
+    "replay-witnesses.qnt"
   ],
   "domains": [
     {
@@ -211,7 +213,8 @@
       "timeoutMs": {
         "tlc": 300000,
         "bmc": 240000
-      }
+      },
+      "overallTimeoutMs": 2100000
     },
     "deep": {
       "apalacheDepth": {
@@ -228,7 +231,8 @@
       "timeoutMs": {
         "tlc": 300000,
         "bmc": 600000
-      }
+      },
+      "overallTimeoutMs": 4200000
     }
   },
   "simulation": {
@@ -285,5 +289,92 @@
     "Supplier exactly-once, notification outbox, or hardware/power-loss durability",
     "Model results alone proving real scheduler/workflow/SQLite trace agreement"
   ],
-  "profileRationale": "Unchanged final envelope cost probe: relation cap2 complete 818608 distinct/12042993 generated/queue0/depth26 in 157.5s checker time; knowledge cap2 complete 141440 distinct/1321901 generated/queue0/depth29 in 22.4s. A 300s TLC bound was selected before final gate runs. Earlier TRACE-enabled 90s probe was incomplete; its temporary raw logs did not survive environment restoration and are not release evidence. No semantic states or product limits were removed."
+  "profileRationale": "Unchanged final envelope cost probe: relation cap2 complete 818608 distinct/12042993 generated/queue0/depth26 in 157.5s checker time; knowledge cap2 complete 141440 distinct/1321901 generated/queue0/depth29 in 22.4s. A 300s TLC bound was selected before final gate runs. Earlier TRACE-enabled 90s probe was incomplete; its temporary raw logs did not survive environment restoration and are not release evidence. No semantic states or product limits were removed.",
+  "refinement": {
+    "id": "fixed-ready-provider-permit-v1",
+    "specification": "replay-refinement.qnt",
+    "witnessSpecification": "replay-witnesses.qnt",
+    "domains": [
+      {
+        "main": "replay_relation_single",
+        "protocol": "relation",
+        "actors": 1,
+        "capacity": 1,
+        "witnessMain": "replay_relation_single_witnesses"
+      },
+      {
+        "main": "replay_relation_cap1",
+        "protocol": "relation",
+        "actors": 3,
+        "capacity": 1,
+        "witnessMain": "replay_relation_multi_cap1_witnesses"
+      },
+      {
+        "main": "replay_relation_cap2",
+        "protocol": "relation",
+        "actors": 3,
+        "capacity": 2,
+        "witnessMain": "replay_relation_multi_cap2_witnesses"
+      },
+      {
+        "main": "replay_knowledge_single",
+        "protocol": "knowledge",
+        "actors": 1,
+        "capacity": 1,
+        "witnessMain": "replay_knowledge_single_witnesses"
+      },
+      {
+        "main": "replay_knowledge_cap1",
+        "protocol": "knowledge",
+        "actors": 3,
+        "capacity": 1,
+        "witnessMain": "replay_knowledge_multi_cap1_witnesses"
+      },
+      {
+        "main": "replay_knowledge_cap2",
+        "protocol": "knowledge",
+        "actors": 3,
+        "capacity": 2,
+        "witnessMain": "replay_knowledge_multi_cap2_witnesses"
+      }
+    ],
+    "counts": {
+      "replay_relation_single_witnesses": 11,
+      "replay_relation_multi_cap1_witnesses": 3,
+      "replay_relation_multi_cap2_witnesses": 5,
+      "replay_knowledge_single_witnesses": 10,
+      "replay_knowledge_multi_cap1_witnesses": 4,
+      "replay_knowledge_multi_cap2_witnesses": 6
+    },
+    "expectedTestCount": 39,
+    "expectedSimulationTraces": 18,
+    "clockAdvanceMs": 6000,
+    "interpretation": "Fixed ready task environment with explicit one-use provider permits; each permit projects to base lifecycle stutter. Not general scheduler fairness or all production availability."
+  },
+  "implementationControls": [
+    {
+      "id": "relation-reservation",
+      "protocol": "relation",
+      "mutation": "skip_reservation",
+      "witness": "normalSuccessTest"
+    },
+    {
+      "id": "knowledge-reservation",
+      "protocol": "knowledge",
+      "mutation": "skip_reservation",
+      "witness": "normalSuccessTest"
+    },
+    {
+      "id": "relation-generation-transaction",
+      "protocol": "relation",
+      "mutation": "omit_transaction_guard",
+      "witness": "oldResponseWhileNewActiveTest"
+    },
+    {
+      "id": "knowledge-accepted-content",
+      "protocol": "knowledge",
+      "mutation": "corrupt_accepted_fact",
+      "witness": "normalSuccessTest"
+    }
+  ]
 }

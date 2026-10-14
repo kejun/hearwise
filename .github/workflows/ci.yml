@@ -388,3 +388,97 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+
+  generation-protocol:
+    name: Cancellation generations, finite models and actual late callbacks
+    runs-on: ubuntu-latest
+    # Fixed 35m worker budget plus bounded supervisor/setup/artifact overhead.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Select the runner's Java 21
+        shell: bash
+        run: |
+          test -x "$JAVA_HOME_21_X64/bin/java"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+      - run: npm ci --ignore-scripts
+      - run: npm run preflight
+      - run: npm run setup:generation-protocol
+        env:
+          QUINT_HOME: ${{ runner.temp }}/hearwise-quint
+      - run: npm run verify:generation-protocol -- --release
+        env:
+          QUINT_HOME: ${{ runner.temp }}/hearwise-quint
+      - name: Preserve exact finite domains, native ITF and raw late-callback evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: generation-protocol-evidence-${{ github.sha }}
+          path: verification-evidence/generation-protocol/
+          retention-days: 14
+          if-no-files-found: warn
+
+  m1-protocols:
+    name: M1 AC-P01–P12 current-source evidence gate
+    needs: [relation-protocol, knowledge-protocol, process-crash, generation-protocol]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: relation-protocol-evidence-${{ github.sha }}
+          path: verification-evidence/m1-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: knowledge-protocol-evidence-${{ github.sha }}
+          path: verification-evidence/m1-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: process-crash-evidence-${{ github.sha }}
+          path: verification-evidence/m1-inputs
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: generation-protocol-evidence-${{ github.sha }}
+          path: verification-evidence/m1-inputs
+      - name: Revalidate all four domain reports against this exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--release --output verification-evidence/m1-report.json)
+          for spec in relation:relation-protocol knowledge:knowledge-protocol process:process-crash generation:generation-protocol; do
+            domain=${spec%%:*}
+            artifact=${spec#*:}
+            root="verification-evidence/m1-inputs/${artifact}-evidence-${{ github.sha }}"
+            if test -d "$root"; then
+              mapfile -t reports < <(find "$root" -name report.json -type f)
+              if test "${#reports[@]}" -eq 1; then args+=("--$domain" "$(dirname "${reports[0]}")"); fi
+            fi
+          done
+          npm run verify:m1:report -- "${args[@]}"
+      - name: Preserve current-source acceptance matrix
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: m1-evidence-${{ github.sha }}
+          path: verification-evidence/m1-report.json
+          retention-days: 14
+          if-no-files-found: warn

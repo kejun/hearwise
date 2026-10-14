@@ -61,7 +61,12 @@
     "setup:playback-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:playback-protocol": "npm run build",
     "verify:playback-protocol": "node scripts/verify-playback-protocol.mjs",
-    "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs"
+    "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs",
+    "setup:generation-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:generation-protocol": "npm run build",
+    "verify:generation-protocol": "node scripts/verify-generation-protocol.mjs",
+    "verify:generation-protocol:report": "node scripts/verify-generation-report.mjs",
+    "verify:m1:report": "node scripts/verify-m1-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

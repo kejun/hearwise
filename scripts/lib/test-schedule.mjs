@@ -5,6 +5,11 @@
 const exclusiveFiles = new Set([
   'test/edit-consistency-evidence.test.mjs',
   'test/knowledge-model-guards.test.mjs',
+  'test/generation-protocol-adapter.test.mjs',
+  'test/generation-protocol-evidence.test.mjs',
+  'test/generation-protocol-report.test.mjs',
+  'test/generation-protocol-interrupt.test.mjs',
+  'test/generation-protocol-trace.test.mjs',
   'test/playback-evidence.test.mjs',
   'test/playback-protocol-evidence.test.mjs',
   'test/playback-protocol-replay.test.mjs',
