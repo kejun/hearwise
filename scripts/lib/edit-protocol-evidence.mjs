@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { digest, sourceVersion } from './verification-evidence.mjs';
 import { checkerConclusion } from './relation-protocol-evidence.mjs';
 import { normalizeEditTrace, expectedEditMutationViolation } from './edit-protocol-replay.mjs';
+import { validEditDurableEnvelope, validMatchedEditDurable } from './edit-protocol-durable.mjs';
 import { properties } from '../../verification/edit-protocol/properties.mjs';
 
 export const editModelRoot = path.resolve('verification/edit-protocol');
@@ -134,10 +135,15 @@ export async function validateEditProtocolEvidence(directory, { release = false 
             const states = [trace.initial, ...trace.steps.map(step => step.expected)];
             if (replay.complete !== true || replay.ok !== true || replay.classification !== 'matched' || replay.observations?.length !== states.length ||
                 replay.observations.some((observation, index) => observation.step !== index - 1 || !isDeepStrictEqual(observation.actual, states[index]) ||
-                  !observation.durable || !Array.isArray(observation.durableViolations) || observation.durableViolations.length)) row.reasons.push('wrong_replay_observations');
+                  !validMatchedEditDurable(observation, trace.config) || !Array.isArray(observation.durableViolations) || observation.durableViolations.length)) row.reasons.push('wrong_replay_observations');
           } else {
             const expectedAction = row.id.endsWith('bypass_revision') ? 'transaction' : 'refresh_stale';
             const index = replay.difference?.step, actual = replay.difference?.actual;
+            const states = [trace.initial, ...trace.steps.map(step => step.expected)];
+            if (!Array.isArray(replay.observations) || replay.observations.length !== index + 2 ||
+                replay.observations.some((observation, step) => observation.step !== step - 1 || !validEditDurableEnvelope(observation, trace.config) ||
+                  !isDeepStrictEqual(observation.actual, step === index + 1 ? actual : states[step]) || !Array.isArray(observation.durableViolations) ||
+                  step < index + 1 && observation.durableViolations.length)) row.reasons.push('invalid_counterexample_observations');
             if (replay.complete !== true || replay.ok !== false || replay.classification !== 'implementation_mismatch' || !Number.isInteger(index) ||
                 trace.steps[index]?.action !== expectedAction || replay.counterexample?.steps?.length !== index + 1 ||
                 !isDeepStrictEqual(replay.difference?.expected, trace.steps[index]?.expected) ||
