@@ -1,6 +1,6 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { digest, writeJson, checkArtifacts } from '../scripts/lib/verification-evidence.mjs';
+import { digest, writeJson, checkArtifacts, summarize } from '../scripts/lib/verification-evidence.mjs';
 
 const scenarios = ['shortage', 'empty', 'filtered', 'qualified', 'partial', 'error'];
 const browserAssets = ['browser.json', ...[1280, 390].flatMap(width => scenarios.map(name => `relations-${width}-${name}.png`))];
@@ -37,4 +37,26 @@ export function relationTapSummary(tail) {
   const testComplete = Object.values(counts).every(Number.isInteger) && counts.tests > 0 &&
     counts.cancelled === 0 && counts.skipped === 0 && counts.todo === 0 && counts.pass + counts.fail === counts.tests;
   return { testCount: counts.tests || 0, testComplete, ok: testComplete && counts.fail === 0 };
+}
+
+export function relationExecution(checks) {
+  return { code: checks.every(({ execution: e }) => e.ok) ? 0 : 1, signal: null,
+    timedOut: checks.some(({ execution: e }) => e.timedOut), interrupted: checks.some(({ execution: e }) => e.interrupted),
+    complete: checks.every(({ execution: e }) => !e.timedOut && !e.interrupted && e.signal == null && [0, 1].includes(e.code) && e.testComplete !== false) };
+}
+export async function runRelationChecks(specifications, execute, { cleanup = async () => {} } = {}) {
+  const checks = [];
+  try {
+    for (const specification of specifications) {
+      const execution = await execute(specification, specification.timeoutMs);
+      checks.push({ name: specification.name, execution });
+      if (execution.interrupted) break;
+    }
+    return { checks, budgetExpired: false };
+  } finally { await cleanup(); }
+}
+export function summarizeRelationResults({ results, checks, target, required, artifactsValid, release, sourceStable }) {
+  const execution = relationExecution(checks);
+  if (!sourceStable) execution.complete = false;
+  return { execution, summary: summarize({ results, target, required, artifactsValid, release, execution }) };
 }

@@ -74,3 +74,53 @@ test('relation evidence rejects skipped, todo, missing, cancelled or inconsisten
   }
   assert.deepEqual(relationTapSummary(tap({ pass: 1, fail: 1 })), { testCount: 2, testComplete: true, ok: false });
 });
+
+const executionFixture = (changes = {}) => ({ code: 0, signal: null, ok: true, timedOut: false, interrupted: false, ...changes });
+test('unrelated failing checks preserve each independently verified property while the profile fails', async () => {
+  const { summarizeRelationResults } = await import('../test-support/relation-result-evidence.mjs');
+  const context = await metadata(), time = new Date().toISOString();
+  const makeResults = statuses => relationResultProfile.map((id, i) => ({ ...context, property: { id, version: 1 },
+    startedAt: time, finishedAt: time, complete: true, status: statuses[i],
+    scope: { description: 'Unit execution classification', scenario: 'synthetic-gate', samples: 1, seed: null },
+    artifacts: ['observations.json', 'worker.log'].map(path => ({ path, sha256: '0'.repeat(64) })) }));
+  for (const [failed, expected] of [['browser', ['passed', 'failed', 'failed']],
+    ['http-results', ['passed', 'failed', 'passed']], ['source-integrity', ['failed', 'failed', 'passed']]]) {
+    const checks = ['source-integrity', 'http-results', 'browser'].map(name => ({ name,
+      execution: executionFixture(name === failed ? { code: 1, ok: false } : {}) }));
+    const { summary, execution } = summarizeRelationResults({ results: makeResults(expected), checks, target: context.source,
+      required: relationResultProfile, artifactsValid: [true, true, true], release: false, sourceStable: true });
+    assert.equal(execution.code, 1); assert.equal(summary.ok, false);
+    assert.deepEqual(summary.rows.map(row => row.status), expected, failed);
+  }
+});
+
+test('a timed-out child stops later work, cleans runtime resources and leaves time to write a terminal report', { timeout: 5000 }, async t => {
+  const { runRelationChecks } = await import('../test-support/relation-result-evidence.mjs');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relation-deadline-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const runtime = path.join(directory, 'runtime'); await (await import('node:fs/promises')).mkdir(runtime);
+  const calls = [], started = Date.now();
+  const run = await runRelationChecks([{ name: 'stall', timeoutMs: 200 }, { name: 'must-not-start', timeoutMs: 200 }],
+    async (specification, timeoutMs) => {
+      calls.push(specification.name);
+      return runProcess(process.execPath, ['-e', 'console.log(process.pid); setInterval(() => {}, 1000)'],
+        { timeoutMs, logFile: path.join(directory, specification.name + '.log') });
+    }, { budgetMs: 500, cleanup: () => rm(runtime, { recursive: true, force: true }) });
+  assert.deepEqual(calls, ['stall']);
+  assert.equal(run.checks[0].execution.timedOut, true);
+  assert.ok(Date.now() - started < 3000, 'Parent must retain cleanup/report headroom');
+  assert.equal((await readdir(directory)).includes('runtime'), false);
+  const pid = Number(run.checks[0].execution.tail.match(/^\d+/m)?.[0]); assert.ok(pid > 0);
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'No stalled process survives cleanup');
+  await writeFile(path.join(directory, 'terminal.json'), JSON.stringify({ complete: false, ok: false, checks: run.checks }));
+  assert.equal(JSON.parse(await readFile(path.join(directory, 'terminal.json'), 'utf8')).complete, false);
+});
+
+test('one fixed total check deadline bounds all nested limits below the parent watchdog', async () => {
+  const { runRelationChecks } = await import('../test-support/relation-result-evidence.mjs');
+  let time = 0; const assigned = [];
+  await runRelationChecks([{ name: 'source', timeoutMs: 40000 }, { name: 'http', timeoutMs: 40000 }, { name: 'browser', timeoutMs: 100000 }],
+    async (_specification, timeoutMs) => { assigned.push(timeoutMs); time += timeoutMs; return executionFixture(); }, { now: () => time });
+  assert.deepEqual(assigned, [40000, 40000, 70000]);
+  assert.equal(assigned.reduce((a, b) => a + b, 0), 150000);
+});
