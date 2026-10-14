@@ -42,6 +42,10 @@ test('negative replay keeps the actual broken reservation and requires a real ex
     (kind === 'relation-protocol' ? expected.counts : expected.initial_requests)[0] = 1;
     Object.assign(result, { difference: { step: 0, actual, expected }, counterexample: { steps: [{ expected }] } });
     assert.equal(validateDurableReplay(kind, result, { negative: true }), true);
+    const brokenPrefix = structuredClone(result);
+    if (kind === 'relation-protocol') brokenPrefix.observations[0].durable.actors[0].window.state = 'complete';
+    else brokenPrefix.observations[0].durable.checkpoint.job.state = 'complete';
+    assert.throws(() => validateDurableReplay(kind, brokenPrefix, { negative: true }));
     const changed = structuredClone(result); changed.difference.expected = changed.difference.actual;
     assert.throws(() => validateDurableReplay(kind, changed, { negative: true }));
     changed.observations[1].durable = {};

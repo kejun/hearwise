@@ -94,7 +94,7 @@ test('Node release reader requires every current test file and full raw logs, no
     assert.equal((await validateNodeEvidence(directory, { release: false })).ok, false);
   }
   const row = baseline.results[0], name = path.basename(row.log);
-  for (const log of [tap(1).replace('# pass 1', '# pass 0').replace('# skipped 0', '# skipped 1'), 'no final TAP footer\n']) {
+  for (const log of [tap(1).replace(/^ok 1 - .*\n/m, ''), tap(1).replace('# pass 1', '# pass 0').replace('# skipped 0', '# skipped 1'), 'no final TAP footer\n']) {
     const changed = structuredClone(baseline); changed.results[0].logSha256 = digest(log); changed.results[0].tail = log;
     await writeFile(path.join(directory, name), log); await json(path.join(directory, 'results.json'), changed);
     assert.equal((await validateNodeEvidence(directory, { release: false })).ok, false);
