@@ -44,3 +44,5 @@ node scripts/verify-session-browser.mjs --release
 两个 Node 检查各最多 30 秒、浏览器最多 100 秒，但共享 150 秒总检查预算（最坏 30/30/90），父运行器保持 180 秒。超时、中断或不完整 TAP 立即停止后续检查，并在 finally 清理临时运行目录；预留余量用于终止进程组、哈希和最终报告。关系 profile 保持此前 40/40/70 的边界与行为。
 
 `test/session-evidence-failures.test.mjs` 固定浏览器/字幕/来源失败隔离、全 skip/todo/缺少 pass 的假通过、超时仍启动后续的红回归。共享真实挂起子进程终止与最终报告回归仍由 `test/relation-result-evidence.test.mjs` 执行。合成结果只验证证据门禁，不能替代真实 Chromium 或 ASR/MT 质量验收。
+
+TAP 计数只接受唯一、顺序完整、以 duration_ms 结束的最终顶层 Node footer（含 plan/suites）。测试正文里转义或嵌套的计数日志不能替代 reporter 数据；重复、乱序、不完整或后有输出的 footer 保持 incomplete。真实 Node 子进程固定带伪造计数的 skip/fail/pass 三种输出，防止跳过覆盖被日志伪装为通过。

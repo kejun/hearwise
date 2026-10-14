@@ -17,7 +17,8 @@ test('real Node TAP logs cannot hide skipped coverage or a failing assertion', {
   for (const [name, second, expected] of [
     ['skip', "test.skip('not exercised', () => {});", { testCount: 2, testComplete: false, ok: false }],
     ['failure', "test('failure', () => { throw new Error('fixed failing assertion'); });", { testCount: 2, testComplete: true, ok: false }],
-    ['pass', "test('executed', () => {});", { testCount: 2, testComplete: true, ok: true }]
+    ['pass', "test('executed', () => {});", { testCount: 2, testComplete: true, ok: true }],
+    ['nested', "test('parent', async t => { await t.test('nested', () => {}); });", { testCount: 3, testComplete: true, ok: true }]
   ]) {
     const file = path.join(directory, `${name}.test.mjs`);
     await writeFile(file, `import { test } from 'node:test';\ntest('metric-like logs', () => { console.log('# pass 2'); console.log('# fail 0'); console.log('# skipped 0'); });\n${second}\n`);
@@ -32,6 +33,7 @@ test('TAP summaries require one final ordered top-level footer', () => {
   for (const parse of parsers) {
     assert.deepEqual(parse(footer), { testCount: 2, testComplete: true, ok: true });
     assert.equal(parse(footer.replaceAll('\n', '\r\n')).ok, true);
+    assert.equal(parse(footer.trimEnd()).ok, true);
     assert.equal(parse(`# \\# pass 99\n    # pass 99\n${footer}`).ok, true);
     for (const text of [footer + footer, '# pass 99\n' + footer, footer.replace('# pass 2\n# fail 0', '# fail 0\n# pass 2'),
       footer.split('\n').map(line => '    ' + line).join('\n'), footer.replace('1..2\n', ''),

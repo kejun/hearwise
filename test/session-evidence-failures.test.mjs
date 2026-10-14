@@ -26,7 +26,7 @@ test('session properties preserve independently passed checks after browser/capt
 
 test('session TAP requires actual complete passing coverage', () => {
   const tap = ({ tests = 2, pass = 2, fail = 0, cancelled = 0, skipped = 0, todo = 0 } = {}) =>
-    Object.entries({ tests, pass, fail, cancelled, skipped, todo }).map(([key, value]) => `# ${key} ${value}\n`).join('');
+    `1..${tests}\n` + Object.entries({ tests, suites: 0, pass, fail, cancelled, skipped, todo, duration_ms: 1 }).map(([key, value]) => `# ${key} ${value}\n`).join('');
   assert.equal(sessionTapSummary(tap()).ok, true);
   for (const text of [tap({ pass: 0, skipped: 2 }), tap({ pass: 0, todo: 2 }), tap().replace('# pass 2\n', ''),
     tap({ pass: 1 }), tap({ pass: 1, cancelled: 1 }), tap({ tests: 0, pass: 0 })]) {
