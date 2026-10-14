@@ -42,4 +42,6 @@ test('atomicity TAP binds every expected test name number and body', async () =>
   assert.equal(validate(whole.replace(bodies[0], '')).ok, false);
   assert.equal(validate(whole.replace(/^ok 1 /m, 'ok 99 ')).ok, false);
   assert.equal(validate(whole.replaceAll(names[0], 'Different test')).ok, false);
+  for (const injected of ['    not ok 1 - hidden child', 'Bail out! verifier incomplete', '    1..99'])
+    assert.equal(validate(whole.replace('TAP version 13\n', `TAP version 13\n${injected}\n`)).ok, false);
 });
