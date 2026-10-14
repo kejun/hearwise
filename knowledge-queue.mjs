@@ -23,8 +23,8 @@ export function createKnowledgeScheduler({
 }) {
   const config = { ...KNOWLEDGE_DEFAULTS, ...options };
   const runtime = taskRuntime ?? createTaskRuntime();
-  const buffers = new Map(), running = new Map(), lastStarted = new Map(), keyCooldowns = new Map();
-  let wakeTimer, lastServed, closed = false;
+  const buffers = new Map(), running = new Map(), lastStarted = new Map(), keyCooldowns = new Map(), failedUpdates = new Map();
+  let wakeTimer, lastServed, closed = false, pumping = false;
   const report = error => { try { onError(error); } catch { /* Observers cannot own task cleanup. */ } };
   const notify = (callback, ...args) => { try { callback(...args); } catch (error) { report(error); } };
   const log = (...args) => notify(logEntry, ...args);
@@ -101,11 +101,15 @@ export function createKnowledgeScheduler({
         // 同一 Key 的其他知识任务也让路；不输出或持久化 Key。
         coolDown(key, Math.max(delay || 2000, error.retryAfterMs || 0));
       }
-      if (store.hasListening(job.listening_id)) {
-        const saved = store.markJob(job.id, delay == null ? 'failed' : 'pending', String(error.message || error).slice(0, 300),
-          delay == null ? null : new Date(now() + delay).toISOString());
-        log(job, delay == null ? saved?.state || 'failed' : 'retrying', startedAt,
-          { retry_in_ms: delay, ...(job.prompt_version === 2 ? { outcome: saved?.outcome || 'invalid' } : {}) });
+      const update = { job, startedAt, delay, state: delay == null ? 'failed' : 'pending',
+        error: String(error.message || error).slice(0, 300), retryAt: delay == null ? null : new Date(now() + delay).toISOString(),
+        guard: { attempt: job.attempts, cycle: job.progress_json ? JSON.parse(job.progress_json).cycle : null } };
+      try { finalize(update); }
+      catch (storageError) {
+        // Retain only the failed write, never rerun the paid workflow. Admission
+        // is fenced until this exact attempt is finalized or becomes obsolete.
+        failedUpdates.set(job.id, update); report(storageError);
+        clearTimer(wakeTimer); wakeTimer = setTimer(pump, 1000);
       }
       report(error);
     } finally {
@@ -117,8 +121,32 @@ export function createKnowledgeScheduler({
       }
     }
   }
+  function finalize(update) {
+    const { job, delay, startedAt, guard } = update;
+    if (!store.hasListening(job.listening_id)) return;
+    const saved = store.markJob(job.id, update.state, update.error, update.retryAt, guard);
+    if (!saved) return; // Deleted, terminal, or explicitly retried since failure.
+    log(job, delay == null ? saved.state || 'failed' : 'retrying', startedAt,
+      { retry_in_ms: delay, ...(job.prompt_version === 2 ? { outcome: saved.outcome || 'invalid' } : {}) });
+    notify(onChange, job.listening_id, { refreshDetail: true });
+  }
   function pump() {
-    if (closed) return;
+    if (closed || pumping) return;
+    pumping = true;
+    try {
+      // A locked finalization blocks admission, including later batches of the
+      // same listening. Retry persistence with a bounded wake, without HTTP.
+      for (const [jobId, update] of failedUpdates) {
+        finalize(update);
+        failedUpdates.delete(jobId);
+        notify(onIdle, update.job.listening_id);
+      }
+      admitReady();
+    } catch (error) {
+      report(error); clearTimer(wakeTimer); wakeTimer = setTimer(pump, 1000);
+    } finally { pumping = false; }
+  }
+  function admitReady() {
     clearTimer(wakeTimer); wakeTimer = null;
     const time = now(), busy = translationBusy();
     const limit = busy ? 1 : config.concurrency;
@@ -168,15 +196,16 @@ export function createKnowledgeScheduler({
   }
   return {
     schedule, pump,
-    hasWork: id => buffers.has(id) || running.has(id) || Boolean(store.nextJob(id)),
+    hasWork: id => buffers.has(id) || running.has(id) || [...failedUpdates.values()].some(update => update.job.listening_id === id) || Boolean(store.nextJob(id)),
     remove(id) {
       cancelBuffer(id); lastStarted.delete(id);
+      for (const [jobId, update] of failedUpdates) if (update.job.listening_id === id) failedUpdates.delete(jobId);
       const entry = running.get(id);
       if (entry) { entry.cancelled = true; entry.handle?.cancel('listening_deleted'); }
       pump();
     },
     close() {
-      closed = true; clearTimer(wakeTimer); for (const id of buffers.keys()) cancelBuffer(id);
+      closed = true; clearTimer(wakeTimer); failedUpdates.clear(); for (const id of buffers.keys()) cancelBuffer(id);
       const active = [...running.values()];
       for (const entry of active) { entry.cancelled = true; entry.handle?.cancel('application_shutdown'); }
       return Promise.allSettled(active.map(entry => entry.handle?.promise)).then(() => taskRuntime ? undefined : runtime.dispose());
