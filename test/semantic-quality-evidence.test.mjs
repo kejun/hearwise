@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { captureSemanticOffline } from '../scripts/lib/semantic-quality-capture.mjs';
 import { readSemanticCapture } from '../scripts/lib/semantic-quality-evidence.mjs';
+import { hashBytes } from '../scripts/lib/quality-contract.mjs';
 import { qualitySources } from '../scripts/lib/quality-collector.mjs';
 import { semanticFixtureSample, semanticFixtureResponse } from '../test-support/semantic-quality-fixture.mjs';
 let root, directory, source, original, database;
@@ -20,6 +21,16 @@ test('raw reader binds actual database, source, wire requests and reservations',
   assert.equal(result.report.qualityStatus, 'not_run'); assert.equal(result.artifacts.length, 2);
 });
 const corruptions = {
+  'lost initial reservation': r => { r.calls[0].reservation.parts[0].initial_requests = 0; },
+  'unrelated request source with matching hash': r => {
+    const row = r.calls[0], input = JSON.parse(row.request.messages.at(-1).content);
+    input.focus_segments[0].text = 'Atlas Nova Orion invented another story';
+    row.request.messages.at(-1).content = JSON.stringify(input); row.requestWire = JSON.stringify(row.request);
+    row.requestBytes = Buffer.byteLength(row.requestWire); row.requestSha256 = hashBytes(row.requestWire);
+  },
+  'false empty terminal': r => { r.results.find(row => row.domain === 'knowledge').result.outcome = 'empty'; },
+  'false terminal count': r => { r.results.find(row => row.domain === 'knowledge').result.summary.created_count = 0; },
+  'false relation input snapshot': r => { r.calls.find(row => row.kind === 'relation').reservation.input.focus_segments[0].text = 'unrelated'; },
   'promoted mode': r => { r.mode = 'live'; },
   'promoted quality': r => { r.qualityEvaluated = true; },
   'promoted acceptance': r => { r.fullQualityAcceptance = true; },
