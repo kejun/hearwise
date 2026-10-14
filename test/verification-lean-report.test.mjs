@@ -93,6 +93,7 @@ test('offline Lean evidence independently revalidates corruption and execution o
     ['profile', fixture => { fixture.report.profileDigest = '0'.repeat(64); }, 'passed', 'profile_changed'],
     ['profile-object', fixture => { fixture.report.profile = null; }, 'passed', 'profile_changed'],
     ['source-content', fixture => { fixture.report.sourceDigests[revisionSources[0]] = '0'.repeat(64); }, 'passed', 'source_content_changed'],
+    ['missing-environment', fixture => { delete fixture.report.environment; }, 'incomplete', 'invalid_environment'],
     ['tool', fixture => { fixture.report.tools.node = 'v0.0.0'; }, 'passed', 'wrong_toolchain'],
     ['timeout', fixture => { fixture.report.steps[2].execution.timedOut = true; }, 'incomplete', 'step:proof-build'],
     ['failed', fixture => { fixture.report.steps[2].execution.code = 1; fixture.report.steps[2].status = 'failed'; }, 'failed', 'step:proof-build'],
