@@ -6,3 +6,5 @@ test-evidence/
 browser-evidence/
 verification-evidence/
 public/vendor/
+verification/lean/.lake/
+revision-evidence/

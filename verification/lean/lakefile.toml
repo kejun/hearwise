@@ -1,0 +1,10 @@
+name = "hearwise_revision"
+version = "1.0.0"
+defaultTargets = ["Revision", "revision_oracle"]
+
+[[lean_lib]]
+name = "Revision"
+
+[[lean_exe]]
+name = "revision_oracle"
+root = "Main"

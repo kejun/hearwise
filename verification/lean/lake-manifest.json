@@ -1,0 +1,6 @@
+{"version": "1.3.0",
+ "packagesDir": ".lake/packages",
+ "packages": [],
+ "name": "hearwise_revision",
+ "lakeDir": ".lake",
+ "fixedToolchain": false}
