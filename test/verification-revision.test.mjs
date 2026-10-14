@@ -11,7 +11,7 @@ function valid() {
     tools: { lean: `Lean (version ${profile.lean}, commit ${profile.leanCommit})`, lake: `Lake (Lean version ${profile.lean})`, node: 'v24', sqlite: 'sqlite' },
     environment: { platform: 'linux', arch: 'x64', release: 'fixture' },
     steps: requiredSteps.map(name => ({ name, status: 'passed', execution: { code: 0, signal: null, timedOut: false, interrupted: false, ok: true } })),
-    legacy: { tests: 8, passed: 8, failed: 0, cancelled: 0, skipped: 0, todo: 0 },
+    legacy: { tests: 8, passed: 8, failed: 0, cancelled: 0, skipped: 0, todo: 0, tapComplete: true },
     differential: { complete: true, ok: true, seed: profile.seed, generatedBaseSamples: 256, samples: 662, pairs: 298,
       groups: { sqlite: 5, field: 40 }, mutations: [{ detected: true }, { detected: true }, { detected: true }] },
     artifacts: requiredArtifacts.map(path => ({ path, sha256: 'a'.repeat(64) })) };
@@ -28,7 +28,7 @@ test('revision evidence gate requires proof, audit, differential, frozen compati
     r => r.tools.lean = 'Lean (version 4.34.0)', r => r.tools.lake = 'wrong', r => delete r.environment,
     r => r.differential.samples--, r => r.differential.groups.sqlite = 0, r => r.differential.seed++,
     r => r.differential.mutations[0].detected = false, r => r.artifacts.pop(),
-    r => r.legacy.tests = 0, r => r.legacy.skipped = 1, r => delete r.legacy,
+    r => r.legacy.tapComplete = false, r => delete r.legacy.tapComplete, r => { r.legacy.tests = 7; r.legacy.passed = 7; }, r => r.legacy.tests = 0, r => r.legacy.skipped = 1, r => delete r.legacy,
     r => r.startedAt = null, r => r.finishedAt = '2020-01-01'
   ];
   for (const change of mutations) { const report = valid(); change(report); assert.equal(gate(report, options).ok, false, String(change)); }

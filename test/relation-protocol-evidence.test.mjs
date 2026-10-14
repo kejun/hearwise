@@ -13,7 +13,7 @@ import { modelRoot, protocolCoverage, protocolMetadata, protocolPlan, validatePr
 const testOnly = 'TEST ONLY: synthetic gate-unit fixture; NOT model-checker or implementation evidence';
 const execution = { code: 0, signal: null, timedOut: false, interrupted: false };
 const timestamp = '2026-01-01T00:00:00.000Z';
-const tap = 'TAP version 13\n# TEST ONLY: synthetic TAP summary\n1..1\nok 1 - synthetic gate fixture\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n';
+const tap = 'TAP version 13\n# TEST ONLY: synthetic TAP summary\nok 1 - synthetic gate fixture\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1.0\n';
 const traceOptions = main => ({ actors: main.includes('multi_') ? 3 : 1, capacity: main.includes('cap2') ? 2 : 1 });
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const encode = value => typeof value === 'number' ? { '#bigint': String(value) } : value && typeof value === 'object' ?

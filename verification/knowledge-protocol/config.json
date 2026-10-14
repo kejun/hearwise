@@ -1,0 +1,245 @@
+{
+  "schemaVersion": 1,
+  "specification": "configurations.qnt",
+  "init": "Init",
+  "step": "Step",
+  "invariant": "Safety",
+  "single": {
+    "main": "single",
+    "parts": [
+      0
+    ],
+    "responseChoice": "free at every legal response",
+    "maxExtraRequests": 2,
+    "maxProtocolRetries": 1,
+    "maxRepairReservationsPerPart": 1,
+    "apalacheDepth": 12
+  },
+  "multiple": {
+    "mains": [
+      {
+        "main": "two_parts",
+        "parts": [
+          0,
+          1
+        ]
+      }
+    ],
+    "responseChoice": "free at every legal response",
+    "sequential": true,
+    "sharedAutomaticCycle": 1,
+    "scope": "All reachable modeled response/error and fault choices across two sequential parts, with shared extra/protocol budgets and independent one-shot repairs. No fixed response scripts.",
+    "apalacheDepth": 12
+  },
+  "responses": {
+    "extract": [
+      "ok",
+      "empty",
+      "partial",
+      "rejected",
+      "unrepairable",
+      "protocol",
+      "transient",
+      "auth",
+      "rate_limit",
+      "rate_limit_long",
+      "unexpected"
+    ],
+    "repair": [
+      "ok",
+      "empty",
+      "protocol",
+      "transient",
+      "auth",
+      "rate_limit",
+      "rate_limit_long",
+      "unexpected"
+    ]
+  },
+  "slots": {
+    "ok": [
+      0
+    ],
+    "partial": {
+      "accepted": [
+        0
+      ],
+      "unresolved": [
+        1
+      ],
+      "anchored": [
+        1
+      ]
+    },
+    "rejected": {
+      "accepted": [],
+      "unresolved": [
+        0
+      ],
+      "anchored": [
+        0
+      ]
+    },
+    "unrepairable": {
+      "accepted": [],
+      "unresolved": [
+        0
+      ],
+      "anchored": []
+    },
+    "repairOk": "Accept exactly the currently anchored unresolved sourceIndex slots."
+  },
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "mains": [
+      "single_witnesses",
+      "two_parts_witnesses"
+    ],
+    "seed": "42",
+    "maxSamples": 1,
+    "expectedTestCount": 39,
+    "outputPattern": "{main}-{test}-{seq}.itf.json",
+    "counts": {
+      "single_witnesses": 28,
+      "two_parts_witnesses": 11
+    }
+  },
+  "mutants": [
+    {
+      "main": "mutant_send_without_reserve",
+      "expectedViolation": "budgetBeforeSend",
+      "maxSteps": 2
+    },
+    {
+      "main": "mutant_third_extra",
+      "expectedViolation": "sharedBudget",
+      "maxSteps": 13
+    },
+    {
+      "main": "mutant_accepted_loss",
+      "expectedViolation": "acceptedPreserved",
+      "maxSteps": 9
+    },
+    {
+      "main": "mutant_wrong_terminal_outcome",
+      "expectedViolation": "terminalOutcome",
+      "maxSteps": 4
+    }
+  ],
+  "traceContract": {
+    "variables": [
+      "lastAction",
+      "actor",
+      "response",
+      "stage",
+      "outcome",
+      "ready",
+      "extra_requests",
+      "protocol_retries",
+      "cycle",
+      "phase",
+      "initial_requests",
+      "repair_reserved",
+      "extract_calls",
+      "repair_calls",
+      "initial_complete",
+      "retry_kind",
+      "accepted",
+      "unresolved",
+      "anchored",
+      "replies",
+      "accepted_ever",
+      "apply_counts"
+    ],
+    "projectionFields": [
+      "stage",
+      "outcome",
+      "ready",
+      "extra_requests",
+      "protocol_retries",
+      "cycle",
+      "phase",
+      "initial_requests",
+      "repair_reserved",
+      "extract_calls",
+      "repair_calls",
+      "initial_complete",
+      "retry_kind",
+      "accepted",
+      "unresolved",
+      "anchored",
+      "replies"
+    ],
+    "ghostVariables": [
+      "accepted_ever",
+      "apply_counts"
+    ],
+    "normalization": "Strip module namespaces through the last ::; reject duplicate normalized variable names.",
+    "integerEncoding": {
+      "#bigint": "decimal integer string"
+    },
+    "mapEncoding": {
+      "#map": [
+        [
+          "integer part",
+          "ITF value"
+        ]
+      ]
+    },
+    "setEncoding": {
+      "#set": [
+        "integer sourceIndex slots; normalize to sorted unique arrays"
+      ]
+    },
+    "actor": "Current part number, or -1 for init/advance_time/stutter.",
+    "phase": "Durable extraction_parts.phase; not the observational stage.",
+    "stage": "idle/reserved/inflight/received/done. Successful provider responses wait at a test wrapper before the same synchronous commit-and-observer continuation.",
+    "ready": "false only when idle and awaiting the next actual persisted interval/retry/cooldown deadline; all active and terminal stages are true.",
+    "outcome": "Independent expectedOutcome specification: active stage => none; done with every phase done, every initial_complete true and every unresolved set empty => ok iff any accepted slot, else empty; all other done states => partial iff any accepted slot, else invalid. Safety compares outcome exactly and does not reuse the transition result helper.",
+    "admit": "Durable initial/repair reservation before provider dispatch. Reset current part replies to none.",
+    "reserveFailure": "One-shot reservation transaction failure; scheduler marks job partial/invalid, leaves durable part pending, and performs no new provider call.",
+    "commitFailure": "After paid successful response, storage failure is not automatically retried. Scheduler settles partial/invalid and durable part may remain inflight.",
+    "notificationFailure": "commit_notify_failure is one atomic commit+observer+settle transition, with caught notification failures. No invented asynchronous notification boundary.",
+    "stutter": "Terminal no-op over every business projection.",
+    "cycle": "One automatic cycle (1); reopening and explicit manual retry are separately identified real implementation evidence.",
+    "clockDomain": "Virtual time stays fixed during provider calls, response delivery, commit and observers; only advance_time jumps to the persisted next dispatch deadline. A slow real response already exceeding the 2000ms interval and allowing immediate continuation is outside this timing domain."
+  },
+  "profiles": {
+    "fast": {
+      "default": true,
+      "apalacheDepth": {
+        "single": 12,
+        "two_parts": 12
+      },
+      "tlc": "Both full finite domains must finish complete enumeration.",
+      "claim": "Bounded Apalache only to the declared fast depths; no deep-profile claim."
+    },
+    "deep": {
+      "default": false,
+      "apalacheDepth": {
+        "single": 18,
+        "two_parts": 18
+      },
+      "tlc": "Same complete finite domains as fast.",
+      "claim": "Independent deep run; pending, interrupted, missing or timed-out checks are not passes."
+    }
+  },
+  "profileRationale": "Pre-terminalOutcome-strengthening cost probes completed depth12 at 12.91s (single) and 30.64s (two_parts), depth18 at 18.24s (single) and 224.30s (two_parts), each within a 240s process-group-cleaned bound. Fast is depth12; deep independently checks depth18. Bounds do not reduce either complete TLC finite domain; every final run must establish its own completion status.",
+  "simulation": {
+    "seed": "20261014",
+    "samples": 100,
+    "maximumSteps": 40,
+    "selectedTraces": 5
+  },
+  "exclusions": [
+    "whole-process crash/restart interleavings (KEJ-65)",
+    "cancel/delete",
+    "source/epoch changes",
+    "multiple jobs/shared-key fairness",
+    "scheduler fairness",
+    "provider semantic quality",
+    "unbounded part or sourceIndex counts",
+    "all M1 acceptance",
+    "time elapsing during provider/commit; slow-response immediate continuation"
+  ]
+}

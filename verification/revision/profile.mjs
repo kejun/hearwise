@@ -37,7 +37,7 @@ export function gate(report, { target, release = false, artifactsValid = false, 
     if (rows.length !== 1 || step.status !== 'passed' || step.execution?.code !== 0 || step.execution?.signal != null ||
         step.execution?.timedOut !== false || step.execution?.interrupted !== false || step.execution?.ok !== true) reasons.push(`step:${name}`);
   }
-  if (!(report.legacy?.tests >= 8 && report.legacy?.passed === report.legacy?.tests &&
+  if (!(report.legacy?.tapComplete === true && report.legacy?.tests >= 8 && report.legacy?.passed === report.legacy?.tests &&
       ['failed', 'cancelled', 'skipped', 'todo'].every(key => report.legacy?.[key] === 0))) reasons.push('missing_legacy_tests');
   const d = report.differential;
   if (!d?.complete || !d.ok || d.seed !== profile.seed || d.generatedBaseSamples !== profile.generatedBaseSamples ||

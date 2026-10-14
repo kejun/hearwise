@@ -32,7 +32,11 @@
     "setup:relation-protocol": "node scripts/setup-relation-protocol.mjs",
     "preverify:relation-protocol": "npm run build",
     "verify:relation-protocol": "node scripts/verify-relation-protocol.mjs",
-    "verify:relation-protocol:report": "node scripts/verify-relation-protocol-report.mjs"
+    "verify:relation-protocol:report": "node scripts/verify-relation-protocol-report.mjs",
+    "setup:knowledge-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:knowledge-protocol": "npm run build",
+    "verify:knowledge-protocol": "node scripts/verify-knowledge-protocol.mjs",
+    "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
