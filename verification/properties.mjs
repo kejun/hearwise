@@ -1,3 +1,4 @@
+import { upgradeProperties } from './upgrade-properties.mjs';
 import { playbackProperties } from './playback-properties.mjs';
 import { traceBusinessProperties } from './trace-business-properties.mjs';
 import { securityProperties } from './security-properties.mjs';
@@ -81,4 +82,4 @@ export const properties = cards.map(([group, title, requirement, state, domain, 
   invalidatedBy: ['业务契约、实现、依赖、供应商、提示词或环境变化', '性质或规范版本变化'],
   acceptance: group === 'HW-04' ? ['AC-P01 的单窗口正常提交部分；不代表 M1 完成'] : [domain],
   gaps: [gap], evidenceStatus: 'not_run'
-})).concat(sessionProperties, relationResultProperties, editConsistencyProperties, traceBusinessProperties, securityProperties, playbackProperties);
+})).concat(upgradeProperties, sessionProperties, relationResultProperties, editConsistencyProperties, traceBusinessProperties, securityProperties, playbackProperties);

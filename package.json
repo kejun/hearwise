@@ -66,7 +66,10 @@
     "verify:playback-protocol": "node scripts/verify-playback-protocol.mjs",
     "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs",
     "prequality:semantic": "npm run build",
-    "quality:semantic": "node scripts/evaluate-semantic-quality.mjs"
+    "quality:semantic": "node scripts/evaluate-semantic-quality.mjs",
+    "preverify:upgrade": "npm run build",
+    "verify:upgrade": "node scripts/verify-upgrade.mjs",
+    "verify:upgrade:report": "node scripts/verify-upgrade-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
