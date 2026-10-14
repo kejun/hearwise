@@ -229,7 +229,11 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
     client.on('message', (raw, binary) => {
       if (closed) return;
       let msg;
-      try { if (binary) throw new Error(); msg = JSON.parse(raw.toString()); }
+      try {
+        if (binary) throw new Error();
+        msg = JSON.parse(raw.toString());
+        if (!msg || typeof msg !== 'object' || Array.isArray(msg)) throw new Error('Invalid message shape');
+      }
       catch { return finish('speech.error', '播报消息格式无效'); }
       if (msg.type === 'speech.stop') {
         sessionTrace?.cancel('user_cancelled');

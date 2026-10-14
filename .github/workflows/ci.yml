@@ -33,6 +33,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run verify:trace-business -- --node-only --release
+      - name: Verify credential and request security boundaries
+        run: npm run verify:security -- --node-only --release
       - name: Verify relation property and evidence contract
         run: npm run verify -- --release
       - name: Preserve test progress and watchdog diagnostics
