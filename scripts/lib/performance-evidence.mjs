@@ -80,9 +80,12 @@ export function performanceCaseProjection(raw) {
 }
 
 export async function validatePerformanceEvidence(directory, { release = false, cleanSource = false, target = null, requireComplete = true } = {}) {
+  requireComplete ||= release; // A release request can never be downgraded to partial inspection.
   const issues = [], check = async (label, work) => { try { await work(); } catch (error) { issues.push(`${label}: ${error.message}`); } };
   let report; try { report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8')); } catch (error) { return { valid: false, collectionComplete: false, performanceEvaluated: false, issues: [error.message] }; }
   const profile = performanceProfiles[report.profile];
+  const stopped = !requireComplete && report.execution?.complete === false &&
+    (report.execution?.timedOut === true || report.execution?.interrupted === true);
   await check('header', async () => {
     assert.equal(report.schemaVersion, 1); assert.equal(report.kind, 'history-graph-performance'); assert.ok(profile);
     assert.ok(['baseline-collection', 'candidate-collection'].includes(report.mode));
@@ -112,9 +115,14 @@ export async function validatePerformanceEvidence(directory, { release = false, 
       assert.equal(report.policyAtStart.digest, policyDigest(JSON.parse(await readFile(path.join(directory, 'policy-at-start.json'), 'utf8'))));
     }
     assert.ok(path.isAbsolute(report.execution.repositoryRoot)); assert.ok(path.isAbsolute(report.execution.evidenceDirectory));
-    assert.equal(report.execution.complete, true); assert.equal(report.execution.timedOut, false); assert.equal(report.execution.interrupted, false); assert.equal(report.execution.signal, null);
-    if (requireComplete) { assert.equal(report.collectionComplete, true); assert.equal(report.execution.code, 0); assert.equal(report.error, undefined); }
-    else assert.ok([0, 3].includes(report.execution.code));
+    const execution = report.execution;
+    for (const key of ['complete', 'timedOut', 'interrupted']) assert.equal(typeof execution[key], 'boolean');
+    assert.equal(execution.signal, null, 'A retained terminal report has handled its signal');
+    assert.equal(execution.timedOut && execution.interrupted, false, 'Watchdog and external interruption are distinct');
+    assert.equal(execution.complete, !execution.timedOut && !execution.interrupted);
+    assert.ok([0, 3].includes(execution.code));
+    if (!execution.complete) { assert.equal(execution.code, 3); assert.equal(report.collectionComplete, false); }
+    if (requireComplete) { assert.equal(execution.complete, true); assert.equal(report.collectionComplete, true); assert.equal(execution.code, 0); assert.equal(report.error, undefined); }
     assert.ok(equal(report.source, report.finalSource.source) && equal(report.sourceDigests, report.finalSource.sourceDigests) && equal(report.runtimeBuild, report.finalSource.runtimeBuild), 'Source changed while collecting');
     assert.match(report.runtimeBuild.git_sha, /^[a-f0-9]{40}$/); assert.equal(typeof report.runtimeBuild.build_dirty, 'boolean'); assert.equal(report.runtimeBuild.instrumentation_version, 3);
     const actual = target || await performanceSourceSnapshot();
@@ -136,7 +144,8 @@ export async function validatePerformanceEvidence(directory, { release = false, 
   });
   const manifests = new Map();
   if (profile) await check('frozen databases', async () => {
-    assert.deepEqual(report.datasets.map(row => row.tier), profile.tiers);
+    assert.deepEqual(report.datasets.map(row => row.tier), stopped ? profile.tiers.slice(0, report.datasets.length) : profile.tiers);
+    assert.ok(report.datasets.length <= profile.tiers.length);
     const hashes = {};
     for (const row of report.datasets) {
       const recipe = performanceRecipes.find(recipe => recipe.tier === row.tier);
@@ -152,16 +161,18 @@ export async function validatePerformanceEvidence(directory, { release = false, 
   const projectedCases = [], browserEnvironments = {};
   if (profile) await check('execution roster', async () => {
     const expected = profile.tiers.flatMap(tier => [`${tier}-backend`, ...profile.networks.map(network => `${tier}-${network}-browser`)]);
-    assert.deepEqual(report.results.map(row => row.id), expected);
+    assert.deepEqual(report.results.map(row => row.id), stopped ? expected.slice(0, report.results.length) : expected);
+    assert.ok(report.results.length <= expected.length);
   });
   for (const row of report.results || []) await check(row.id, async () => {
     if (!requireComplete && row.status === 'not_run' && !row.execution) { assert.equal(row.complete, false); assert.equal(row.reason, 'explicit_skip_browser'); return; }
     for (const key of ['input', 'log']) assert.ok(artifactMap.has(row[key]));
-    assert.ok(row.output && artifactMap.has(row.output), 'Missing observations');
-    const manifest = JSON.parse(await readFile(path.join(directory, row.input), 'utf8')), raw = JSON.parse(await readFile(path.join(directory, row.output), 'utf8'));
+    const manifest = JSON.parse(await readFile(path.join(directory, row.input), 'utf8'));
+    const hasOutput = typeof row.output === 'string' && artifactMap.has(row.output);
+    const raw = hasOutput ? JSON.parse(await readFile(path.join(directory, row.output), 'utf8')) : null;
     assert.ok(date(row.startedAt) && date(row.finishedAt) && Date.parse(row.startedAt) <= Date.parse(row.finishedAt));
     assert.ok(Date.parse(report.conditions.before.recordedAt) <= Date.parse(row.startedAt) && Date.parse(row.finishedAt) <= Date.parse(report.conditions.after.recordedAt), 'Load observations do not bracket actual collection');
-    assert.ok(date(raw.startedAt) && date(raw.finishedAt) && Date.parse(row.startedAt) <= Date.parse(raw.startedAt) && Date.parse(raw.finishedAt) <= Date.parse(row.finishedAt));
+    if (raw) assert.ok(date(raw.startedAt) && date(raw.finishedAt) && Date.parse(row.startedAt) <= Date.parse(raw.startedAt) && Date.parse(raw.finishedAt) <= Date.parse(row.finishedAt));
     const { row: datasetRow, dataset, imported } = manifests.get(manifest.workload.tier) || {};
     assert.ok(dataset);
     assert.deepEqual(manifest.primary, dataset.primary); assert.deepEqual(manifest.secondary, dataset.secondary);
@@ -175,21 +186,36 @@ export async function validatePerformanceEvidence(directory, { release = false, 
     const browser = row.kind === 'browser', script = browser ? 'scripts/measure-performance-browser.mjs' : 'scripts/measure-performance-backend.mjs';
     assert.ok(['backend', 'browser'].includes(row.kind));
     assert.equal(row.cwd, report.execution.repositoryRoot);
-    assert.deepEqual(row.argv, [script, path.join(report.execution.evidenceDirectory, row.input), path.join(report.execution.evidenceDirectory, row.output)]);
+    assert.deepEqual(row.argv, [script, path.join(report.execution.evidenceDirectory, row.input), path.join(report.execution.evidenceDirectory, `${row.id}.json`)]);
+    if (hasOutput) assert.equal(row.output, `${row.id}.json`);
     assert.equal(row.timeoutMs, browser ? performanceTimeouts.browserMs : performanceTimeouts.backendMs);
+    const execution = row.execution;
+    assert.ok(execution && (execution.code === null || Number.isSafeInteger(execution.code) && execution.code >= 0));
+    assert.ok(execution.signal === null || typeof execution.signal === 'string' && /^SIG[A-Z0-9]+$/.test(execution.signal));
+    for (const key of ['timedOut', 'interrupted', 'ok']) assert.equal(typeof execution[key], 'boolean');
+    assert.ok(typeof execution.durationMs === 'number' && Number.isFinite(execution.durationMs) && execution.durationMs >= 0);
+    assert.ok(execution.error === undefined || typeof execution.error === 'string' && execution.error);
+    assert.ok(execution.code !== null || execution.signal !== null || execution.error);
+    assert.equal(execution.ok, execution.code === 0 && !execution.error && !execution.timedOut && !execution.interrupted);
+    if (!hasOutput) {
+      assert.equal(stopped, true, 'Missing observations outside an interrupted inspection');
+      assert.equal(row.output, null); assert.equal(exited(execution), false); assert.equal(row.complete, false);
+      assert.deepEqual(row.validation, { ok: false, issues: ['missing_observations'] });
+    }
     if (browser) {
       const network = performanceNetworks.find(value => `${dataset.recipe.tier}-${value.id}-browser` === row.id); assert.ok(network);
       assert.deepEqual(manifest.network, network); assert.deepEqual(manifest.browser, performanceBrowser);
       assert.deepEqual(manifest.timeouts, { actionMs: performanceTimeouts.actionMs, overallMs: performanceTimeouts.browserMs - 10000 });
-      browserEnvironments[row.id] = raw.environment;
+      if (raw?.environment) browserEnvironments[row.id] = raw.environment;
       assert.ok(artifactMap.has(row.serverObservation));
       const server = JSON.parse(await readFile(path.join(directory, row.serverObservation), 'utf8'));
       assert.ok(Number.isSafeInteger(server.pid) && server.pid > 0); assert.equal(server.input.sha256, dataset.databaseSha256);
       assert.deepEqual(server.providerRequests, []); assert.equal(server.cleanupComplete, true);
     } else {
       assert.equal(row.id, `${dataset.recipe.tier}-backend`);
-      assert.deepEqual(raw.cases[0].samples[0].before.runtime, Object.fromEntries(['node', 'sqlite', 'platform', 'arch'].map(key => [key, report.environment.runner[key]])));
+      if (raw?.cases?.[0]?.samples?.[0]) assert.deepEqual(raw.cases[0].samples[0].before.runtime, Object.fromEntries(['node', 'sqlite', 'platform', 'arch'].map(key => [key, report.environment.runner[key]])));
     }
+    if (!raw) return;
     const checked = browser ? validateBrowserEvidence(raw, manifest) : validateBackendEvidence(raw, manifest);
     const valid = browser ? checked.valid : checked.ok;
     if (requireComplete) { assert.equal(exited(row.execution), true); assert.equal(row.complete, true); assert.equal(valid, true, JSON.stringify(checked)); }

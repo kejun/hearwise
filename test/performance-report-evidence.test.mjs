@@ -67,3 +67,45 @@ test('measurement identity binds execution and cleanup helpers independently of 
   }
   assert.equal(performanceMeasurementDigest({ ...sources, 'server.mjs': 'b'.repeat(64) }), baseline, 'The measured product may change between baseline and candidate');
 });
+
+test('actual SIGINT and watchdog SIGTERM reports retain inspectable prefixes but cannot pass collection', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'performance-interrupted-test-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const env = { ...process.env, PERFORMANCE_EVIDENCE_DIR: directory }; delete env.NODE_TEST_CONTEXT;
+  const prepare = spawnSync(process.execPath, ['scripts/prepare-performance.mjs', directory, 'smoke'], { cwd: performanceRoot, env, encoding: 'utf8', timeout: 20000 });
+  assert.equal(prepare.status, 0, prepare.stdout + prepare.stderr);
+  const fixture = JSON.parse(prepare.stdout.trim().split('\n').at(-1)).path;
+  for (const mode of ['interrupt', 'watchdog']) {
+    const collect = spawnSync(process.execPath, ['--import', './test-support/performance-interrupt-preload.mjs', 'scripts/collect-performance.mjs', fixture, 'smoke'], {
+      cwd: performanceRoot, env: { ...env, PERFORMANCE_TEST_STOP: mode }, encoding: 'utf8', timeout: 20000
+    });
+    assert.equal(collect.status, 3, collect.stdout + collect.stderr); assert.equal(collect.signal, null);
+    const reportFile = JSON.parse(collect.stdout.trim().split('\n').at(-1)).path, root = path.dirname(reportFile);
+    const report = JSON.parse(await readFile(reportFile, 'utf8'));
+    assert.equal(report.execution.complete, false); assert.equal(report.execution.timedOut, mode === 'watchdog'); assert.equal(report.execution.interrupted, mode === 'interrupt');
+    assert.equal(report.collectionComplete, false); assert.equal(report.results.length, 1); assert.equal(report.results[0].id, 'small-backend');
+    assert.equal(report.results[0].execution.interrupted, true); assert.equal(report.results[0].output, null);
+    const checked = await validatePerformanceEvidence(root, { requireComplete: false });
+    assert.equal(checked.valid, true, JSON.stringify(checked)); assert.equal(checked.collectionComplete, false);
+    assert.equal((await validatePerformanceEvidence(root)).valid, false);
+    assert.equal((await validatePerformanceEvidence(root, { release: true, requireComplete: false })).valid, false, 'Inspect cannot downgrade release');
+    const mutations = [
+      value => { value.execution.complete = true; },
+      value => { value.execution.timedOut = true; value.execution.interrupted = true; },
+      value => { value.execution.signal = 'SIGTERM'; },
+      value => { value.execution.code = 0; },
+      value => { value.results[0].execution.ok = true; },
+      value => { value.results[0].complete = true; },
+      value => { value.results[0].validation.issues = []; },
+      value => { value.results[0].argv[0] = 'scripts/fake.mjs'; },
+      value => { value.results[0].id = 'small-loopback-browser'; },
+      value => { value.artifacts = value.artifacts.filter(item => item.path !== value.results[0].log); },
+      value => { value.datasets[0].tier = 'large'; }
+    ];
+    for (const mutate of mutations) {
+      const value = structuredClone(report); mutate(value); await writeFile(reportFile, JSON.stringify(value));
+      assert.equal((await validatePerformanceEvidence(root, { requireComplete: false })).valid, false, mutate.toString());
+    }
+    await writeFile(reportFile, JSON.stringify(report));
+  }
+});

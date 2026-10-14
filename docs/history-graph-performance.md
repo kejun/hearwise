@@ -41,7 +41,7 @@ npm run performance:report -- verification-evidence/performance/run-XXXX --relea
 
 后端七阶段：历史第一页/第二页、A/B 记录详情、图谱 A、导入后历史及导入图谱。每次读取真实服务器及 SQLite，并核对响应状态、字节哈希、实体 ID、片段数、节点和关系数。完整响应内容按实际 SHA256 去重保存，每条样本保留对应哈希、字节数及全部原始计数，不删除慢样本。存储构造、服务器启动及导入准备不混入这些读取耗时。应用没有历史全文搜索，不能将分页查询称为全文搜索；图谱搜索单独实测。
 
-浏览器 21 阶段：历史首屏/下一页、详情/下一页、图谱首次端到端、已预取图谱激活、A→B→A、全屏、放大/缩小/适配/重新布局、搜索/类型筛选/节点详情、真实指针平移/拖点/滚轮、恢复总览、导入后历史/图谱。每个样本新建非持久 context、禁用 HTTP cache；同一 browser 进程复用。页面初始化作为设置步骤，不计入历史点击的首屏时间，也不声称冷 OS 文件缓存。
+浏览器 21 阶段：历史首屏/下一页、详情/下一页、图谱首次端到端、已预取图谱激活、A→B→A、全屏、放大/缩小/适配/重新布局、搜索/类型筛选/节点详情、真实指针平移/拖点/滚轮、恢复总览、导入后历史/图谱。每个样本新建非持久 context、禁用 HTTP cache；同一 browser 进程复用。页面初始化作为设置步骤，不计入历史点击的首屏时间，也不声称冷 OS 文件缓存。滚轮输入先只读等待锁定 Cytoscape renderer 的 `scrollingPage` 抑制状态结束，再发送一次真实 mouse wheel；不靠固定休眠、重复滚轮或修改 renderer。该输入准备仍计入该阶段 wall 时间。导入 POST 响应在到达时立即读取正文，避免 UI 操作结束或导航后才读取已被 Chromium 回收的响应。
 
 图谱在详情加载后会预取。首次图谱从没有该记录数据的 context 中的历史选择开始，核对真实 detail+graph 响应及节点、边和两次渲染帧；已预取 tab 激活是另一阶段。small 恰好只有 20 条历史、主记录 56 段，对两个不存在的下一页控件按精确域报告 `not_applicable`；medium/large 实际执行分页。
 
@@ -63,7 +63,7 @@ npm run performance:report -- verification-evidence/performance/run-XXXX --relea
 
 后端固定 200ms 受控 loopback 转发延迟仍读取真实 graph 路由；浏览器固定 150ms 主线程成本绑定真实 fit 点击并由 Long Task 观察。它们与正式样本分开，验证测量路径能看到受控成本，不是假装产品回归，也不修改 summary 数字。
 
-门禁重算原始 CPU/内存/时间/响应/就绪字段和分位数，校验具体冻结 SQLite 的规模、内容、ID、拓扑、每阶段 roster、重复数、完整退出、前后源码及构建 SHA、附件 SHA256。功能和门禁回归由同源码的 Node CI 单独执行。缺浏览器、丢结果、环境或负载观测来自旧时段、timeout/interrupt、dirty/stale build 均不得得出发布通过。`--inspect-incomplete` 只允许检查真实部分报告结构，返回的 `collectionComplete` 和 `performanceEvaluated` 仍为 false。
+门禁重算原始 CPU/内存/时间/响应/就绪字段和分位数，校验具体冻结 SQLite 的规模、内容、ID、拓扑、每阶段 roster、重复数、完整退出、前后源码及构建 SHA、附件 SHA256。功能和门禁回归由同源码的 Node CI 单独执行。缺浏览器、丢结果、环境或负载观测来自旧时段、timeout/interrupt、dirty/stale build 均不得得出发布通过。`--inspect-incomplete` 允许检查真实部分报告结构：已处理 SIGINT/SIGTERM 或 watchdog 的终态必须有互斥的停止原因、`complete=false`、code 3，且只允许配置顺序的 dataset/result 前缀。已保存附件、数据库、命令、时间和源身份仍逐项验证；被停止且没有输出的子进程必须保留输入、日志、非成功 execution 与 `missing_observations`。返回的 `collectionComplete` 和 `performanceEvaluated` 仍为 false；同时指定 `--release-collection` 仍强制完整验收。测试用 preload 在真实子进程启动点触发实际 SIGINT 或调用已注册 watchdog（继而实际 SIGTERM），不更改正式时限或伪造报告字段。
 
 ## 冻结目标与候选比较
 
