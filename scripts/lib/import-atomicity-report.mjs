@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { atomicityChecks, atomicityRegressionTap, validAtomicityCommand, validAtomicityLocations } from '../../test-support/import-atomicity-contract.mjs';
@@ -29,11 +30,12 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
     const rows = (report.checks || []).filter(row => row.name === name);
     return rows.length === 1 ? rows[0] : null;
   };
-  const expectedChecks = atomicityChecks(report.evidenceDirectory || '', report.nodeOnly);
-  if (!validAtomicityLocations(report, directory, process.cwd())) reasons.push('execution_location_missing');
+  const cwd = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 5000 }).trim();
+  const expectedChecks = atomicityChecks(path.resolve(directory), nodeOnly);
+  if (!validAtomicityLocations(report, directory, cwd)) reasons.push('execution_location_mismatch');
   for (const expected of expectedChecks) {
     const actual = check(expected.name);
-    if (!validAtomicityCommand(actual, expected, report.cwd)) (expected.name === 'browser' ? browserArtifactReasons : nodeArtifactReasons).push(`command_or_budget_mismatch:${expected.name}`);
+    if (!validAtomicityCommand(actual, expected, cwd)) (expected.name === 'browser' ? browserArtifactReasons : nodeArtifactReasons).push(`command_or_budget_mismatch:${expected.name}`);
     const log = artifacts.get(`${expected.name}.log`);
     if (log && actual?.execution.tail !== log.toString().slice(-12000)) (expected.name === 'browser' ? browserArtifactReasons : nodeArtifactReasons).push(`log_tail_mismatch:${expected.name}`);
   }

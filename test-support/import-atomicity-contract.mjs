@@ -49,5 +49,5 @@ export function validAtomicityCommand(check, expected, cwd) {
 }
 
 export function validAtomicityLocations(report, directory, cwd) {
-  return path.isAbsolute(report.cwd || '') && path.isAbsolute(report.evidenceDirectory || '');
+  return report.cwd === cwd && report.evidenceDirectory === path.resolve(directory);
 }

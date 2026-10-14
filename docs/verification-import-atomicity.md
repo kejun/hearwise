@@ -105,6 +105,14 @@ start/end times, full exit/signal/timeout/interruption, source SHA/dirty and all
 tracked/generated source hashes at both ends, Node/SQLite/OS, raw observations,
 logs and artifact digests. Independent report reads reconstruct projections,
 PID/signal evidence and SQLite error conditions rather than trusting cached ok.
+The local release reader also requires the recorded cwd to equal the current Git
+repository root and its recorded evidence directory to equal the actual directory
+being read. Expected commands are built from those independently resolved paths,
+not from the report's own path declarations. Moving a report therefore invalidates
+this local execution-location check; it does not itself mean its evidence is
+corrupt. Downloaded CI bundles can still be independently inspected for raw
+projections, source/build identity, artifacts and screenshots, but are not claimed
+to pass the original-path local release reader.
 Release requires clean unchanged source. Missing, changed, cancelled, timed-out
 or incomplete evidence fails closed; browser results are independently scoped.
 
