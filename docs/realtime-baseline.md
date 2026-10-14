@@ -15,6 +15,7 @@ npm ci --ignore-scripts
 npm run verify:realtime-baseline
 npm run verify:realtime-baseline -- --profile=smoke
 npm run verify:realtime-baseline -- --profile=smoke --negative=retain-asr-socket
+node scripts/verify-realtime-baseline.mjs --report=verification-evidence/realtime/<run-directory>
 ```
 
 The negative must exit 1 with `negativeDetected: true`; it retains a real upstream
@@ -64,7 +65,8 @@ counts are unavailable/null. The sampler's own interval is unref'ed. Raw public
 processing events and HTTP snapshots preserve pending translations, knowledge
 jobs/buffers and relation status. These are observable workloads, not private
 scheduler container instrumentation. Server logs retain Trace task lifecycles.
-ASR provider sockets are observed directly in the existing fixture. Quiescent
+This is four synthetic 100 ms PCM frames per second, not continuous microphone
+audio at full sample-rate throughput. ASR provider sockets are observed directly in the existing fixture. Quiescent
 samples follow every stop/drain; all consumer sockets must close and the ASR
 provider must have zero connections within the observation window.
 
@@ -73,6 +75,16 @@ regression retains them under `test-evidence/nested-profiles/` for existing CI
 artifact upload. Each report binds source SHA/dirty state, plan hash, lock hash,
 actual runtime/OS/CPU, start/end time, child exit and hashes of raw artifacts:
 `events.jsonl`, `resources.jsonl`, `server.log`, `worker.log`, `result.json`.
+The offline readback verifies required artifact hashes, current plan/source/lock and
+built-runtime identity, and Trace build metadata. It independently reconstructs
+samples, phase load/durations, first-frame timing, quantiles, resource statistics
+and cleanup observations from the raw sequences. Whitelisted raw inputs cannot
+prefill derived measurements. Post-stop translation lookup uses stable segment
+IDs in batches of 50, including records beyond the detail API's first 100 rows.
+Readback rejects stale source/build, missing observations and fabricated summaries.
+The outer runner separately checks that the server PID is gone and its owned
+database root is removed.
+
 Failures preserve their phase and partial sequences; no retries are performed.
 Workers have isolated process groups; parent cleanup removes the owned database
 root even after forced exit. Normal fixture close confirms child exit, closed

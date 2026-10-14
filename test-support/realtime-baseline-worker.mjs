@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { once } from 'node:events';
 import WebSocket from 'ws';
 import { DatabaseSync } from 'node:sqlite';
 import { speechFixture } from './speech-fixture.mjs';
 import { deadline } from './lifecycle.mjs';
+import { resourceSummary } from '../scripts/lib/realtime-readback.mjs';
 import { summarizeLatencies, validateBaselineRun } from '../scripts/lib/realtime-baseline.mjs';
 
 const [directory, profile, negative = 'none'] = process.argv.slice(2);
@@ -16,7 +18,7 @@ assert.ok(config && ['none', 'retain-asr-socket'].includes(negative));
 const result = { startedAt: new Date().toISOString(), complete: false, cleanup: { confirmed: false }, phases: [], samples: [], runs: [], quiescent: [], negative };
 const now = () => performance.now();
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const raw = (type, value) => appendFileSync(path.join(directory, 'events.jsonl'), JSON.stringify({ at: new Date().toISOString(), monoMs: now(), type, ...value }) + '\n');
+const raw = (type, value, monoMs = now()) => appendFileSync(path.join(directory, 'events.jsonl'), JSON.stringify({ at: new Date().toISOString(), monoMs, type, ...value }) + '\n');
 async function until(check, label, timeout = config.phaseTimeoutMs) {
   const start = now();
   while (now() - start < timeout) { const value = await check(); if (value) return value; await wait(10); }
@@ -25,6 +27,7 @@ async function until(check, label, timeout = config.phaseTimeoutMs) {
 const resourcesFile = path.join(directory, 'resources.jsonl');
 let fixture, sequence = 0, epoch = 0, phase = 'warmup';
 const sockets = [], records = new Map();
+raw('runtime', { tools: { node: process.version, sqlite: process.versions.sqlite }, environment: { platform: process.platform, arch: process.arch, release: os.release(), cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() } });
 try {
   fixture = await speechFixture({ directoryRoot: path.join(directory, 'temporary-database'), translationDelay: plan.input.translationDelayMs,
     translationText: text => `探针${text.match(/Probe(\d+)/)?.[1] || 0}。`,
@@ -60,7 +63,7 @@ try {
     const ws = await socket('/ws'), run = { phase, startMs: now(), listeningId, epoch: ++epoch };
     const events = [];
     ws.on('message', data => {
-      const event = JSON.parse(data), at = now(); events.push(event); raw('asr-event', { phase, event });
+      const event = JSON.parse(data), at = now(); events.push(event); raw('asr-event', { phase, event }, at);
       if (event.type === 'segment-final') {
         const row = records.get(event.segment.asr_sentence_id);
         if (row) { row.finalMs = at; row.audioToCaptionMs = at - row.audioSentMs; row.segmentId = event.segment.id; }
@@ -76,25 +79,27 @@ try {
     });
     ws.send(JSON.stringify({ type: 'start', key: 'local-fixture-only', source: 'en', targetLang: 'Chinese', audioSource: 'tab', listeningId }));
     const ready = await until(() => events.find(event => event.type === 'listening-ready'), 'listening ready');
-    Object.assign(run, ready); delete run.type; result.runs.push(run);
+    Object.assign(run, ready); delete run.type; result.runs.push(run); raw('run-open', { run });
     const tts = await socket('/ws/tts'); let consumed = 0;
     tts.on('message', (data, binary) => {
       if (binary) {
-        raw('pcm', { phase, epoch: data.readUInt32LE(0), unit: data.readUInt32LE(4), bytes: data.length });
-        run.startToFirstPcmMs ??= now() - run.speechStartMs;
-        run.audioToFirstPcmMs ??= now() - run.firstAudioMs;
+        const at = now();
+        raw('pcm', { phase, runId: run.runId, epoch: data.readUInt32LE(0), unit: data.readUInt32LE(4), bytes: data.length }, at);
+        run.startToFirstPcmMs ??= at - run.speechStartMs;
+        run.audioToFirstPcmMs ??= at - run.firstAudioMs;
       } else {
         const event = JSON.parse(data); raw('speech-event', { phase, event });
         if (event.type === 'speech.unit-end') { consumed += event.samples; tts.send(JSON.stringify({ type: 'speech.progress', epoch: run.epoch, playedUnit: event.unit, consumedSamples: consumed })); }
       }
     });
-    run.speechStartMs = now();
+    run.speechStartMs = now(); raw('speech-start', { runId: run.runId, speechStartMs: run.speechStartMs });
     tts.send(JSON.stringify({ type: 'speech.start', epoch: run.epoch, listeningId: run.listeningId, runId: run.runId,
       config: { key: 'local-fixture-only', region: 'beijing', voice: 'Cherry', rate: 1 } }));
     return { ws, tts, run };
   }
-  async function send(client) {
+  async function send(client, scheduledMs) {
     const id = `Probe${++sequence}`, row = { id, phase, listeningId: client.run.listeningId, runId: client.run.runId, audioSentMs: now() };
+    row.scheduledMs = scheduledMs ?? row.audioSentMs;
     client.run.firstAudioMs ??= row.audioSentMs;
     result.samples.push(row); records.set(id, row); const before = fixture.stats.audioFrames;
     client.ws.send(Buffer.alloc(3200));
@@ -106,8 +111,19 @@ try {
     return until(async () => {
       const detail = await (await request(`/api/listenings/${listeningId}`)).json();
       raw('processing', { listeningId, processing: detail.processing, jobs: detail.jobs.map(job => ({ id: job.id, state: job.state, outcome: job.outcome })) });
+      // Detail pages only contain the first 100 segments. Query every missing
+      // observation by stable segment ID, in the existing API's batches of 50.
+      const pending = result.samples.filter(row => row.listeningId === listeningId && row.segmentId && !Number.isFinite(row.finalToTranslationMs) && !Number.isFinite(row.finalToTranslationHttpObservedMs));
+      const segments = [];
+      for (let offset = 0; offset < pending.length; offset += 50) {
+        const ids = pending.slice(offset, offset + 50).map(row => row.segmentId).join(',');
+        const body = await (await request(`/api/listenings/${listeningId}/segments?ids=${ids}`)).json();
+        segments.push(...body.items);
+      }
       const observedMs = now();
-      for (const segment of detail.segments) {
+      raw('http-observation', { listeningId, segments: segments.map(row => ({ id: row.id, run_id: row.run_id, asr_sentence_id: row.asr_sentence_id, translation_state: row.translation_state })),
+        knowledge: detail.knowledge.map(row => ({ id: row.id, canonical_name: row.canonical_name })) }, observedMs);
+      for (const segment of segments) {
         const row = records.get(segment.asr_sentence_id);
         if (row && !Number.isFinite(row.finalToTranslationMs) && !Number.isFinite(row.finalToTranslationHttpObservedMs) && segment.translation_state === 'complete') {
           row.finalToTranslationHttpObservedMs = observedMs - row.finalMs;
@@ -128,21 +144,28 @@ try {
     client.ws.send(JSON.stringify({ type: 'stop' }));
     await until(() => client.ws.readyState === 3 && client.tts.readyState === 3, 'consumer socket cleanup', config.cleanupObservationMs);
     await until(() => fixture.stats.asrClients.size === 0, 'ASR upstream retained after stop', config.cleanupObservationMs);
+    raw('consumer-stopped', { runId: client.run.runId, consumerClosed: client.ws.readyState === 3 && client.tts.readyState === 3, providerAsrConnections: fixture.stats.asrClients.size });
     if (!drainWork) return;
-    await drain(client.run.listeningId);
+    await drain(client.run.listeningId); raw('drained', { listeningId: client.run.listeningId });
     await wait(config.sampleMs * 2);
+    const readStartedAt = new Date().toISOString();
     const samples = readFileSync(resourcesFile, 'utf8').trim().split('\n').map(JSON.parse);
-    result.quiescent.push({ phase, listeningId: client.run.listeningId, resource: samples.at(-1), providerAsrConnections: fixture.stats.asrClients.size });
+    const readFinishedAt = new Date().toISOString();
+    const checkpoint = { readStartedAt, readFinishedAt, phase, listeningId: client.run.listeningId, resource: samples.at(-1), providerAsrConnections: fixture.stats.asrClients.size };
+    result.quiescent.push(checkpoint); raw('quiescent', { checkpoint });
   }
   async function stage(name, operation) {
-    phase = name; const row = { name, startedMs: now(), complete: false }; result.phases.push(row); raw('phase-start', { name });
+    phase = name; const row = { name, startedMs: now(), complete: false }; result.phases.push(row); raw('phase-start', { name, startedMs: row.startedMs }, row.startedMs);
     await operation(); Object.assign(row, { finishedMs: now(), complete: true }); raw('phase-end', row);
   }
   let primary;
   for (const [name, duration] of [['warmup', config.warmupMs], ['continuous', config.continuousMs]]) await stage(name, async () => {
     const client = await start(); primary = client.run.listeningId; const startMs = now();
+    raw('stimulus-start', { phase, startedMs: startMs, durationMs: duration, intervalMs: config.intervalMs });
     for (let slot = 0; slot < Math.ceil(duration / config.intervalMs); slot++) {
-      await wait(Math.max(0, startMs + slot * config.intervalMs - now())); await send(client);
+      const scheduledMs = startMs + slot * config.intervalMs;
+      while (now() < scheduledMs) await wait(Math.ceil(scheduledMs - now()));
+      await send(client, scheduledMs);
     }
     await wait(Math.max(0, startMs + duration - now())); await stop(client);
   });
@@ -178,6 +201,7 @@ try {
   const db = new DatabaseSync(fixture.seeded.filename, { readOnly: true });
   try { result.durable = Object.fromEntries(['listenings', 'listening_runs', 'segments', 'extraction_jobs', 'knowledge_items'].map(table => [table, db.prepare(`SELECT count(*) AS count FROM ${table}`).get().count])); }
   finally { db.close(); }
+  raw('durable', { counts: result.durable });
   result.complete = true;
 } catch (error) { result.error = error.message; result.failure = { error: error.message, phase, providerAsrConnections: fixture?.stats.asrClients.size ?? null }; raw('failure', result.failure); }
 finally {
@@ -191,14 +215,10 @@ finally {
     }
   } catch (error) { result.cleanup.error = error.message; }
   const resources = existsSync(resourcesFile) ? readFileSync(resourcesFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+  raw('cleanup', { cleanup: result.cleanup });
   result.resourceSamples = resources.length;
   result.retainedCloseCalls = Math.max(0, ...resources.map(row => row.retainedCloseCalls));
-  result.resourceSummary = resources.length ? {
-    rssBytes: { first: resources[0].memory.rss, last: resources.at(-1).memory.rss, max: Math.max(...resources.map(row => row.memory.rss)) },
-    cpuMicroseconds: resources.at(-1).cpuMicroseconds,
-    descriptors: { first: resources[0].descriptors, last: resources.at(-1).descriptors },
-    interpretation: 'Descriptive only. SQLite contents, caches and fixture records grow; no stability acceptance budget is approved.'
-  } : null;
+  result.resourceSummary = resourceSummary(resources);
   for (const phase of result.phases) {
     const rows = result.samples.filter(row => row.phase === phase.name);
     phase.inputs = rows.length; phase.captionDeliveries = rows.filter(row => Number.isFinite(row.audioToCaptionMs)).length;
