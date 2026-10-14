@@ -4,6 +4,7 @@ import os from 'node:os';
 import { profile, requiredSteps, requiredArtifacts, gate } from '../verification/revision/profile.mjs';
 import { sourceVersion, writeJson, digest, checkArtifacts } from './lib/verification-evidence.mjs';
 import { runProcess } from './lib/process.mjs';
+import { tapMetrics } from './lib/tap-summary.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => arg !== '--release')) throw new Error('Usage: npm run verify:revision -- [--release]');
@@ -14,7 +15,7 @@ const leanDirectory = path.resolve('verification/lean');
 const sources = ['knowledge-revision.mjs', 'verification/lean/Revision.lean', 'verification/lean/Main.lean',
   'verification/lean/AxiomAudit.lean', 'verification/lean/lean-toolchain', 'verification/lean/lakefile.toml',
   'verification/lean/lake-manifest.json', 'verification/revision/corpus.mjs', 'verification/revision/differential.mjs',
-  'verification/revision/profile.mjs', 'test-support/knowledge-revision-fixture.mjs', 'test/knowledge-revision.test.mjs', 'package-lock.json'];
+  'verification/revision/profile.mjs', 'test-support/knowledge-revision-fixture.mjs', 'test/knowledge-revision.test.mjs', 'scripts/lib/tap-summary.mjs', 'package-lock.json'];
 const profileDigest = digest(JSON.stringify(profile));
 const report = { schemaVersion: 1, profileVersion: profile.version, profileDigest, profile, source: sourceVersion(),
   startedAt: new Date().toISOString(), finishedAt: null, complete: false, interrupted: false, ok: false,
@@ -60,13 +61,11 @@ try {
       report.tools.lake = execution.tail.trim();
       if (execution.ok && !report.tools.lake.includes(`Lean version ${profile.lean}`)) step.status = 'failed';
     }
-    if (name === 'legacy-regression' && execution.ok) {
+    if (name === 'legacy-regression') {
       const log = await readFile(path.join(directory, 'legacy-regression.log'), 'utf8');
-      const count = label => Number(log.match(new RegExp(`^# ${label} (\\d+)$`, 'm'))?.[1] ?? NaN);
-      report.legacy = { tests: count('tests'), passed: count('pass'), failed: count('fail'),
-        cancelled: count('cancelled'), skipped: count('skipped'), todo: count('todo') };
-      if (!(report.legacy.tests >= 8 && report.legacy.passed === report.legacy.tests &&
-          ['failed', 'cancelled', 'skipped', 'todo'].every(key => report.legacy[key] === 0))) step.status = 'failed';
+      report.legacy = tapMetrics(log);
+      if (step.status === 'passed' && !(report.legacy.tapComplete && report.legacy.tests >= 8 &&
+          report.legacy.passed === report.legacy.tests && report.legacy.failed === 0)) step.status = 'failed';
     }
     await save();
     if (step.status !== 'passed') break;
@@ -88,7 +87,7 @@ try {
     catch { /* Missing evidence remains visible and fails the gate. */ }
   }
   report.finishedAt = new Date().toISOString();
-  report.complete = !report.error && !report.interrupted && report.steps.every(step => step.execution &&
+  report.complete = !report.error && !report.interrupted && report.legacy?.tapComplete === true && report.steps.every(step => step.execution &&
     !step.execution.timedOut && !step.execution.interrupted && step.execution.signal == null && step.execution.code != null);
   report.summary = gate(report, { target: sourceVersion(), release: args.includes('--release'), profileDigest,
     artifactsValid: await checkArtifacts(directory, report) });

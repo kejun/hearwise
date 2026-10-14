@@ -157,7 +157,7 @@ test('protocol failures consume two durable calls including the failed responses
 
 test('implementation regression evidence requires executed TAP tests, not a silent successful child', () => {
   const execution = { code: 0, signal: null, timedOut: false, interrupted: false };
-  const tap = 'TAP version 13\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n';
+  const tap = 'TAP version 13\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1.0\n';
   assert.equal(checkerConclusion('implementation-regression', execution, tap).ok, true);
   assert.equal(checkerConclusion('implementation-regression', execution, '').ok, false);
   assert.equal(checkerConclusion('implementation-regression', execution, tap.replace('# tests 1', '# tests 0')).ok, false);

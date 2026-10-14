@@ -4,6 +4,7 @@ import os from 'node:os';
 import { profile, requiredSteps, requiredArtifacts, gate } from '../verification/name-interval/profile.mjs';
 import { sourceVersion, writeJson, digest, checkArtifacts } from './lib/verification-evidence.mjs';
 import { runProcess } from './lib/process.mjs';
+import { tapMetrics } from './lib/tap-summary.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => arg !== '--release')) throw new Error('Usage: npm run verify:name-interval -- [--release]');
@@ -18,7 +19,7 @@ const sources = ['knowledge-edit.mjs', 'knowledge-name-replacement.mjs', 'relati
   'verification/name-interval/differential.mjs', 'verification/name-interval/profile.mjs',
   'test-support/name-replacement-fixture.mjs', 'test/knowledge-name-replacement.test.mjs',
   'test-support/name-replacement-import-fixture.mjs', 'test/knowledge-name-replacement-import.test.mjs',
-  'scripts/lib/process.mjs', 'scripts/lib/verification-evidence.mjs', 'scripts/verify-name-interval.mjs', 'package.json', 'package-lock.json', '.github/workflows/ci.yml'];
+  'scripts/lib/process.mjs', 'scripts/lib/tap-summary.mjs', 'scripts/lib/verification-evidence.mjs', 'scripts/verify-name-interval.mjs', 'package.json', 'package-lock.json', '.github/workflows/ci.yml'];
 const profileDigest = digest(JSON.stringify(profile));
 const report = { schemaVersion: 1, profileVersion: profile.version, profileDigest, profile, source: sourceVersion(),
   startedAt: new Date().toISOString(), finishedAt: null, complete: false, interrupted: false, ok: false,
@@ -64,13 +65,11 @@ try {
       report.tools.lake = execution.tail.trim();
       if (execution.ok && !report.tools.lake.includes(`Lean version ${profile.lean}`)) step.status = 'failed';
     }
-    if (name === 'implementation-regression' && execution.ok) {
+    if (name === 'implementation-regression') {
       const log = await readFile(path.join(directory, 'implementation-regression.log'), 'utf8');
-      const count = label => Number(log.match(new RegExp(`^# ${label} (\\d+)$`, 'm'))?.[1] ?? NaN);
-      report.implementation = { tests: count('tests'), passed: count('pass'), failed: count('fail'),
-        cancelled: count('cancelled'), skipped: count('skipped'), todo: count('todo') };
-      if (!(report.implementation.tests >= 9 && report.implementation.passed === report.implementation.tests &&
-          ['failed', 'cancelled', 'skipped', 'todo'].every(key => report.implementation[key] === 0))) step.status = 'failed';
+      report.implementation = tapMetrics(log);
+      if (step.status === 'passed' && !(report.implementation.tapComplete && report.implementation.tests >= 9 &&
+          report.implementation.passed === report.implementation.tests && report.implementation.failed === 0)) step.status = 'failed';
     }
     await save();
     if (step.status !== 'passed') break;
@@ -97,7 +96,7 @@ try {
     catch { report.finalSourceDigests[file] = null; }
   }
   report.finishedAt = new Date().toISOString();
-  report.complete = !report.error && !report.interrupted && report.steps.every(step => step.execution &&
+  report.complete = !report.error && !report.interrupted && report.implementation?.tapComplete === true && report.steps.every(step => step.execution &&
     !step.execution.timedOut && !step.execution.interrupted && step.execution.signal == null && step.execution.code != null);
   report.summary = gate(report, { target: sourceVersion(), release: args.includes('--release'), profileDigest,
     artifactsValid: await checkArtifacts(directory, report) });

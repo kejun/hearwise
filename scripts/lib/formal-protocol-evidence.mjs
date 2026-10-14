@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { digest } from './verification-evidence.mjs';
+import { tapMetrics } from './tap-summary.mjs';
 
 export function formalPlan(config) {
   const mains = [config.single.main, ...config.multiple.mains.map(row => row.main)];
@@ -19,6 +20,10 @@ const validInterval = value => typeof value?.startedAt === 'string' && typeof va
   Number.isFinite(Date.parse(value.startedAt)) && Number.isFinite(Date.parse(value.finishedAt)) && Date.parse(value.finishedAt) >= Date.parse(value.startedAt);
 export function checkerConclusion(kind, execution, log, bound) {
   if (!execution || execution.timedOut !== false || execution.interrupted !== false || execution.signal != null || !Number.isInteger(execution.code)) return { ok: false, complete: false };
+  if (kind === 'implementation-regression') {
+    const metrics = tapMetrics(log), complete = /^TAP version 13\r?$/m.test(log) && metrics.tapComplete;
+    return { ok: execution.code === 0 && complete && metrics.failed === 0, complete, metrics };
+  }
   if (kind === 'model-negative') return { ok: execution.code !== 0 && /found a counterexample/i.test(log), complete: true };
   if (execution.code !== 0) return { ok: false, complete: true };
   if (kind === 'finite-state-complete') {
@@ -29,11 +34,6 @@ export function checkerConclusion(kind, execution, log, bound) {
       metrics: states && depth ? { generatedStates: Number(states[1].replaceAll(',', '')), distinctStates: Number(states[2].replaceAll(',', '')), remainingStates: Number(states[3].replaceAll(',', '')), graphDepth: Number(depth[1]) } : null };
   }
   if (kind === 'bounded-model-check') return { ok: /The outcome is: NoError/.test(log) && /\[ok\] No violation found/.test(log) && new RegExp(`Step ${bound}:`).test(log), complete: true, metrics: { maximumDepth: bound } };
-  if (kind === 'implementation-regression') {
-    const metric = name => Number(log.match(new RegExp(`^# ${name} (\\d+)$`, 'm'))?.[1] ?? NaN);
-    const tests = metric('tests'), passed = metric('pass');
-    return { ok: /^TAP version 13$/m.test(log) && tests > 0 && passed === tests && ['fail', 'cancelled', 'skipped', 'todo'].every(name => metric(name) === 0), complete: true, metrics: { tests, passed } };
-  }
   if (kind === 'simulation') return { ok: /\[ok\] No violation found/.test(log), complete: true };
   return { ok: true, complete: true };
 }

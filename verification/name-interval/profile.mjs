@@ -47,7 +47,7 @@ export function gate(report, { target, release = false, artifactsValid = false, 
     if (rows.length !== 1 || step.status !== 'passed' || step.execution?.code !== 0 || step.execution?.signal != null ||
         step.execution?.timedOut !== false || step.execution?.interrupted !== false || step.execution?.ok !== true) reasons.push(`step:${name}`);
   }
-  if (!(report.implementation?.tests >= 9 && report.implementation?.passed === report.implementation?.tests &&
+  if (!(report.implementation?.tapComplete === true && report.implementation?.tests >= 9 && report.implementation?.passed === report.implementation?.tests &&
       ['failed', 'cancelled', 'skipped', 'todo'].every(key => report.implementation?.[key] === 0))) reasons.push('missing_implementation_tests');
   const d = report.differential;
   if (!d?.complete || !d.ok || d.seed !== profile.seed || d.generatedBaseSamples !== profile.generatedBaseSamples ||
