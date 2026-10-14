@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { fixedTrace } from '../test-support/generation-trace-fixture.mjs';
+import { fixedTrace, runGenerationWitness } from '../test-support/generation-trace-fixture.mjs';
 import { createGenerationProtocolAdapter } from '../test-support/generation-protocol-adapter.mjs';
 import { replayGenerationTrace } from '../scripts/lib/generation-protocol-replay.mjs';
 import { validateGenerationControl, generationHeaderReasons } from '../scripts/lib/generation-protocol-report.mjs';
@@ -85,4 +85,28 @@ test('both exact regression rosters require every TAP body, order and test name'
     for (const bad of ['TAP version 13\n' + footer, good.replace(entry.names[0], 'wrong test'), good.replace(/^ok 1 - .+\n/m, ''), good.replace('ok 2 -', 'ok 1 -'), good.replace(/^ok 2 - .+\n/m, '$&Bail out!\n')])
       assert.equal(generationCommandConclusion(entry, execution, bad).ok, false);
   }
+});
+
+test('witness invocation failures retain real exit signal output and elapsed diagnostics', async t => {
+  await assert.rejects(fixedTrace(t, 'missing_protocol'), error => {
+    const execution = error.witnessExecution;
+    assert.equal(execution.code, 1); assert.equal(execution.signal, null); assert.equal(execution.killed, false);
+    assert.equal(typeof execution.stdout, 'string'); assert.equal(typeof execution.stderr, 'string');
+    assert.ok(execution.durationMs >= 0); assert.equal(execution.timeoutMs, 10000);
+    assert.match(error.message, /Generation witness execution:/);
+    return true;
+  });
+});
+test('a shared witness deadline never resets between calls and records real child termination', async t => {
+  const expired = performance.now() - 1;
+  await assert.rejects(fixedTrace(t, 'knowledge', 1, 1, 'successfulRestartTest', true, { deadlineAt: expired }),
+    error => error.code === 'GENERATION_WITNESS_BUDGET_EXHAUSTED');
+  await assert.rejects(runGenerationWitness(['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 50, signal: t.signal }), error => {
+    const execution = error.witnessExecution;
+    assert.equal(execution.killed, true); assert.equal(execution.signal, 'SIGTERM');
+    assert.equal(execution.timeoutMs, 50); assert.ok(execution.durationMs >= 0);
+    return true;
+  });
+  await assert.rejects(fixedTrace(t, 'knowledge', 1, 1, 'successfulRestartTest', true, { deadlineAt: expired }),
+    error => error.code === 'GENERATION_WITNESS_BUDGET_EXHAUSTED');
 });

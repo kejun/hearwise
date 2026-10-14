@@ -77,12 +77,18 @@ for (const protocol of ['knowledge', 'relation']) test(`${protocol} late-respons
   for (const [index, mutate] of corruptions.entries()) { const changed = structuredClone(actual); mutate(changed); assert.equal(validateGenerationReplayEvidence(trace, changed).ok, false, `late raw mutation ${index}`); }
 });
 
-for (const protocol of ['knowledge', 'relation']) test(`${protocol} restart evidence binds real new process, closed resources and public deletion`, { timeout: 15000 }, async t => {
-  const trace = await fixedTrace(t, protocol, 1, 1, 'deleteRestartLateTest', true);
+for (const protocol of ['knowledge', 'relation']) test(`${protocol} restart evidence binds real new process, closed resources and public deletion`, { timeout: 35000 }, async t => {
+  // Two native witnesses share one 30s pool including both actual replays; the
+  // final 5s belongs to cleanup. Each tool invocation still has its 10s cap.
+  const deadlineAt = performance.now() + 30000;
+  const withinDeadline = () => assert.ok(performance.now() < deadlineAt, 'Restart evidence exceeded its shared deadline');
+  const trace = await fixedTrace(t, protocol, 1, 1, 'deleteRestartLateTest', true, { deadlineAt });
   const actual = await replayGenerationTrace(trace, createGenerationProtocolAdapter);
   assert.equal(actual.ok, true); assert.deepEqual(validateGenerationReplayEvidence(trace, actual), { ok: true, reasons: [] });
-  const retainedTrace = await fixedTrace(t, protocol, 1, 1, 'successfulRestartTest', true);
+  withinDeadline();
+  const retainedTrace = await fixedTrace(t, protocol, 1, 1, 'successfulRestartTest', true, { deadlineAt });
   const retained = await replayGenerationTrace(retainedTrace, createGenerationProtocolAdapter);
+  withinDeadline();
   const serialized = JSON.parse(JSON.stringify(retained));
   assert.equal(retained.ok, true);
   assert.deepEqual(validateGenerationReplayEvidence(retainedTrace, serialized), { ok: true, reasons: [] });
@@ -101,4 +107,5 @@ for (const protocol of ['knowledge', 'relation']) test(`${protocol} restart evid
   const active = structuredClone(actual);
   for (const observation of active.observations) for (const row of observation.durable.raw.ledger.filter(row => row.event === 'local_resources_closed')) row.activeExecutions = 1;
   assert.equal(validateGenerationReplayEvidence(trace, active).ok, false);
+  withinDeadline();
 });
