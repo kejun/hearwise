@@ -5,7 +5,7 @@ import { hashBytes, hashJson, contractDigest, seriousErrorTypes, qualityBudgetCo
 import { scoreAsr, aggregateErrors } from './quality-metrics.mjs';
 import { sourceVersion } from './verification-evidence.mjs';
 import { asrParameters } from './quality-collector.mjs';
-import { validateQualityObservations } from './quality-observations.mjs';
+import { validateQualityObservations, validateAsrResult } from './quality-observations.mjs';
 const same = (a, b) => assert.equal(contractDigest(a), contractDigest(b));
 const readJson = async filename => JSON.parse(await readFile(filename, 'utf8'));
 const validSha = value => /^[a-f0-9]{64}$/.test(value || '');
@@ -99,15 +99,7 @@ export async function readQualityCollection(directory, frozen, role) {
       if (billing.durationBasis === 'provider-hard-session-duration') for (const attempt of attempts)
         assert.ok(Date.parse(attempt.completedAt) - Date.parse(attempt.upstreamStartedAt) <= billing.providerHardSessionMs + billing.billingTailMs);
       assert.equal(trial.result.audioBytes, entry.sample.audio.bytes); assert.equal(success[0].audioBytes, entry.sample.audio.bytes);
-      assert.ok(trial.result.events.some(row => row.event.type === 'finished'));
-      assert.ok(!trial.result.events.some(row => row.event.type === 'error'));
-      const finals = trial.result.events.filter(row => row.event.type === 'segment-final').map(row => row.event.segment);
-      same(finals.map(row => [row.id,row.original_text]), trial.result.segments.map(row => [row.id,row.original_text]));
-      assert.equal(trial.result.output, trial.result.segments.map(row => row.original_text).join(' '));
-      for (const segment of trial.result.segments) {
-        assert.equal(segment.listening_id, trial.result.listeningId); assert.equal(segment.run_id, trial.result.runId);
-        assert.ok(success[0].outputs.some(row => row.sentence_end && String(row.sentence_id) === segment.asr_sentence_id && row.text === segment.original_text));
-      }
+      validateAsrResult(trial.result, success[0]);
     }
     trials.push({ ...trial, sample: entry.sample });
   }

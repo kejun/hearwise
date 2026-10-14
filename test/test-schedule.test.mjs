@@ -37,7 +37,7 @@ test('actual nested profile and compiler files are isolated and parent deadlines
 });
 
 test('name evidence and replay compilers run alone with unchanged file budgets', () => {
-  for (const file of ['name-protocol-evidence', 'name-protocol-replay', 'name-browser-evidence']) {
+  for (const file of ['name-protocol-evidence', 'name-protocol-replay', 'name-browser-evidence', 'release-name-evidence']) {
     const expected = { exclusive: true, timeoutMs: 90000 };
     assert.deepEqual(testExecutionPlan(`test/${file}.test.mjs`), expected);
     assert.deepEqual(testExecutionPlan(fileURLToPath(new URL(`./${file}.test.mjs`, import.meta.url))), expected);

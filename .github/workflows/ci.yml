@@ -432,7 +432,6 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-
   generation-protocol:
     name: Cancellation generations, finite models and actual late callbacks
     runs-on: ubuntu-latest
@@ -524,5 +523,43 @@ jobs:
         with:
           name: m1-evidence-${{ github.sha }}
           path: verification-evidence/m1-report.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  release-evidence:
+    name: Current-source technical evidence gate
+    if: always()
+    needs: [test, relation-protocol, knowledge-protocol, import-protocol, edit-protocol, process-crash, playback-protocol, scheduler, name-protocol, browser, revision]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: '*-evidence-${{ github.sha }}'
+          path: verification-evidence/ci-input
+      - name: Bind reports from all existing required jobs
+        run: npm run verify:release:manifest -- --artifact-root=verification-evidence/ci-input --source=${{ github.sha }} --output=verification-evidence/release-manifest.json
+      - name: Revalidate raw technical evidence and expose remaining acceptance gaps
+        env:
+          VERIFICATION_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        run: npm run verify:release -- --purpose=pr --manifest=verification-evidence/release-manifest.json --base="$VERIFICATION_BASE" --output=verification-evidence/release-summary.json
+      - name: Preserve impact plan and explicit release gaps
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-evidence-${{ github.sha }}
+          path: |
+            verification-evidence/release-manifest.json
+            verification-evidence/release-summary.json
           retention-days: 14
           if-no-files-found: warn
