@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 1,
+  "specificationVersion": "1.0",
+  "domain": "edit-protocol",
+  "itfVariables": [
+    "state",
+    "lastAction",
+    "actor",
+    "argument"
+  ],
+  "scalars": {
+    "revision": "integer >= 0; identity ordinal bound to actual current snapshot hash",
+    "name": "0=Deebo, 1=Tibo, 2=Mira",
+    "override": "boolean: either override field is non-null",
+    "serverOwner": "-1 or client id; preserves synchronous tx-to-notify ordering",
+    "backgroundDone": "boolean: one failed/null linked translation completed"
+  },
+  "clientMaps": [
+    "phase",
+    "loadedRevision",
+    "loadedName",
+    "draft",
+    "submittedRevision",
+    "submittedName",
+    "userSaves",
+    "requests",
+    "txResult",
+    "receipt",
+    "reply",
+    "commitBaseRevision",
+    "commitBaseOverride",
+    "notification"
+  ],
+  "actions": {
+    "read": [
+      ""
+    ],
+    "edit": [
+      "new",
+      "same"
+    ],
+    "send": [
+      ""
+    ],
+    "transaction": [
+      "ok",
+      "rollback"
+    ],
+    "notify": [
+      "ok",
+      "fail"
+    ],
+    "deliver": [
+      ""
+    ],
+    "lose_response": [
+      "lost",
+      "proxy502"
+    ],
+    "lookup": [
+      "ok",
+      "unavailable"
+    ],
+    "refresh_stale": [
+      ""
+    ],
+    "refresh_saved": [
+      ""
+    ],
+    "close": [
+      ""
+    ],
+    "reopen": [
+      ""
+    ],
+    "background_change": [
+      ""
+    ],
+    "automatic_resend": [
+      ""
+    ],
+    "stutter": [
+      ""
+    ]
+  },
+  "states": {
+    "phase": [
+      "closed",
+      "loaded",
+      "draft",
+      "pending",
+      "conflict",
+      "failed",
+      "recovering",
+      "unknown",
+      "saved",
+      "done"
+    ],
+    "txResult": [
+      "none",
+      "committed",
+      "conflict",
+      "rolled_back"
+    ],
+    "receipt": [
+      "none",
+      "succeeded"
+    ],
+    "reply": [
+      "none",
+      "ok",
+      "conflict",
+      "failed",
+      "unknown"
+    ],
+    "notification": [
+      "none",
+      "ok",
+      "fail",
+      "skipped"
+    ]
+  },
+  "recordEnvelope": {
+    "schemaVersion": 1,
+    "specificationVersion": "1.0",
+    "domain": "edit-protocol",
+    "config": {
+      "clients": 2,
+      "codecs": {
+        "0": "v1",
+        "1": "v1"
+      },
+      "initialOverride": false,
+      "background": true
+    },
+    "initial": "projection",
+    "steps": [
+      {
+        "action": "name",
+        "actor": 0,
+        "argument": "",
+        "expected": "projection"
+      }
+    ]
+  },
+  "adapter": {
+    "export": "createEditProtocolAdapter",
+    "module": "test-support/edit-protocol-adapter.mjs",
+    "interface": [
+      "act(step)",
+      "project()",
+      "observe()",
+      "check()",
+      "close()"
+    ],
+    "initial": "All clients closed; linked translation failed/null; no edit receipts. Override fixture has non-null override fields. Actual hashes/UUIDs stay in observe(), not symbolic projection.",
+    "send": "Explicit user action; freeze POST body and codec token; actual transport counter increments exactly once.",
+    "transaction": "Capture actual pre-transaction snapshot and post-transaction checkpoint; mismatch always conflicts, even for rollback fault. Commit with unchanged name and absent override creates receipt, preserves revision, skips notification.",
+    "notification": "Actual synchronous production checkpoint observed from test-only child preload. Failure is best effort and cannot relabel a committed save as unchanged.",
+    "response": "Never deliver a late callback after an aborted fetch; hold a successful HTTP response before delivering it instead.",
+    "recovery": "lookup is GET only; unavailable lookup leaves draft and uncertainty; close/reopen reads actual persisted value.",
+    "background": "setTranslation on initial linked segment, once; no name or receipt changes.",
+    "mutation": "Model-only automatic_resend increments requests without userSaves. A real negative must independently mutate/check actual request or transaction behavior."
+  },
+  "scope": {
+    "savesPerClient": 1,
+    "backgroundChanges": 1,
+    "noOpEdits": true,
+    "lateResponses": "Delay delivery across another completed client operation; no post-abort callback fiction.",
+    "exclusions": [
+      "Unbounded sessions or retries",
+      "Browser persistent draft storage",
+      "Paid provider semantics",
+      "Power loss or process-crash recovery",
+      "Liveness under unavailable network"
+    ],
+    "liveness": "Safety and finite reachable witnesses only. Eventual completion would additionally require fair transaction/response scheduling and successful recovery reads."
+  }
+}
