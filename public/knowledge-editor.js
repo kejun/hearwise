@@ -269,6 +269,15 @@ export function createKnowledgeEditor({ getId, getKey, onSaved }) {
         $('knowledge-edit-name').value = knowledgeName(result.item); $('knowledge-edit-source').value = result.item.canonical_name;
         status.textContent = `关联 ${result.segments.length} 段原文；只替换其中完整匹配的错误词。`;
         if (result.nameCorrectionJob?.state === 'failed') status.textContent += ` 上次名称校对未完成：${result.nameCorrectionJob.error} 可直接填写正确名称并保存。`;
+        // A committed save may have lost both its response and receipt lookup.
+        // Reopening reads the new name; synchronize the surrounding views too.
+        if (item.canonical_name !== result.item.canonical_name) {
+          try { await onSaved(listeningId); }
+          catch {
+            if (gen === generation && listeningId === getId()) status.textContent = '已读取最新名称，但页面刷新失败；请重新打开这条收听。';
+          }
+          if (gen !== generation || listeningId !== getId()) return;
+        }
         setBusy(false); $('knowledge-edit-name').focus(); $('knowledge-edit-name').select();
       } catch (error) {
         if (gen !== generation) return;
