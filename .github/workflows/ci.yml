@@ -152,6 +152,16 @@ jobs:
           echo "$RUNNER_TEMP/hearwise-lean/lean-4.35.0-linux/bin" >> "$GITHUB_PATH"
       - name: Prove, audit axioms, compare JavaScript and check frozen revisions
         run: npm run verify:revision -- --release
+      - name: Prove UTF-16 name intervals and compare public replacements
+        run: npm run verify:name-interval -- --release
+      - name: Preserve name interval proof and SQLite evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: name-interval-evidence-${{ github.sha }}
+          path: name-interval-evidence/
+          retention-days: 14
+          if-no-files-found: warn
       - name: Preserve proof and differential evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

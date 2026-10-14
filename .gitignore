@@ -8,3 +8,4 @@ verification-evidence/
 public/vendor/
 verification/lean/.lake/
 revision-evidence/
+name-interval-evidence/

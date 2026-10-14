@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { importedInvalidAnchors } from '../test-support/name-replacement-import-fixture.mjs';
+import { importedInvalidAnchors, collidingMappedAnchors } from '../test-support/name-replacement-import-fixture.mjs';
 
 test('append and restore cannot revive malformed active anchors during name replacement', t => {
   const directory = mkdtempSync(path.join(tmpdir(), 'name-interval-import-'));
@@ -13,4 +13,11 @@ test('append and restore cannot revive malformed active anchors during name repl
   assert.ok(results.every(row => row.imported && row.status === 409 && row.unchanged && row.reopened && row.receiptAbsent));
   for (const mode of ['append', 'replace']) assert.deepEqual(results.find(row => row.id === `import-${mode}-reversed`).after,
     { start: 3, end: 2, quote: '', state: 'active' });
+});
+
+test('same-group legal anchors that collide after mapping fail atomically at the existing uniqueness constraint', () => {
+  const result = collidingMappedAnchors();
+  assert.equal(result.publicCommitAccepted, true);
+  assert.equal(result.unchanged, true);
+  assert.equal(result.receiptAbsent, true);
 });

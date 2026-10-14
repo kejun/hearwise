@@ -51,3 +51,30 @@ export function importedInvalidAnchors(directory) {
   }
   return observations;
 }
+
+export function collidingMappedAnchors() {
+  const store = new ListeningStore(':memory:');
+  try {
+    const seeded = seedNameReplacement(store);
+    store.enableRelations(seeded.listeningId);
+    const job = store.beginRelationRequest(store.nextRelationJob(seeded.listeningId, { quietMs: 0 }).id);
+    const row = job.input.focus_segments.find(item => item.id === seeded.segment.id);
+    const anchors = [[0, row.text.length, 'relation'], [1, 2, 'subject_reference'], [3, 4, 'subject_reference'],
+      [row.text.indexOf('Camera'), row.text.indexOf('Camera') + 6, 'object_reference']];
+    const committed = store.commitRelationJob(job.id, { relations: [{ subject_item_id: seeded.item.id,
+      object_item_id: seeded.camera.id, predicate: 'released', statement: 'Deebo released Camera.',
+      polarity: 'positive', modality: 'asserted', conditions: null, time_scope: null, attribution: null,
+      correction_of: null, status: 'active', supports: anchors.map(([start, end, role]) => ({
+        segment_id: row.id, source_revision: row.source_revision, start, end, quote: row.text.slice(start, end), role })) }] });
+    assert.equal(committed.accepted, 1, 'normal public relation commit accepts both interior anchors');
+    const initial = snapshot(store), receiptId = randomUUID();
+    assert.throws(() => store.replaceKnowledgeName(seeded.listeningId, seeded.item.id, receiptId,
+      { name: 'Tibo', revision: store.knowledgeEditSnapshot(seeded.listeningId, seeded.item.id).revision }),
+    error => error.code === 'ERR_SQLITE_ERROR' && /UNIQUE/.test(error.message));
+    assert.deepEqual(snapshot(store), initial, 'constraint failure rolls back all business rows and attempted receipt');
+    return { publicCommitAccepted: true, code: 'ERR_SQLITE_ERROR', constraint: 'UNIQUE', unchanged: true,
+      receiptAbsent: !store.db.prepare('SELECT 1 FROM knowledge_edit_jobs WHERE id=?').get(receiptId),
+      oldAnchors: [{ start: 1, end: 2, quote: 'e' }, { start: 3, end: 4, quote: 'b' }],
+      mappedCollision: { start: 0, end: 4, quote: 'Tibo' } };
+  } finally { store.close(); }
+}
