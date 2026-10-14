@@ -39,7 +39,9 @@
     "verify:knowledge-protocol:report": "node scripts/verify-knowledge-protocol-report.mjs",
     "preverify:import-protocol": "npm run build",
     "verify:import-protocol": "node scripts/verify-import-protocol.mjs",
-    "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs"
+    "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs",
+    "preverify:security": "npm run build",
+    "verify:security": "node scripts/verify-security-browser.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
