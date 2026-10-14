@@ -1054,6 +1054,8 @@ wss.on('connection', client => {
     };
     openUpstream(captionMode === 'realtime');
   });
+  // ws closes protocol-invalid frames itself; handle its error event without crashing the service.
+  client.on('error', () => { upstream?.close(); });
   client.on('close', () => {
     recognitionTrace?.cancel('consumer_closed');
     unsubscribe(listeningId, client);
