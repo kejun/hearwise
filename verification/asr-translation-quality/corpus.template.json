@@ -1,0 +1,854 @@
+{
+  "schemaVersion": 1,
+  "id": "hearwise-asr-mt-draft-v1",
+  "version": 1,
+  "status": "draft_requires_human_review_and_audio",
+  "coverage": [
+    "daily",
+    "technical",
+    "numbers-time-money",
+    "negation-condition",
+    "proper-names",
+    "long-sentences",
+    "accent-noise",
+    "multilingual",
+    "silence-empty",
+    "ambiguity"
+  ],
+  "samples": [
+    {
+      "id": "daily-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "daily"
+      ],
+      "difficulty": "normal",
+      "text": "Please close the window.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:daily:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "Please close the window."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "daily-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "daily"
+      ],
+      "difficulty": "difficult",
+      "text": "Please close the window after the visitor leaves, unless the room is still too warm.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:daily:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "Please close the window after the visitor leaves, unless the room is still too warm."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "technical-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "technical"
+      ],
+      "difficulty": "normal",
+      "text": "The server keeps a local backup.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:technical:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "The server keeps a local backup."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "technical-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "technical"
+      ],
+      "difficulty": "difficult",
+      "text": "The retry budget is retained after a restart; a completed remote request is not automatically sent again.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:technical:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "The retry budget is retained after a restart; a completed remote request is not automatically sent again."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "numbers-time-money-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "numbers-time-money"
+      ],
+      "difficulty": "normal",
+      "text": "The meeting starts at 09:30.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:numbers-time-money:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "The meeting starts at 09:30."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "numbers-time-money-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "numbers-time-money"
+      ],
+      "difficulty": "difficult",
+      "text": "The total is 15.50 dollars, not 150 dollars; payment is due on March 4 at 09:30.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:numbers-time-money:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "The total is 15.50 dollars, not 150 dollars; payment is due on March 4 at 09:30."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "negation-condition-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "negation-condition"
+      ],
+      "difficulty": "normal",
+      "text": "Do not send the file.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:negation-condition:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "Do not send the file."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "negation-condition-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "negation-condition"
+      ],
+      "difficulty": "difficult",
+      "text": "Only send the file if Mira approves; do not treat the absence of a reply as approval.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:negation-condition:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "Only send the file if Mira approves; do not treat the absence of a reply as approval."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "proper-names-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "proper-names"
+      ],
+      "difficulty": "normal",
+      "text": "Mira introduced the Atlas project.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:proper-names:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "Mira introduced the Atlas project."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "proper-names-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "proper-names"
+      ],
+      "difficulty": "difficult",
+      "text": "Mira Chen said the Atlas project belongs to North Harbor, while Nova belongs to River Labs.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:proper-names:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "Mira Chen said the Atlas project belongs to North Harbor, while Nova belongs to River Labs."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "long-sentences-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "long-sentences"
+      ],
+      "difficulty": "normal",
+      "text": "The team finished the review and saved the notes.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:long-sentences:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "The team finished the review and saved the notes."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "long-sentences-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "long-sentences"
+      ],
+      "difficulty": "difficult",
+      "text": "Although the team had already reviewed the initial draft, the revised version still required a second approval because its payment schedule had changed.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:long-sentences:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "Although the team had already reviewed the initial draft, the revised version still required a second approval because its payment schedule had changed."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "accent-noise-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "accent-noise"
+      ],
+      "difficulty": "normal",
+      "text": "The train leaves from platform six.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:accent-noise:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "The train leaves from platform six."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "accent-noise-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "accent-noise"
+      ],
+      "difficulty": "difficult",
+      "text": "I said platform six, not sixteen; please wait until the announcement has finished.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:accent-noise:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "I said platform six, not sixteen; please wait until the announcement has finished."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "multilingual-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "ja",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "multilingual"
+      ],
+      "difficulty": "normal",
+      "text": "明日は午前九時に会います。",
+      "silence": false,
+      "asrMetric": "cer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:multilingual:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "明日は午前九時に会います。"
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "multilingual-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "ko",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "multilingual"
+      ],
+      "difficulty": "difficult",
+      "text": "내일 오전 아홉 시에 만나지만, 비가 오면 일정을 바꿉니다.",
+      "silence": false,
+      "asrMetric": "cer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:multilingual:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "내일 오전 아홉 시에 만나지만, 비가 오면 일정을 바꿉니다."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "silence-empty-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr"
+      ],
+      "categories": [
+        "silence-empty"
+      ],
+      "difficulty": "normal",
+      "text": "",
+      "silence": true,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:silence-empty:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          ""
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "silence-empty-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr"
+      ],
+      "categories": [
+        "silence-empty"
+      ],
+      "difficulty": "difficult",
+      "text": "",
+      "silence": true,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:silence-empty:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          ""
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "ambiguity-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "ambiguity"
+      ],
+      "difficulty": "normal",
+      "text": "I saw her duck.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:ambiguity:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "I saw her duck."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "ambiguity-difficult",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "ambiguity"
+      ],
+      "difficulty": "difficult",
+      "text": "The manager told the engineer that they should revise the report after their meeting.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:ambiguity:difficult",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "The manager told the engineer that they should revise the report after their meeting."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "zh-normal",
+      "split": "acceptance",
+      "kind": "draft-script-only",
+      "language": "zh",
+      "target": "English",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "daily"
+      ],
+      "difficulty": "normal",
+      "text": "请在星期五之前确认金额。",
+      "silence": false,
+      "asrMetric": "cer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:daily:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "请在星期五之前确认金额。"
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    },
+    {
+      "id": "development-only",
+      "split": "development",
+      "kind": "draft-script-only",
+      "language": "en",
+      "target": "Chinese",
+      "tasks": [
+        "asr",
+        "mt"
+      ],
+      "categories": [
+        "daily"
+      ],
+      "difficulty": "normal",
+      "text": "This development example must never enter the acceptance set.",
+      "silence": false,
+      "asrMetric": "wer",
+      "audio": null,
+      "provenance": {
+        "source": "Original evaluation-script proposal; no recording supplied",
+        "sourceItemId": "proposal:daily:normal",
+        "license": "MIT (authored script only)",
+        "licenseUrl": "https://github.com/kejun/hearwise/blob/main/LICENSE",
+        "attribution": "Hearwise evaluation-script contributors",
+        "selectionRule": "Draft coverage slot, not a selected real corpus item",
+        "redistributionApproved": null
+      },
+      "gold": {
+        "approved": false,
+        "reviewer": null,
+        "reviewedAt": null,
+        "transcripts": [
+          "This development example must never enter the acceptance set."
+        ],
+        "translations": [],
+        "criticalFacts": []
+      }
+    }
+  ]
+}
