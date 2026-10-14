@@ -105,3 +105,19 @@ test('historical manifest binds every exact version and both immutable fixture p
   }
   assert.throws(() => readHistoricalFixtures(manifest, () => Buffer.from('{}\n')));
 });
+
+import { finalizedUpgradeSummary } from '../scripts/lib/upgrade-report.mjs';
+test('upgrade public reader rejects provisional or inconsistent completion and retains genuine failed classification', () => {
+  const passed = { ok: true, complete: true, rows: [{ id: 'HW-14-02', status: 'passed', reasons: [] }],
+    support: [{ environment: 'linux/x64', status: 'passed' }, { environment: 'other', status: 'not_run' }], fullProjectAcceptance: false };
+  const final = { finalized: true, complete: true, ok: true, summary: structuredClone(passed) };
+  assert.deepEqual(finalizedUpgradeSummary(final, passed), passed);
+  for (const mutate of [r => { delete r.finalized; }, r => { r.finalized = false; }, r => { r.complete = false; },
+    r => { r.ok = false; }, r => { delete r.summary; }, r => { r.summary.rows[0].status = 'failed'; }]) {
+    const changed = structuredClone(final); mutate(changed); const result = finalizedUpgradeSummary(changed, passed);
+    assert.equal(result.ok, false); assert.equal(result.complete, false); assert.equal(result.rows[0].status, 'incomplete');
+    assert.equal(result.support[0].status, 'incomplete'); assert.equal(result.support[1].status, 'not_run');
+  }
+  const failed = { ...passed, ok: false, rows: [{ id: 'HW-14-02', status: 'failed', reasons: ['actual assertion failed'] }] };
+  assert.deepEqual(finalizedUpgradeSummary({ finalized: true, complete: true, ok: false, summary: failed }, failed), failed);
+});

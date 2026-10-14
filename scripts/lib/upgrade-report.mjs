@@ -2,13 +2,14 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { isDeepStrictEqual } from 'node:util';
 import { atomicitySource, stableAtomicitySources } from '../../test-support/import-atomicity-evidence.mjs';
 import { upgradeVersion, validateUpgradeObservations, validateInstall, upgradeControls, hash, passedExecution } from '../../test-support/upgrade-evidence.mjs';
 export function upgradeChecks(directory) {
   return [{ name: 'data', command: ['test-support/upgrade-worker.mjs', path.resolve(directory, 'observations.json')], timeoutMs: 60000 },
     { name: 'install', command: ['test-support/upgrade-install.mjs', path.resolve(directory, 'install.json')], timeoutMs: 240000 }];
 }
-export async function readUpgradeReport(directory, { release = false } = {}) {
+async function inspectUpgradeReport(directory, { release = false } = {}) {
   const reasons = [], evidence = { data: { reasons: [], artifactReasons: [] }, install: { reasons: [], artifactReasons: [] } };
   const report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8'));
   const current = await atomicitySource(), cwd = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 5000 }).trim();
@@ -57,11 +58,28 @@ export async function readUpgradeReport(directory, { release = false } = {}) {
     { id: 'HW-14-03', scope: 'migration SIGKILL/constraint/readonly and actual HTTP backup recovery', reasons: [...reasons, ...evidence.data.artifactReasons, ...evidence.data.reasons] },
     { id: 'HW-14-04', scope: 'isolated clean install/build/npm start/reinstall/version and missing-key diagnosis', reasons: [...reasons, ...evidence.install.artifactReasons, ...evidence.install.reasons] }
   ].map((row, index) => ({ ...row, status: upgradeCheckStatus(evidence[index === 2 ? 'install' : 'data'], reasons) }));
-  return { ok: rows.every(row => row.status === 'passed'), complete: rows.every(row => ['passed', 'failed'].includes(row.status)), rows,
+  const summary = { ok: rows.every(row => row.status === 'passed'), complete: rows.every(row => ['passed', 'failed'].includes(row.status)), rows,
     support: [{ environment: `${report.environment?.platform}/${report.environment?.arch}/${report.environment?.node}`, status: rows[2].status },
       { environment: 'macOS Intel/ARM, Windows, Linux ARM, other Node versions', status: 'not_run', reason: 'Not executed by this Linux x64 Node 24 profile.' },
       { environment: 'microphone, speaker, browser audio, mobile/background playback', status: 'not_run', reason: 'Install/build/HTTP success is not audio-device acceptance.' },
       { environment: 'disk-full, kernel crash, real power loss', status: 'not_run', reason: 'SIGKILL and SQLite READONLY are distinct fault classes.' }], fullProjectAcceptance: false };
+  return { report, summary };
+}
+
+// Only the runner uses provisional evaluation before its final atomic write.
+// Public evidence readers always require finalization and recompute the summary.
+export async function evaluateUpgradeReport(directory, options) {
+  return (await inspectUpgradeReport(directory, options)).summary;
+}
+export async function readUpgradeReport(directory, options) {
+  const { report, summary } = await inspectUpgradeReport(directory, options);
+  return finalizedUpgradeSummary(report, summary);
+}
+export function finalizedUpgradeSummary(report, summary) {
+  if (report.finalized === true && report.complete === summary.complete && report.ok === summary.ok && isDeepStrictEqual(report.summary, summary)) return summary;
+  return { ...summary, ok: false, complete: false,
+    rows: summary.rows.map(row => ({ ...row, status: 'incomplete', reasons: [...row.reasons, 'unfinalized_or_mismatched_report'] })),
+    support: summary.support.map((row, index) => index === 0 ? { ...row, status: 'incomplete' } : row) };
 }
 
 export function upgradeCheckStatus({ execution, raw, reasons = [], artifactReasons = [] }, globalReasons = []) {

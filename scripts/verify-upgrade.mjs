@@ -6,12 +6,12 @@ import { writeJson } from './lib/verification-evidence.mjs';
 import { atomicitySource } from '../test-support/import-atomicity-evidence.mjs';
 import { hash, upgradeVersion, upgradeControls } from '../test-support/upgrade-evidence.mjs';
 import { collectAtomicityControls } from './lib/import-atomicity-controls.mjs';
-import { upgradeChecks, readUpgradeReport } from './lib/upgrade-report.mjs';
+import { upgradeChecks, evaluateUpgradeReport } from './lib/upgrade-report.mjs';
 const args = process.argv.slice(2); if (args.some(value => value !== '--release')) throw new Error('Usage: verify:upgrade [--release]');
 const root = process.env.UPGRADE_EVIDENCE_DIR || 'verification-evidence/upgrade'; await mkdir(root, { recursive: true });
 const directory = path.resolve(await mkdtemp(path.join(root, 'run-'))), temporary = await mkdtemp(path.join(os.tmpdir(), 'hearwise-upgrade-profile-'));
 const report = { profile: 'install-upgrade', budgetMs: 300000, version: upgradeVersion, sourceStart: await atomicitySource(), sourceEnd: null,
-  cwd: process.cwd(), directory, startedAt: new Date().toISOString(), finishedAt: null, complete: false, ok: false, checks: [], artifacts: [], cleanupOk: false,
+  cwd: process.cwd(), directory, startedAt: new Date().toISOString(), finishedAt: null, complete: false, ok: false, finalized: false, checks: [], artifacts: [], cleanupOk: false,
   environment: { node: process.version, npm: null, sqlite: process.versions.sqlite, platform: process.platform, arch: process.arch, release: os.release() } };
 const output = path.join(directory, 'report.json'); await writeJson(output, report); console.log(`Install/upgrade evidence: ${directory}`);
 const env = { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary }; delete env.NODE_TEST_CONTEXT;
@@ -35,5 +35,5 @@ for (const name of ['data.log', 'install.log', 'observations.json', 'install.jso
   try { report.artifacts.push({ path: name, sha256: hash(await readFile(path.join(directory, name))) }); } catch { /* missing evidence fails closed */ }
 }
 await writeJson(output, report);
-const summary = await readUpgradeReport(directory, { release: args.includes('--release') }); Object.assign(report, { complete: summary.complete, ok: summary.ok, summary });
+const summary = await evaluateUpgradeReport(directory, { release: args.includes('--release') }); Object.assign(report, { complete: summary.complete, ok: summary.ok, summary, finalized: true });
 await writeJson(output, report); console.log(JSON.stringify({ directory, ...summary }, null, 2)); process.exitCode = summary.ok ? 0 : 1;

@@ -132,7 +132,7 @@ source, complete artifacts and matching current runtime. It is an original-path
 local reader: cwd must be the actual Git root and the report directory must match
 the real directory being read. Moved CI artifacts remain inspectable but do not
 claim to pass that original-path local check. Missing, stale, interrupted or
-incomplete evidence cannot pass. Fully observed assertion failures are failed;
+incomplete evidence cannot pass. The runner evaluates provisional observations, then atomically writes a finalized report; the public reader rejects a missing final marker or completion/summary fields that differ from its raw recomputation. Fully observed assertion failures are failed;
 missing observations/timeouts are incomplete. Installation and migration outcomes
 remain separate.
 
