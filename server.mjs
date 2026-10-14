@@ -948,7 +948,11 @@ wss.on('connection', client => {
       if (started && !stopping && upstream?.readyState === WebSocket.OPEN) { receivedSamples += data.length / 2; upstream.send(data, { binary: true }); }
       return;
     }
-    let message; try { message = JSON.parse(data.toString()); } catch { fail('消息格式无效'); return; }
+    let message;
+    try {
+      message = JSON.parse(data.toString());
+      if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error('Invalid message shape');
+    } catch { fail('消息格式无效'); return; }
     if (message.type === 'stop') {
       stopping = true;
       if (started && upstream?.readyState === WebSocket.OPEN) upstream.send(JSON.stringify({
