@@ -17,7 +17,8 @@ try {
   page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.url().startsWith(`${fixture.base}/api/`)) record({ event: 'request', method: request.method(), url: request.url(),
-    editId: request.headers()['idempotency-key'] || null }); });
+    editId: request.headers()['idempotency-key'] || null,
+    ...(request.method() === 'POST' && request.url().endsWith('/name-replacements') ? { body: request.postDataJSON() } : {}) }); });
   page.on('response', response => { if (response.url().startsWith(`${fixture.base}/api/`)) record({ event: 'response', method: response.request().method(), url: response.url(), status: response.status() }); });
   page.on('requestfailed', request => { if (request.url().startsWith(`${fixture.base}/api/`)) record({ event: 'requestfailed', method: request.method(), url: request.url(), error: request.failure()?.errorText || null }); });
   // Deliberately no API Key, including for a graph that already has a relation.
@@ -115,7 +116,7 @@ try {
     'lost response recovers receipt without another write', 'desktop/390/320 layout', 'reload persistence', 'delete confirmation', 'no page errors'] }));
 } catch (failure) {
   // Failure-only observation: never retries a write or changes the success path.
-  const diagnostics = { failure: { name: failure.name, message: failure.message }, network, editor: null, receipts: [], serverLog: fixture.logs(), providerRequests: fixture.stats.providerRequests };
+  const diagnostics = { failure: { name: failure.name, message: failure.message }, network, editor: null, receipts: [], itemSnapshots: [], serverLog: fixture.logs(), providerRequests: fixture.stats.providerRequests };
   try {
     diagnostics.editor = await deadline(() => page.evaluate(() => ({ url: location.href,
       open: document.querySelector('#knowledge-editor')?.open, busy: document.querySelector('#knowledge-editor')?.getAttribute('aria-busy'),
@@ -127,6 +128,12 @@ try {
         const response = await page.request.get(url, { timeout: 3000 });
         diagnostics.receipts.push({ url, status: response.status(), body: await response.text() });
       } catch (error) { diagnostics.receipts.push({ url, error: error.message }); }
+    }
+    for (const url of [...new Set(requests.map(request => request.url.replace(/\/name-replacements$/, '')))]) {
+      try {
+        const response = await page.request.get(url, { timeout: 3000 });
+        diagnostics.itemSnapshots.push({ url, status: response.status(), body: await response.text() });
+      } catch (error) { diagnostics.itemSnapshots.push({ url, error: error.message }); }
     }
     if (process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR) {
       await mkdir(process.env.KNOWLEDGE_EDIT_EVIDENCE_DIR, { recursive: true });
