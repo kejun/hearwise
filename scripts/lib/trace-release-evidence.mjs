@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { metadata, sourceVersion, checkArtifacts, summarize } from './verification-evidence.mjs';
-import { parseTapFooter, tapSummary } from './tap-summary.mjs';
+import { tapSummary } from './tap-summary.mjs';
+import { validateFlatTap } from './release-tap-evidence.mjs';
 import { traceSourceSnapshot, sameTraceSources, validateTraceBusinessObservations, validTraceBrowser, checkTraceArtifacts,
   traceBrowserArtifacts, traceBrowserReportNames, traceBrowserDocuments, tracePropertyState, traceRegressionFiles, traceRegressionCount, traceEvidenceScope } from '../../test-support/trace-business-evidence.mjs';
 import { traceBusinessProperties, traceBusinessProfile } from '../../verification/trace-business-properties.mjs';
@@ -51,10 +52,9 @@ export async function validateTraceReleaseEvidence(directory, { release = true }
         [`test-support/trace-business-${check.name === 'workflows' ? 'worker' : 'browser'}.mjs`, origin];
       assert.deepEqual(check.command.slice(1), command); assert.equal(check.configuredTimeoutMs, [40000, 45000, 60000][index]);
       if (check.name === 'regressions') {
-        assert.deepEqual(check.files, traceRegressionFiles); const tap = tapSummary(log), footer = parseTapFooter(log);
+        assert.deepEqual(check.files, traceRegressionFiles); const tap = tapSummary(log);
         assert.equal(tap.ok, true); assert.equal(tap.testCount, traceRegressionCount); assert.equal(check.execution.testCount, tap.testCount); assert.equal(check.execution.testComplete, true);
-        const names = await traceRegressionNames();
-        assert.deepEqual([...log.matchAll(/^ok \d+ - (.+)$/gm)].map(match => match[1]), names); assert.equal(footer.plan, names.length);
+        assert.equal(validateFlatTap(log, await traceRegressionNames()), true);
       }
     }
     assert.equal(await readFile(path.join(directory, 'worker.log'), 'utf8'), logs.join('\n'));

@@ -26,6 +26,7 @@ test('Trace release reader independently reconstructs real business observations
     ['false export', async value => { await json(path.join(directory, 'trace-safe-export.json'), { current: { eventCount: baseline.business.boundaries.find(row => row.name === 'full-public-boundary').report.eventCount } }); }],
     ['different rendered HTML', async value => { await writeFile(path.join(directory, 'trace-full.html'), 'wrong renderer'); }],
     ['wrong same-count regressions', async value => { const log = (await readFile(path.join(directory, 'regressions.log'), 'utf8')).replace(/^ok 1 - .*/m, 'ok 1 - unrelated test'); await writeFile(path.join(directory, 'regressions.log'), log); value.checks[1].execution.tail = log.slice(-12000); }],
+    ...['not ok 99 - injected failed test', '    not ok 1 - injected failed child'].map(line => [line, async value => { const log = (await readFile(path.join(directory, 'regressions.log'), 'utf8')).replace('TAP version 13\n', `TAP version 13\n${line}\n`); await writeFile(path.join(directory, 'regressions.log'), log); value.checks[1].execution.tail = log.slice(-12000); }]),
     ['child timeout', async value => { value.checks[2].execution.timedOut = true; }],
     ['source changed dirty to dirty', async value => { value.sourceEnd.digests['server.mjs'] = '0'.repeat(64); }]
   ]) {
@@ -55,6 +56,20 @@ test('offline quality infrastructure validates real loopback artifacts but can n
   for (const patch of [{ qualityStatus: 'passed' }, { qualityEvaluated: true }, { liveCalls: 1 }, { fullQualityAcceptance: true }]) {
     await json(path.join(directory, 'offline-summary.json'), { ...summary, ...patch });
     assert.equal((await validateQualityInfrastructureEvidence(directory, { release: false })).ok, false);
+  }
+  await json(path.join(directory, 'offline-summary.json'), summary);
+  for (const [name, mutate] of [
+    ['unrelated MT request', ledger => { ledger.find(row => row.kind === 'mt').body = { model: 'unrelated', messages: [{ role: 'user', content: 'unrelated' }] }; }],
+    ['missing ASR body', ledger => { ledger.find(row => row.kind === 'asr').body = {}; }],
+    ['duplicate ASR identity', ledger => { const rows = ledger.filter(row => row.kind === 'asr'); rows[1].body.header.task_id = rows[0].body.header.task_id; }],
+    ['wrong ASR parameter', ledger => { ledger.find(row => row.kind === 'asr').body.payload.parameters.sample_rate = 8000; }],
+    ['reordered provider requests', ledger => { [ledger[1], ledger[2]] = [ledger[2], ledger[1]]; }]
+  ]) {
+    const changed = structuredClone(collection.actualStubRequests); mutate(changed);
+    await json(path.join(directory, 'provider-ledger.json'), changed);
+    // Recompute all recorded hashes: rejection must come from raw request validation.
+    await json(path.join(directory, 'offline-summary.json'), await inspectOfflineQualityEvidence(directory, await qualitySources()));
+    assert.equal((await validateQualityInfrastructureEvidence(directory, { release: false })).ok, false, name);
   }
   await json(path.join(directory, 'offline-summary.json'), summary);
   const ledger = structuredClone(collection.actualStubRequests); ledger.find(row => row.kind === 'audio').bytes = 1;
