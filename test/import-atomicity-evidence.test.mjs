@@ -64,23 +64,28 @@ test('atomicity execution rejects timeouts signals interruption and missing fini
   assert.equal(atomicityCleanupError(undefined, cleanup), cleanup);
   const { atomicityScenario } = await import('../test-support/import-atomicity-scenarios.mjs');
   const { importAtomicityFixture } = await import('../test-support/import-atomicity-fixture.mjs');
-  let fixture, closed = false; const observation = {};
-  try {
-    await assert.rejects(atomicityScenario({ mode: 'append', kind: 'crash', boundary: 'after-commit' }, observation, async () => {
-      fixture = await importAtomicityFixture();
-      return { ...fixture,
-        upload: async mode => { await fixture.upload(mode); throw primary; },
-        close: async () => { await fixture.close(); closed = true; throw cleanup; } };
-    }), error => {
-      assert.ok(error instanceof AggregateError); assert.equal(error.cause, primary);
-      assert.equal(error.errors[0], primary); assert.equal(error.errors[1], cleanup); return true;
-    });
-    assert.equal(closed, true);
-    assert.deepEqual(observation.error, { name: primary.name, message: primary.message });
-    assert.deepEqual(observation.cleanup, { ok: false, message: cleanup.message });
-    assert.equal(observation.ok, false); assert.equal(observation.complete, false);
-    await assert.rejects(access(fixture.directory), { code: 'ENOENT' });
-  } finally { if (fixture && !closed) await fixture.close(); }
+  for (const failureAt of ['close', 'runtimes', 'multiple-diagnostics']) {
+    let fixture, closed = false; const observation = {}, secondary = new Error(`fixture ${failureAt} failed`), third = new Error('fixture logs failed');
+    try {
+      await assert.rejects(atomicityScenario({ mode: 'append', kind: 'crash', boundary: 'after-commit' }, observation, async () => {
+        fixture = await importAtomicityFixture();
+        return { ...fixture,
+          upload: async mode => { await fixture.upload(mode); throw primary; },
+          runtimes: async () => { if (failureAt !== 'close') throw secondary; return fixture.runtimes(); },
+          logs: () => { if (failureAt === 'multiple-diagnostics') throw third; return fixture.logs(); },
+          close: async () => { await fixture.close(); closed = true; if (failureAt === 'close') throw secondary; } };
+      }), error => {
+        assert.ok(error instanceof AggregateError); assert.equal(error.cause, primary);
+        assert.deepEqual(error.errors, failureAt === 'multiple-diagnostics' ? [primary, secondary, third] : [primary, secondary]);
+        assert.equal(error.errors[0].stack, primary.stack); assert.equal(error.errors[1].stack, secondary.stack); return true;
+      });
+      assert.equal(closed, true, `${failureAt}: close is always attempted`);
+      assert.deepEqual(observation.error, { name: primary.name, message: primary.message });
+      assert.equal(observation.cleanup.ok, false); assert.match(observation.cleanup.message, new RegExp(secondary.message));
+      assert.equal(observation.ok, false); assert.equal(observation.complete, false);
+      await assert.rejects(access(fixture.directory), { code: 'ENOENT' });
+    } finally { if (fixture && !closed) await fixture.close(); }
+  }
 
 
 });
