@@ -102,3 +102,31 @@ test('actual retry admission is bound to prior calls and pre-admission SQLite ch
     ['cooldown observation forged', r => { for (const observation of r.observations) observation.durable.deadlines.provider = [0, 1]; }]
   ]) await t.test(name, () => { const changed = structuredClone(result); alter(changed); assert.equal(validateSchedulerReplayEvidence(retry, changed, { serverSource }).ok, false); });
 });
+
+test('undispatched nonnumeric queue order is independently reconstructed from actual admissions', async t => {
+  const trace = { ...structuredClone(translation), config: { kind: 'translation', background: [0, 1, 2, 3] }, steps: [] };
+  for (const actor of [2, 0, 1]) add(trace, 'enqueue', actor, '', state => { state.queue.push(actor); state.phase[actor] = 'queued'; });
+  const result = await replaySchedulerTrace(trace, createSchedulerProtocolAdapter);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.observations.at(-1).durable.ledger, []);
+  assert.deepEqual(result.observations.at(-1).actual.queue, [2, 0, 1]);
+  assert.deepEqual(validateSchedulerReplayEvidence(trace, result, { serverSource }), { ok: true, reasons: [] });
+  await t.test('raw order alone cannot change', () => {
+    const changed = structuredClone(result);
+    changed.observations.at(-1).durable.queue.reverse();
+    assert.equal(validateSchedulerReplayEvidence(trace, changed, { serverSource }).ok, false);
+  });
+  await t.test('raw order and ID observation cannot change together', () => {
+    const changed = structuredClone(result), last = changed.observations.at(-1);
+    last.durable.queue.reverse(); last.durable.queueIds.reverse(); last.actual.queue.reverse();
+    assert.equal(validateSchedulerReplayEvidence(trace, changed, { serverSource }).ok, false);
+  });
+  await t.test('consistent sorted raw and model projections still contradict actual enqueue history', () => {
+    const changed = structuredClone(result), changedTrace = structuredClone(trace), last = changed.observations.at(-1);
+    last.durable.queue = [0, 1, 2]; last.durable.queueIds = ['segment-0', 'segment-1', 'segment-2'];
+    last.actual.queue = [0, 1, 2]; changedTrace.steps.at(-1).expected.queue = [0, 1, 2];
+    const validation = validateSchedulerReplayEvidence(changedTrace, changed, { serverSource });
+    assert.equal(validation.ok, false);
+    assert.ok(validation.reasons.includes('queue_order_not_reconstructed'));
+  });
+});

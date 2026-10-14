@@ -17,11 +17,11 @@ export const loadSchedulerConfig = async () => JSON.parse(await readFile(path.jo
 // Freeze the expected roster and complete test count. Changing a regression suite
 // requires updating its declared count after running that file independently.
 export const schedulerRegressionCounts = Object.freeze({
-  'test/scheduler-service.test.mjs': 16,
+  'test/scheduler-service.test.mjs': 17,
   'test/scheduler-knowledge.test.mjs': 10,
   'test/scheduler-boundaries.test.mjs': 5,
-  'test/scheduler-trace.test.mjs': 18,
-  'test/scheduler-replay-evidence.test.mjs': 40,
+  'test/scheduler-trace.test.mjs': 19,
+  'test/scheduler-replay-evidence.test.mjs': 44,
   'test/scheduler-model-checker.test.mjs': 38,
   'test/scheduler-protocol-evidence.test.mjs': 42
 });

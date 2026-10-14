@@ -94,10 +94,10 @@ Quint 的 TLC 包装传入 `-deadlock`，因此不宣称完成独立的全局 de
 
 所有模型变量平铺导出 ITF。转换拒绝重复规范化变量名、未知结构与越域 token。两个真实投影为：
 
-- 翻译：queue membership、running、phase、interim、当前宏步 recentStarts
+- 翻译：有序 queue、running、phase、interim、当前宏步 recentStarts
 - 知识：phase、durable、running、lastServed、recentStarts、translationWaiting、translationRunning、interim、closed、listenings、keyAvailable
 
-队列投影排序后只核 membership。FIFO、最新窗口、锁定窗口与 speech head 的实际选取由真实 HTTP `recentStarts` 顺序核对，不根据模型顺序伪造实现内部队列。
+队列投影保留 ITF list 顺序。生产调度器的只读 `queuedIds` 返回实际等待队列的 segment ID 新数组，适配器将每项映射到唯一等待 token，不按 token 大小排序，也不暴露可修改的任务引用。独立 raw gate 按初始队列、成功入队、取消和真实 HTTP 启动重建剩余顺序；即使轨迹在下一次派发前结束，顺序差异也会拒绝。FIFO、最新窗口、锁定窗口与 speech head 的实际选取还由真实 HTTP `recentStarts` 顺序核对。
 
 翻译桥对原 `server.mjs` 仅精确追加测试 export，并记录原始/加载源码哈希，不改生产函数体。平台 `Date.now` 与 `AbortSignal.timeout` 在隔离 worker 中受控；timeout 保留生产 15000 参数，并实际发出 abort，不实等十五秒。queue-only 到 service pump 的分步是明确的测试控制门点；额外真实 HTTP 测试验证入口自动 pump 的连接。
 

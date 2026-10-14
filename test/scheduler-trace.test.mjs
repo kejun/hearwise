@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeSchedulerITF, validateSchedulerTrace } from '../scripts/lib/scheduler-protocol-replay.mjs';
+import { decodeSchedulerITF, normalizeSchedulerTrace, validateSchedulerTrace } from '../scripts/lib/scheduler-protocol-replay.mjs';
 
 const state = { phase: { 0: 'pending', 1: 'pending', 2: 'pending' }, durable: { 0: 'pending', 1: 'pending', 2: 'pending' },
   running: [], lastServed: -1, recentStarts: [], translationWaiting: 0, translationRunning: 0, interim: 0,
@@ -33,3 +33,14 @@ for (const [label, patch] of [
   ['duplicate running actor', t => { t.initial.running = [0, 0]; }],
   ['missing durable actor', t => { delete t.initial.durable[1]; }]
 ]) test(`scheduler trace rejects ${label}`, () => { const t = trace(); assert.equal(validateSchedulerTrace(t), true); patch(t); assert.equal(validateSchedulerTrace(t), false); });
+
+test('normalization preserves a nonnumeric queue list even when the trace ends before dispatch', () => {
+  const initial = { queue: [], running: { '#set': [] }, phase: { '#map': [[0, 'fresh'], [1, 'fresh'], [2, 'fresh']] },
+    interim: 0, recentStarts: [], lastAction: 'init', actor: -1, argument: '' };
+  const first = { ...structuredClone(initial), queue: [2], phase: { '#map': [[0, 'fresh'], [1, 'fresh'], [2, 'queued']] }, lastAction: 'enqueue', actor: 2 };
+  const second = { ...structuredClone(first), queue: [2, 0], phase: { '#map': [[0, 'queued'], [1, 'fresh'], [2, 'queued']] }, actor: 0 };
+  const itf = { vars: Object.keys(initial), states: [initial, first, second] };
+  const normalized = normalizeSchedulerTrace(itf, { kind: 'translation', identities: [0, 1, 2], background: [0, 1, 2] });
+  assert.deepEqual(normalized.steps.at(-1).expected.queue, [2, 0]);
+  assert.deepEqual(itf.states.at(-1).queue, [2, 0]);
+});

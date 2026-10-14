@@ -27,15 +27,18 @@ function serviceState(raw, config, serverSource, mutation, reasons) {
   if (!equal(completed(raw.completions), completed(raw.ledger.filter(entry => entry.ended)))) reasons.push('completion_callback_ledger_mismatch');
   if (new Set(finals.map(entry => entry.actor)).size !== finals.length || raw.service.final !== finals.length || raw.service.active !== finals.length || raw.service.interim !== interim.length) reasons.push('provider_service_count_mismatch');
   if (mutation === 'none' && (finals.length + interim.length > 2 || interim.length > 1)) reasons.push('shared_admission_violation');
-  const queue = tokens.filter(actor => raw.phase[actor] === 'queued'), running = sorted(finals.map(entry => entry.actor));
-  if (!equal(raw.queue, queue) || !equal(raw.running, running) || raw.service.queueLength !== queue.length || !equal(Object.keys(raw.phase).sort(), tokens.map(String).sort())) reasons.push('invalid_queue_or_runtime_projection');
+  const queued = tokens.filter(actor => raw.phase[actor] === 'queued'), queue = raw.queue, running = sorted(finals.map(entry => entry.actor));
+  if (!Array.isArray(queue) || !equal(sorted(queue), queued) || !equal(raw.running, running) || raw.service.queueLength !== queue.length || !equal(Object.keys(raw.phase).sort(), tokens.map(String).sort())) {
+    reasons.push('invalid_queue_or_runtime_projection'); return null;
+  }
+  if (!equal(raw.queueIds, queue.map(actor => `segment-${identities[actor]}`))) reasons.push('queue_order_observation_mismatch');
   const expectedPresence = Object.fromEntries([...new Set(identities)].map(identity => [identity, queue.some(actor => identities[actor] === identity)]));
   if (!equal(raw.queuePresence, expectedPresence) || new Set(queue.map(actor => identities[actor])).size !== queue.length) reasons.push('queue_identity_mismatch');
   if (tokens.some(actor => (raw.phase[actor] === 'running') !== running.includes(actor))) reasons.push('running_phase_mismatch');
   return { queue, running, phase: raw.phase, interim: interim.length, recentStarts: raw.recentStarts };
 }
 
-function translationHistory(raw, previous, step, config, phases, reasons) {
+function translationHistory(raw, previous, step, config, phases, queue, reasons) {
   const identities = config.identities || [0, 1, 2, 3];
   if (previous && raw.clock < previous.clock) reasons.push('clock_regressed');
   if (!previous) {
@@ -64,11 +67,14 @@ function translationHistory(raw, previous, step, config, phases, reasons) {
     if (step.action === 'enqueue') {
       if (raw.lastResult?.accepted !== true) reasons.push('enqueue_not_accepted');
       phases[step.actor] = 'queued';
+      queue.push(step.actor);
     } else if (step.action === 'duplicate') {
       if (raw.lastResult?.accepted !== false || !Object.entries(phases).some(([actor, phase]) => phase === 'queued' && identities[actor] === identities[step.actor])) reasons.push('wrong_waiting_dedup');
     } else if (step.action === 'cancel_queued') {
       if (phases[step.actor] !== 'queued') reasons.push('cancellation_not_queued');
       phases[step.actor] = 'cancelled';
+      const at = queue.indexOf(step.actor);
+      if (at < 0) reasons.push('cancellation_missing_queue_order'); else queue.splice(at, 1);
     } else if (step.action === 'recycle') {
       if (phases[step.actor] !== 'settled') reasons.push('recycle_before_settlement');
       phases[step.actor] = 'fresh';
@@ -79,9 +85,12 @@ function translationHistory(raw, previous, step, config, phases, reasons) {
   for (const entry of starts) if (entry.actor !== -1) {
     if (phases[entry.actor] !== 'queued') reasons.push('dispatch_without_queue_identity');
     phases[entry.actor] = 'running';
+    const at = queue.indexOf(entry.actor);
+    if (at < 0) reasons.push('dispatch_missing_queue_order'); else queue.splice(at, 1);
   }
   if (!equal(raw.recentStarts, starts.filter(entry => entry.actor !== -1).map(entry => entry.actor))) reasons.push('wrong_dispatch_order');
   if (!equal(raw.phase, phases)) reasons.push('lifecycle_not_reconstructed');
+  if (!equal(raw.queue, queue)) reasons.push('queue_order_not_reconstructed');
 }
 
 function knowledgeState(raw, previous, step, config, serverSource, reasons, reconstructed) {
@@ -179,6 +188,7 @@ export function validateSchedulerReplayEvidence(trace, replay, { serverSource, m
   if (replay.complete !== true || !Array.isArray(replay.observations) || (mutation === 'none' ? replay.ok !== true || replay.classification !== 'matched' || replay.observations.length !== states.length : replay.ok !== false || replay.classification !== 'implementation_mismatch')) reasons.push('incomplete_or_wrong_replay');
   let previous;
   const reconstructed = { provider: [0, 0] };
+  const queue = [...(trace.config.initialQueue || [])];
   const identities = trace.config.identities || [0, 1, 2, 3];
   const phases = Object.fromEntries(identities.map((_, actor) => [actor, (trace.config.initialQueue || []).includes(actor) ? 'queued' : 'fresh']));
   for (const [index, observation] of (replay.observations || []).entries()) {
@@ -188,7 +198,7 @@ export function validateSchedulerReplayEvidence(trace, replay, { serverSource, m
     try {
       if (trace.config.kind === 'translation') {
         projection = serviceState(raw, trace.config, serverSource, mutation, reasons);
-        if (projection) translationHistory(raw, previous, step, trace.config, phases, reasons);
+        if (projection) translationHistory(raw, previous, step, trace.config, phases, queue, reasons);
       } else projection = knowledgeState(raw, previous, step, trace.config, serverSource, reasons, reconstructed);
     } catch { reasons.push('invalid_raw_observation_shape'); }
     if (!projection || !equal(observation.actual, projection)) reasons.push('projection_not_reconstructed');

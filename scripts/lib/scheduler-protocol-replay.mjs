@@ -40,7 +40,7 @@ export function schedulerStates(itf) {
 }
 export function normalizeSchedulerTrace(itf, config) {
   const states = schedulerStates(itf);
-  const projection = state => Object.fromEntries(fields(config).map(field => [field, field === 'queue' ? [...state[field]].sort((a, b) => a - b) : state[field]]));
+  const projection = state => Object.fromEntries(fields(config).map(field => [field, state[field]]));
   if (states[0].lastAction !== 'init' || states[0].actor !== -1) throw new Error('Invalid scheduler initialization');
   const trace = { schemaVersion: 1, specificationVersion: '1.0', protocol: 'scheduler', config, initial: projection(states[0]),
     steps: states.slice(1).map(state => ({ action: state.lastAction, actor: state.actor, argument: state.argument, expected: projection(state) })) };

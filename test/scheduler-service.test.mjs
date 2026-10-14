@@ -49,6 +49,7 @@ test('queued dedup does not invent an in-flight segment identity lock', async t 
   await h.act({ action: 'pump' });
   state = await h.act({ action: 'enqueue', actor: 1 });
   assert.equal(state.lastResult.accepted, true);
+  assert.deepEqual(state.queue, [1]); assert.deepEqual(state.queueIds, ['segment-0']);
   state = await h.act({ action: 'pump' });
   assert.deepEqual(state.running, [0, 1]); assert.equal(state.service.final, 2);
 });
@@ -108,4 +109,23 @@ test('partial real worker initialization is force-cleaned even when its graceful
     if (resource.type === 'directory') assert.equal(existsSync(resource.path), false);
     if (resource.type === 'child') assert.throws(() => process.kill(resource.pid, 0), { code: 'ESRCH' });
   }
+});
+
+test('real waiting queue keeps nonnumeric order before dispatch and through cancellation', async t => {
+  const h = await harness(t, { background: [0, 1, 2, 3] });
+  let state;
+  for (const actor of [2, 0, 1]) state = await h.act({ action: 'enqueue', actor });
+  assert.deepEqual(state.queue, [2, 0, 1]);
+  assert.deepEqual(state.queueIds, ['segment-2', 'segment-0', 'segment-1']);
+  assert.deepEqual(state.ledger, []);
+  state = await h.act({ action: 'duplicate', actor: 2 });
+  assert.equal(state.lastResult.accepted, false);
+  assert.deepEqual(state.queue, [2, 0, 1]);
+  state = await h.act({ action: 'cancel_queued', actor: 0 });
+  assert.deepEqual(state.queue, [2, 1]);
+  state = await h.act({ action: 'enqueue', actor: 0 });
+  assert.deepEqual(state.queue, [2, 1, 0]);
+  state = await h.act({ action: 'pump' });
+  assert.deepEqual(state.recentStarts, [2, 1]);
+  assert.deepEqual(state.queue, [0]);
 });

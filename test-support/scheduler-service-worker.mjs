@@ -66,15 +66,23 @@ function refreshTerminals() {
 }
 function snapshot() {
   refreshTerminals();
-  const phase = {}, queue = [], running = [];
+  const phase = {}, queued = [], running = [];
   for (const token of configuredTokens()) {
     const task = tasks.get(token);
     phase[token] = task?.dropped ? 'dropped' : task?.phase || 'fresh';
-    if (phase[token] === 'queued') { assert.equal(api.translations.has(taskId(token)), true); queue.push(token); }
+    if (phase[token] === 'queued') { assert.equal(api.translations.has(taskId(token)), true); queued.push(token); }
     if (phase[token] === 'running') running.push(token);
   }
+  const queueIds = api.translations.queuedIds;
+  assert.equal(queueIds.length, queued.length);
+  const queue = queueIds.map(id => {
+    const matches = queued.filter(token => taskId(token) === id);
+    assert.equal(matches.length, 1, 'Each waiting segment must map to one queued token');
+    return matches[0];
+  });
+  assert.equal(new Set(queue).size, queue.length);
   assert.equal(queue.length, api.translations.length);
-  return { clock, phase, queue, running, recentStarts, lastResult, binding,
+  return { clock, phase, queue, queueIds, running, recentStarts, lastResult, binding,
     queuePresence: Object.fromEntries([...new Set(config.identities || [0, 1, 2, 3])].map(id => [id, api.translations.has(storedSegments.get(id)?.id || `segment-${id}`)])),
     platformControls: { dateNow: 'controlled-monotonic-clock', abortSignalTimeout: 'controlled-platform-deadline', productionTimeoutMs: 15000, waitsRealWallTime: false },
     storedSegments: Object.fromEntries([...storedSegments].map(([actor, segment]) => [actor, api.store.db.prepare('SELECT id,original_text,translation_state,translation_text FROM segments WHERE id=?').get(segment.id)])),

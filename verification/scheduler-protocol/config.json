@@ -680,7 +680,7 @@
     "outputPattern": "{main}-{test}-{seq}.itf.json"
   },
   "traceContract": {
-    "normalization": "Strip namespaces through last ::; reject duplicate variable names. Preserve list order in recentStarts; compare queue membership as sorted tokens.",
+    "normalization": "Strip namespaces through last ::; reject duplicate variable names. Preserve list order in queue and recentStarts; normalize integer sets only. Read waiting order from the production queuedIds snapshot and independently reconstruct it from accepted enqueues, cancellations, and HTTP starts.",
     "translationProjection": [
       "queue",
       "running",
