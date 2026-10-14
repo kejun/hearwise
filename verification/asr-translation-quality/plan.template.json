@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "id": "hearwise-asr-mt-proposal-v1",
+  "corpusFile": "corpus.template.json",
+  "repetitions": null,
+  "directions": {
+    "en": "Chinese",
+    "zh": "English",
+    "ja": "Chinese",
+    "ko": "Chinese"
+  },
+  "metrics": {
+    "version": 1,
+    "normalization": "NFC-lowercase-whitespace-v1",
+    "cer": "Unicode-code-points-excluding-whitespace",
+    "wer": "whitespace-delimited-tokens",
+    "references": "minimum-error-rate; ties choose first reference",
+    "aggregate": "sum-selected-edit-counts / sum-selected-reference-units"
+  },
+  "humanRubric": {
+    "version": "meaning-0-to-4-v1",
+    "seriousTypes": [
+      "number",
+      "negation",
+      "condition",
+      "attribution",
+      "omission"
+    ]
+  },
+  "thresholds": {
+    "asrErrorRateMax": null,
+    "asrOmissionRateMax": null,
+    "asrRegressionMax": null,
+    "asrSilenceHallucinationsMax": 0,
+    "mtMeaningRetentionMin": null,
+    "mtRegressionMax": null,
+    "seriousErrorMax": 0
+  },
+  "roles": {
+    "baseline": {
+      "sourceSha": null,
+      "asrModel": "qwen-audio-3.0-asr-flash-streaming",
+      "mtModel": "qwen-mt-flash",
+      "asrEndpoint": "wss://maas.qianwenaiapi.com/api-ws/v1/inference",
+      "mtEndpoint": "https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions",
+      "requestTemplateVersion": "hearwise-public-routes-v1",
+      "captionMode": "realtime",
+      "sentenceSilenceMs": 2500,
+      "maxConnectionMs": 120000,
+      "maxRunMs": 3600000
+    },
+    "candidate": {
+      "sourceSha": null,
+      "asrModel": "qwen-audio-3.0-asr-flash-streaming",
+      "mtModel": "qwen-mt-flash",
+      "asrEndpoint": "wss://maas.qianwenaiapi.com/api-ws/v1/inference",
+      "mtEndpoint": "https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions",
+      "requestTemplateVersion": "hearwise-public-routes-v1",
+      "captionMode": "realtime",
+      "sentenceSilenceMs": 2500,
+      "maxConnectionMs": 120000,
+      "maxRunMs": 3600000
+    }
+  },
+  "reviewers": [],
+  "approval": {
+    "reviewer": null,
+    "at": null,
+    "reference": null,
+    "beforeCandidateGeneration": false
+  },
+  "budget": {
+    "id": null,
+    "currency": "CNY",
+    "approvedBy": null,
+    "approvalReference": null,
+    "approvedAt": null,
+    "expiresAt": null,
+    "ceilingMicros": null,
+    "ledgerFile": "../../verification-evidence/quality-budget.sqlite",
+    "bounds": {
+      "asr": {
+        "reviewed": false,
+        "reviewedBy": null,
+        "sourceUrl": null,
+        "sourceDocumentSha256": null,
+        "checkedAt": null,
+        "validUntil": null,
+        "rationale": null,
+        "coversRetriesAndHiddenCharges": false,
+        "usesDiscounts": false,
+        "inputUnitsUpper": null,
+        "outputUnitsUpper": null,
+        "inputUnitMicros": null,
+        "outputUnitMicros": null,
+        "fixedMicros": null,
+        "includesWallClockCap": false,
+        "sourceDocumentFile": null,
+        "inputUnit": "millisecond",
+        "billingQuantumMs": null,
+        "billingTailMs": null,
+        "minimumBillableMs": null,
+        "appliesTo": []
+      },
+      "mt": {
+        "reviewed": false,
+        "reviewedBy": null,
+        "sourceUrl": null,
+        "sourceDocumentSha256": null,
+        "checkedAt": null,
+        "validUntil": null,
+        "rationale": null,
+        "coversRetriesAndHiddenCharges": false,
+        "usesDiscounts": false,
+        "inputUnitsUpper": null,
+        "outputUnitsUpper": null,
+        "inputUnitMicros": null,
+        "outputUnitMicros": null,
+        "fixedMicros": null,
+        "outputLimitEnforcedBy": null,
+        "sourceDocumentFile": null,
+        "inputUnit": "token",
+        "outputUnit": "token",
+        "tokenUpperBoundMethod": "provider-hard-input-and-output-limits",
+        "providerInputTokenLimit": null,
+        "providerOutputTokenLimit": null,
+        "providerRequestByteLimit": null,
+        "appliesTo": []
+      }
+    }
+  }
+}

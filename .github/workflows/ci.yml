@@ -34,6 +34,8 @@ jobs:
       - run: npm test
       - name: Verify credential and request security boundaries
         run: npm run verify:security -- --node-only --release
+      - name: Check offline ASR and MT evaluation plumbing (no quality scores or paid calls)
+        run: npm run quality:asr-mt -- offline --release
       - name: Verify relation property and evidence contract
         run: npm run verify -- --release
       - name: Preserve test progress and watchdog diagnostics
