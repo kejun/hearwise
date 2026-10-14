@@ -260,6 +260,12 @@ invalid-oracle cases 1 second each), and 90 seconds for implementation regressio
 groups, temporary databases and mutant files are cleaned up on failure/interruption;
 the synthetic witness is intentionally retained and hashed.
 
+The shared Lean CI job has a bounded 20-minute outer deadline: two sequential
+360-second profiles require up to 12 minutes, leaving 8 minutes for checkout,
+dependency/toolchain setup and artifact upload. Both profile deadlines and every
+per-stage limit remain unchanged. Node, Chromium and relation-model job budgets
+are unchanged.
+
 The runner hashes its declared source files both before and after execution, so a
 changed or missing file fails even when the checkout was already dirty. The gate
 rejects wrong/missing tools, changed source/profile, dirty release source,
