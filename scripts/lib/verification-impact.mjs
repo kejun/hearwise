@@ -71,7 +71,7 @@ export async function impactPlan(base, { profile = 'fast' } = {}) {
   const lockDigest = digest(await readFile('package-lock.json'));
   const toolchain = JSON.parse(await readFile('verification/relation-protocol/toolchain.json', 'utf8'));
   const lean = (await readFile('verification/lean/lean-toolchain', 'utf8')).trim();
-  const environment = { platform: process.platform, arch: process.arch, nodeMajor: process.versions.node.split('.')[0] };
+  const environment = { platform: process.platform, arch: process.arch, nodeMajor: process.versions.node.split('.')[0], node: process.version, sqlite: process.versions.sqlite };
   return { schemaVersion: 1, policyVersion, specificationVersion, policyDigest, profile, source: sourceVersion(), ...range,
     environment, toolchain: { ...toolchain, lean }, budgets,
     cache: { kind: 'compiled-tools-only; never a passing-report cache',

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { releaseEvidence, readTechnicalEvidence } from '../scripts/lib/release-evidence.mjs';
+import { releaseEvidence, readTechnicalEvidence, isCurrentTechnicalPass } from '../scripts/lib/release-evidence.mjs';
 import { validateHistoricalEvidence, historicalBindings } from '../scripts/lib/historical-release-evidence.mjs';
 import { sourceVersion } from '../scripts/lib/verification-evidence.mjs';
 import { technicalSuites } from '../verification/release/policy.mjs';
@@ -52,4 +52,12 @@ test('artifact discovery records all seven missing obligations and rejects a wro
   assert.equal(manifest.evidence.filter(row => row.discoveryError === 'missing_report_artifact').length, 5);
   const invalid = await runProcess(process.execPath, ['scripts/release-manifest.mjs', `--artifact-root=${directory}`, `--output=${file}`, `--source=${'0'.repeat(40)}`], { timeoutMs: 10000 });
   assert.equal(invalid.code, 1);
+});
+
+
+test('aggregate independently refuses a cached ok flag with incomplete, stale or wrong-source rows', () => {
+  const target = { sha: 'a'.repeat(40), dirty: false }, row = { source: target, ok: true, status: 'passed', stale: false };
+  assert.equal(isCurrentTechnicalPass(row, target), true);
+  for (const changed of [{ ...row, status: 'incomplete' }, { ...row, stale: true }, { ...row, source: { ...target, sha: 'b'.repeat(40) } },
+    { ...row, source: { ...target, dirty: true } }, { ...row, stale: undefined }]) assert.equal(isCurrentTechnicalPass(changed, target), false);
 });

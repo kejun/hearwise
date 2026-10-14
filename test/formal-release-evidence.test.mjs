@@ -63,11 +63,12 @@ test('formal command binding preserves portable roots, fixed tools, depth, tests
       { id: 'implementation-regressions', kind: 'implementation-regression', timeoutMs: 60000, expectedFailure: false,
         argv: ['--test', '--test-reporter=tap', '--test-timeout=30000', `${repositoryRoot}/test/relation-protocol-replay.test.mjs`] }
     ] };
+  report.results.forEach(row => { row.execution = { code: 0, ok: true }; });
   assert.equal(await formalCommandContract('relation-protocol', report), true);
   for (const mutate of [r => { r.results[1].argv[r.results[1].argv.indexOf('--max-steps') + 1] = '8'; }, r => { r.results[1].bound = 8; },
     r => { r.results[1].timeoutMs = 999999; }, r => { r.executionContext.overallTimeoutMs *= 2; }, r => { r.executionContext.jvmArgs = '-Xmx8G'; },
     r => { r.results[2].argv[3] = '/other/test/relation-protocol-replay.test.mjs'; }, r => { r.results[0].argv.push('--ignored'); },
-    r => { r.tools.node = 'v99.0.0'; }, r => { r.results[0].expectedFailure = true; }]) {
+    r => { r.results[0].execution.error = 'contradictory spawn failure'; }, r => { r.tools.node = 'v99.0.0'; }, r => { r.results[0].expectedFailure = true; }]) {
     const changed = structuredClone(report); mutate(changed); await assert.rejects(formalCommandContract('relation-protocol', changed));
   }
 });

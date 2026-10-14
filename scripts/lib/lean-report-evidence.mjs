@@ -177,7 +177,8 @@ export async function validateLeanEvidence(kind, directory, { release = true } =
   if (!sameDigests(report.sourceDigests, actualSourceDigests) ||
       (kind === 'name-interval' && !sameDigests(report.finalSourceDigests, actualSourceDigests))) add('source_content_changed');
   if (!isObject(report.profile) || digest(JSON.stringify(report.profile)) !== profileDigest) add('profile_changed');
-  if (report.tools?.node !== process.version || report.tools?.sqlite !== process.versions.sqlite) add('wrong_toolchain');
+  if (!['platform', 'arch', 'release'].every(key => typeof report.environment?.[key] === 'string' && report.environment[key])) add('invalid_environment');
+  if (!/^v24\./.test(process.version) || report.tools?.node !== process.version || report.tools?.sqlite !== process.versions.sqlite) add('wrong_toolchain');
   await evidenceCheck('tool_log_mismatch', () => {
     assert.equal(text('lean-version.log').trim(), report.tools?.lean);
     assert.equal(text('lake-version.log').trim(), report.tools?.lake);

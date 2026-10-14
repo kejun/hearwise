@@ -14,7 +14,7 @@ const json = async file => JSON.parse(await readFile(file, 'utf8'));
 export async function formalCommandContract(kind, report) {
   assert.ok(Object.hasOwn(definitions, kind));
   const config = await definitions[kind].loadConfig(), pinned = await definitions[kind].loadToolchain(), profile = report.profile;
-  assert.ok(Object.hasOwn(config.profiles, profile));
+  assert.ok(Object.hasOwn(config.profiles, profile)); assert.ok(!report.error);
   const context = report.executionContext;
   assert.ok(context && path.isAbsolute(context.repositoryRoot) && path.isAbsolute(context.evidenceDirectory));
   assert.equal(path.basename(context.evidenceDirectory).startsWith('run-'), true);
@@ -25,6 +25,8 @@ export async function formalCommandContract(kind, report) {
   const output = file => path.join(context.evidenceDirectory, file);
   for (const row of report.results) {
     if (['implementation-replay', 'implementation-negative'].includes(row.kind)) continue;
+    assert.ok(row.execution && !row.execution.error);
+    assert.equal(row.execution.ok, row.kind !== 'model-negative');
     let expected, bound, timeout = 60000, expectedFailure = false;
     const endpoint = row.argv?.[row.argv.indexOf('--server-endpoint') + 1];
     const server = () => { assert.match(endpoint, /^127\.0\.0\.1:[1-9][0-9]{0,4}$/); assert.ok(Number(endpoint.split(':')[1]) <= 65535); return endpoint; };

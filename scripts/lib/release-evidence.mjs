@@ -16,6 +16,7 @@ export async function readTechnicalEvidence(suite, directory, { release = true, 
   if (suite.endsWith('-protocol')) return validateFormalReleaseEvidence(suite, directory, { release, requireProfile: profile });
   return validateLeanEvidence(suite, directory, { release });
 }
+export const isCurrentTechnicalPass = (row, target) => row?.ok === true && row.status === 'passed' && row.stale === false && row.source?.sha === target.sha && row.source?.dirty === target.dirty;
 const missing = suite => ({ suite, ok: false, status: 'not_run', reasons: ['missing_report'], sourceMode: 'current', fullProjectAcceptance: false });
 // Purposes are fixed checked-in contracts. "foundation-demo" is deliberately
 // not a release mode and cannot clear any full-business requirement.
@@ -58,7 +59,7 @@ export async function releaseEvidence(manifest, { purpose = 'pr', profile = 'fas
       }
     }
   }
-  const technicalPassed = reasons.length === 0 && required.every(suite => rows.some(row => row.suite === suite)) && rows.every(row => row.ok === true);
+  const technicalPassed = reasons.length === 0 && required.every(suite => rows.some(row => row.suite === suite)) && rows.every(row => isCurrentTechnicalPass(row, target));
   const requirements = fullRequirements.map(row => ({ ...row, status: 'not_run' }));
   const external = externalRequirements.map(row => ({ ...row, status: 'not_run', reasons: ['validator_not_registered', 'configuration_or_threshold_not_frozen'] }));
   const fullAcceptance = technicalPassed && requirements.every(row => row.status === 'passed') && external.every(row => row.status === 'passed');

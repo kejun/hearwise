@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -12,7 +13,7 @@ const supported = {
   'relation-protocol': ['HW-03', 'HW-04', 'HW-05', 'HW-10'], 'knowledge-protocol': ['HW-03', 'HW-04', 'HW-05', 'HW-10'],
   revision: ['HW-06', 'HW-07'], 'name-interval': ['HW-06', 'HW-07']
 };
-export async function historicalBindings(suite, profile) {
+export async function historicalBindings(suite, profile, originalReport) {
   if (!Object.hasOwn(supported, suite)) throw new Error('Historical suite is not supported');
   const files = execFileSync('git', ['ls-files', '-z'], { timeout: 10000 }).toString('utf8').split('\0').filter(Boolean);
   // Conservative full source dependency closure: only ordinary documentation
@@ -21,12 +22,21 @@ export async function historicalBindings(suite, profile) {
   const source = files.filter(file => selectImpact([{ status: 'M', paths: [file] }]).affectedDomains.length);
   const entries = await Promise.all(source.map(async file => [file, digest(await readFile(file))]));
   const toolFiles = ['package-lock.json', 'verification/lean/lean-toolchain', 'verification/relation-protocol/toolchain.json', 'verification/knowledge-protocol/toolchain.json'];
+  const originalEnvironment = originalReport?.environment;
+  if (originalReport !== undefined) {
+    assert.ok(originalEnvironment && ['platform', 'arch'].every(key => typeof originalEnvironment[key] === 'string' && originalEnvironment[key]));
+    const release = originalEnvironment.release ?? originalEnvironment.osRelease; assert.ok(typeof release === 'string' && release);
+    assert.equal(Object.keys(originalEnvironment).length, 3);
+    assert.ok(typeof originalReport.tools?.node === 'string' && typeof originalReport.tools?.sqlite === 'string');
+  }
+  const environment = originalReport === undefined ? { platform: process.platform, arch: process.arch, release: os.release() } :
+    { platform: originalEnvironment.platform, arch: originalEnvironment.arch, release: originalEnvironment.release ?? originalEnvironment.osRelease };
   return { policy: await policyBinding(), model: digest(JSON.stringify(entries)),
-    tools: digest(JSON.stringify({ node: process.version, sqlite: process.versions.sqlite, files: entries.filter(([file]) => toolFiles.includes(file)) })),
+    tools: digest(JSON.stringify({ node: originalReport === undefined ? process.version : originalReport.tools.node, sqlite: originalReport === undefined ? process.versions.sqlite : originalReport.tools.sqlite, files: entries.filter(([file]) => toolFiles.includes(file)) })),
     configuration: digest(JSON.stringify({ suite, profile, budgets, files: entries.filter(([file]) => /(?:config\.json|profile\.mjs|toolchain|tlc\.json)$/.test(file)) })),
     corpus: digest(JSON.stringify(entries.filter(([file]) => /^(verification|test-support)\//.test(file)))),
     thresholds: digest('No semantic-quality or external measurement threshold applies to this finite technical report; none is accepted by this adapter.'),
-    environment: digest(JSON.stringify({ platform: process.platform, arch: process.arch, release: os.release() })) };
+    environment: digest(JSON.stringify(environment)) };
 }
 export async function validateHistoricalEvidence(suite, directory, { profile = 'fast' } = {}) {
   const target = sourceVersion(), result = { suite, ok: false, eligible: false, sourceMode: 'historical', target, reasons: [], fullProjectAcceptance: false };
@@ -46,8 +56,8 @@ export async function validateHistoricalEvidence(suite, directory, { profile = '
     const output = path.join(temporary, 'validation.json');
     const reader = fileURLToPath(new URL('../read-technical-evidence.mjs', import.meta.url));
     const execution = await runProcess(process.execPath, [reader, suite, path.resolve(directory), output, profile], { cwd: checkout, timeoutMs: 30000 });
-    if (!execution.ok) return { ...result, reasons: ['original_validation_failed'], execution };
-    const original = JSON.parse(await readFile(output, 'utf8'));
+    let original; try { original = JSON.parse(await readFile(output, 'utf8')); } catch { /* Execution failure may have no report. */ }
+    if (!execution.ok || !original) return { ...result, reasons: ['original_validation_failed'], execution, originalValidation: original?.verdict };
     if (JSON.stringify(sourceVersion()) !== JSON.stringify(target) || JSON.stringify(await historicalBindings(suite, profile)) !== JSON.stringify(expectedBindings)) return { ...result, reasons: ['target_changed_during_validation'] };
     const eligibility = historicalEligibility({ range, source, target, domains: supported[suite], actualBindings: original.bindings, expectedBindings,
       originalVerdict: { ok: original.verdict.ok, source: original.verdict.source, artifactsVerified: original.verdict.ok } });

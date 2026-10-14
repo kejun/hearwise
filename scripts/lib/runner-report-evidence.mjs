@@ -29,7 +29,7 @@ async function header(kind, directory, release) {
   if (!isDeepStrictEqual(report.sourceStart?.source, result.source)) result.reasons.push('source_header_mismatch');
   try { if (!sameSourceSnapshot(report.sourceEnd, await sourceSnapshot())) { result.stale = true; result.reasons.push('source_or_build_digest_changed'); } }
   catch { result.reasons.push('missing_source_or_build'); }
-  if (report.tools?.node !== process.version || report.tools?.sqlite !== process.versions.sqlite ||
+  if (!/^v24\./.test(process.version) || report.tools?.node !== process.version || report.tools?.sqlite !== process.versions.sqlite ||
       !['platform', 'arch', 'release'].every(key => typeof report.environment?.[key] === 'string' && report.environment[key])) result.reasons.push('missing_tools_or_environment');
   result.tools = report.tools; result.environment = report.environment;
   return { result, report };
