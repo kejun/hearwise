@@ -90,6 +90,12 @@ test('playback browser contract rejects false completion, missing coverage and i
     b => { b.widths[0].cases[0].state.sockets[0].sent.at(-1).consumedSamples = 0; },
     b => { b.widths[0].cases[1].afterLate.enabled = false; }, b => { b.widths[0].cases[1].afterLate.paused = false; },
     b => { b.widths[0].cases[2].after.sockets.push({}); }, b => { b.widths[0].cases[2].stopped.contexts = ['running']; },
+    b => { b.widths[0].cases[0].state.sockets[0].received.find(e => e.type === 'speech.unit').unit = 999; },
+    b => { const end = b.widths[0].cases[0].state.sockets[0].received.find(e => e.type === 'speech.unit-end'); end.unit = 999; end.samples = 1; },
+    b => { b.widths[0].cases[0].state.sockets[0].readyState = 1; },
+    b => { b.widths[0].cases[1].finished.contexts = ['running']; },
+    b => { b.widths[0].cases[1].afterLate.sockets = [{}, {}, {}]; },
+    b => { delete b.widths[0].cases[2].stopped.contexts; },
     b => { b.negative.caught = false; }, b => { b.negative.after.sockets.pop(); }, b => { b.negative.errors.push('page crash'); }
   ];
   for (const mutate of mutations) { const browser = syntheticBrowser(); mutate(browser); assert.equal(checkPlaybackBrowser(browser), false, mutate.toString()); }
