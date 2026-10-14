@@ -45,7 +45,11 @@ export class QwenTts {
       ws.on('close', () => fail(new Error('语音连接已断开')));
       ws.on('message', raw => {
         if (ws !== this.ws || this.closed) return;
-        let event; try { event = JSON.parse(raw.toString()); } catch { return fail(new Error('语音服务响应无效')); }
+        let event;
+        try {
+          event = JSON.parse(raw.toString());
+          if (!event || typeof event !== 'object' || Array.isArray(event)) throw new Error('Invalid response shape');
+        } catch { return fail(new Error('语音服务响应无效')); }
         if (event.type === 'session.created') this.send('session.update', { session: {
           mode: 'commit', voice: this.config.voice, language_type: this.config.language || 'Chinese',
           response_format: 'pcm', sample_rate: TTS_SAMPLE_RATE, speech_rate: this.config.rate,
