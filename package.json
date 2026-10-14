@@ -40,7 +40,12 @@
     "setup:process-crash": "node scripts/setup-relation-protocol.mjs",
     "preverify:process-crash": "npm run build",
     "verify:process-crash": "node scripts/verify-process-crash.mjs",
-    "verify:process-crash:report": "node scripts/verify-process-crash-report.mjs"
+    "verify:process-crash:report": "node scripts/verify-process-crash-report.mjs",
+    "preverify:import-protocol": "npm run build",
+    "verify:import-protocol": "node scripts/verify-import-protocol.mjs",
+    "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs",
+    "preverify:security": "npm run build",
+    "verify:security": "node scripts/verify-security-browser.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
