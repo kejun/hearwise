@@ -66,7 +66,8 @@ function runtimeEvidence(runtimes, pids, source) {
     assert.equal(row.diagnostics.active_spans, 0); assert.equal(row.diagnostics.complete, true);
   }
 }
-function boundaryEvidence(row, source) {
+export function assertAtomicityBoundary(row, source, window) {
+  withinExecutionWindow([row], window);
   const life = row.lifecycle, crashed = ['crash', 'negative'].includes(row.kind);
   assert.deepEqual(life.map(value => value.action), crashed ? ['start', 'crash', 'start'] : ['start']);
   const time = value => { const result = Date.parse(value); assert.ok(Number.isFinite(result)); return result; };
@@ -126,7 +127,7 @@ export function validateAtomicityObservations(observations, window) {
       if (row.id.startsWith('data/')) { assert.equal(row.id, `data/${row.kind}`); validateData(row); continue; }
       const config = atomicityCases.find(value => caseId(value) === row.id);
       for (const key of ['mode', 'kind', 'fault', 'boundary', 'mutation']) assert.equal(row[key], config[key], `frozen scenario ${key}`);
-      assert.deepEqual(row.providerCalls, []); boundaryEvidence(row, observations.source);
+      assert.deepEqual(row.providerCalls, []); assertAtomicityBoundary(row, observations.source);
       if (!row.kind.startsWith('negative')) {
         const usable = row.usable; assert.equal(usable.get.status, 200); assert.equal(usable.patch.status, 200); assert.deepEqual(usable.providerCalls, []);
         const expectedEdit = structuredClone(usable.before), target = expectedEdit.rows.listenings.find(value => value.id === usable.request.id);
