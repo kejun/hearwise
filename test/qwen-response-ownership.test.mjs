@@ -76,6 +76,7 @@ test('Qwen retires a full response-ID history by rotating its idle connection be
     }
     const retired = tts.ws;
     assert.equal(connections, 1); assert.equal(commits, 4096); assert.equal(pcmCount, 4096);
+    assert.equal(tts.responseIds.size, 4096);
     const final = tts.synthesize('Unit 4097.', () => pcmCount++);
     // Attach rejection handling before injecting queued old-socket callbacks.
     const outcome = final.then(value => ({ value }), error => ({ error }));
@@ -90,5 +91,6 @@ test('Qwen retires a full response-ID history by rotating its idle connection be
     const result = await deadline(() => outcome, 2000, 'rotated result');
     assert.equal(result.error, undefined); assert.equal(result.value.id, 'response-1'); assert.equal(result.value.attempts, 1);
     assert.equal(connections, 2); assert.equal(commits, 4097); assert.equal(pcmCount, 4097);
+    assert.deepEqual([...tts.responseIds], ['response-1']);
   } finally { tts.close(); await closeServer(server, 'Qwen bounded response history fixture'); }
 });
