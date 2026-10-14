@@ -30,6 +30,8 @@ export function createTranslationScheduler({ concurrency = TRANSLATION_CONCURREN
     concurrency,
     setSpeechHead(owner, id) { if (id) speechHeads.set(owner, id); else speechHeads.delete(owner); },
     get length() { return queue.length; },
+    // A detached read-only view of waiting order, without exposing task objects.
+    get queuedIds() { return queue.map(task => task.segment.id); },
     has: id => queuedIds.has(id),
     hasListening: listeningId => queue.some(task => task.listeningId === listeningId),
     enqueue(task) {

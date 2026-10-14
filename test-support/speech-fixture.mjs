@@ -10,12 +10,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, extraEnv = {} } = {}) {
+export async function speechFixture({ autoSentences = false, autoNow = () => Date.now(), audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, onTtsCommit, extraEnv = {}, serverImports = [] } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
   const filename = path.join(directory, 'test.sqlite');
   let seeded;
   if (seed) { const store = new ListeningStore(filename); try { seeded = await seed(store); } finally { store.close(); } }
-  const stats = { providerRequests: [], connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
+  const stats = { audioFrames: 0, automaticSentences: 0, providerRequests: [], connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
     mtRequests: [], mtAborted: 0, fishRequests: [], fishAborted: 0, holdFish: false };
   const mt = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
@@ -62,10 +62,14 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
       payload: { output: { sentence: { sentence_id: id, text, sentence_end: end, begin_time: 0, end_time: 1500 } } } }));
   }
   asr.on('connection', ws => {
-    stats.asrClients.add(ws); let last = Date.now();
+    stats.asrClients.add(ws); let last = autoNow();
     ws.on('close', () => stats.asrClients.delete(ws));
     ws.on('message', (raw, binary) => {
-      if (binary) { if (autoSentences && Date.now() - last > 2000) { last = Date.now(); final(); } return; }
+      if (binary) {
+        stats.audioFrames++;
+        if (autoSentences && autoNow() - last > 2000) { last = autoNow(); stats.automaticSentences++; final(); }
+        return;
+      }
       const message = JSON.parse(raw.toString());
       if (message.header?.action === 'run-task') ws.send(JSON.stringify({ header: { event: 'task-started' } }));
       if (message.header?.action === 'finish-task') {
@@ -84,19 +88,25 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
       if (event.type === 'session.update') { stats.sessions.push(event.session); ws.send(JSON.stringify({ type: 'session.updated' })); }
       if (event.type === 'input_text_buffer.append') text += event.text;
       if (event.type === 'input_text_buffer.commit') {
-        stats.commits.push(text); text = '';
+        const acceptedText = text; stats.commits.push(acceptedText); text = '';
         const response = { id: `response-${++stats.responses}`, status: 'completed' };
-        ws.send(JSON.stringify({ type: 'response.created', response }));
         const pcm = Buffer.alloc(audioSamples * 2);
         for (let i = 0; i < audioSamples; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 24000 * 440 * Math.PI * 2) * 2000), i * 2);
-        // Odd byte boundaries deliberately exercise the real transport's carry byte.
-        for (let offset = 0; offset < pcm.length; offset += 1001) ws.send(JSON.stringify({ type: 'response.audio.delta', response_id: response.id, delta: pcm.subarray(offset, offset + 1001).toString('base64') }));
-        ws.send(JSON.stringify({ type: 'response.audio.done', response_id: response.id }));
-        ws.send(JSON.stringify({ type: 'response.done', response }));
+        const sendDefault = () => {
+          if (ws.readyState !== 1) return false;
+          ws.send(JSON.stringify({ type: 'response.created', response }));
+          // Odd byte boundaries deliberately exercise the real transport's carry byte.
+          for (let offset = 0; offset < pcm.length; offset += 1001) ws.send(JSON.stringify({ type: 'response.audio.delta', response_id: response.id, delta: pcm.subarray(offset, offset + 1001).toString('base64') }));
+          ws.send(JSON.stringify({ type: 'response.audio.done', response_id: response.id }));
+          ws.send(JSON.stringify({ type: 'response.done', response }));
+          return true;
+        };
+        if (onTtsCommit) onTtsCommit({ ws, text: acceptedText, response, pcm, sendDefault });
+        else sendDefault();
       }
     });
   });
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve(fileURLToPath(new URL('..', import.meta.url))),
+  const child = spawn(process.execPath, [...serverImports.flatMap(file => ['--import', file]), 'server.mjs'], { cwd: path.resolve(fileURLToPath(new URL('..', import.meta.url))),
     env: { ...process.env, HEARWISE_INCREMENTAL_SPEECH: legacyIncrementalEnv ? '1' : '0', PORT: '0', LISTENING_DB: filename,
       ASR_ENDPOINT: `ws://127.0.0.1:${asr.address().port}`, MT_ENDPOINT: `http://127.0.0.1:${mt.address().port}`,
       TTS_ENDPOINT: `ws://127.0.0.1:${tts.address().port}`, FISH_TTS_ENDPOINT: `http://127.0.0.1:${fish.address().port}/v1/tts`, EXTRACTION_WAIT_MS: '15000', ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -126,7 +136,11 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
   } finally {
     child.stdout.removeListener('data', onData); child.removeListener('error', onError); child.removeListener('exit', onExit);
   }
-  return { base, stats, final, seeded, logs: () => logs, close };
+  return { base, stats, final, async withAutoSentencesPaused(operation) {
+    if (typeof operation !== 'function') throw new TypeError('Automatic sentence scope requires an operation');
+    const previous = autoSentences; autoSentences = false;
+    try { return await operation(); } finally { autoSentences = previous; }
+  }, seeded, logs: () => logs, close };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const f = await speechFixture({ autoSentences: true, audioSamples: 24000 });
