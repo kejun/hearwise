@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { runProcess } from '../scripts/lib/process.mjs';
 import { probeJavaVersion, JAVA_STARTUP_TIMEOUT_MS } from '../scripts/lib/relation-protocol-tools.mjs';
 
 const java = process.env.JAVA_HOME_21_X64 ? path.join(process.env.JAVA_HOME_21_X64, 'bin/java') : 'java';
-test('tool startup permits one bounded real Java launch delayed beyond the former five-second probe', { timeout: 15000 }, async () => {
+test('tool startup permits one bounded real Java launch delayed beyond the former five-second probe', { timeout: 35000 }, async () => {
   const script = `setTimeout(() => { const child = require('node:child_process').spawn(${JSON.stringify(java)}, ['-version'], {stdio:'inherit'}); child.on('error', () => process.exit(2)); child.on('exit', code => process.exit(code ?? 3)); }, 5500);`;
   const result = await probeJavaVersion({ command: process.execPath, args: ['-e', script] });
   assert.ok(result.major >= 21); assert.match(result.output, /version/);
@@ -13,12 +14,16 @@ test('tool startup permits one bounded real Java launch delayed beyond the forme
   assert.equal(result.execution.ok, true); assert.equal(result.execution.code, 0); assert.equal(result.execution.signal, null);
 });
 test('tool startup timeout remains a diagnostic failure and does not retry or look like an old Java version', async () => {
-  const script = `console.log('JAVA_START_ATTEMPT');setInterval(()=>{},1000);`;
-  await assert.rejects(probeJavaVersion({ command: process.execPath, args: ['-e', script], timeoutMs: 200 }), error => {
+  let attempts = 0;
+  const run = (...args) => { attempts++; return runProcess(...args); };
+  const script = `setInterval(()=>{},1000);`;
+  await assert.rejects(probeJavaVersion({ command: process.execPath, args: ['-e', script], timeoutMs: 200, run }), error => {
     assert.equal(error.code, 'JAVA_STARTUP_TIMEOUT');
     assert.equal(error.execution.timedOut, true); assert.equal(error.execution.ok, false);
     assert.equal(error.execution.timeoutMs, 200); assert.equal(error.execution.interrupted, false);
-    assert.equal((error.execution.tail.match(/JAVA_START_ATTEMPT/g) || []).length, 1);
+    // Startup can time out before any output under load. Count actual launch
+    // attempts, never assume the new child ran within the short test deadline.
+    assert.equal(attempts, 1);
     assert.match(error.message, /startup probe timed out/); assert.doesNotMatch(error.message, /is required/);
     return true;
   });

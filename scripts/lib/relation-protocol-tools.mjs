@@ -51,10 +51,10 @@ export async function setupProtocolTools() {
 // Infrastructure startup is separate from each model's exploration budget.
 // There is one attempt, with process-group cleanup and explicit timeout status.
 export const JAVA_STARTUP_TIMEOUT_MS = 30000;
-export async function probeJavaVersion({ command = 'java', args = ['-version'], timeoutMs = JAVA_STARTUP_TIMEOUT_MS } = {}) {
+export async function probeJavaVersion({ command = 'java', args = ['-version'], timeoutMs = JAVA_STARTUP_TIMEOUT_MS, run = runProcess } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > JAVA_STARTUP_TIMEOUT_MS) throw new Error('Invalid Java startup deadline');
   const startedAt = new Date().toISOString();
-  const result = await runProcess(command, args, { timeoutMs });
+  const result = await run(command, args, { timeoutMs });
   const execution = { command, args, timeoutMs, startedAt, finishedAt: new Date().toISOString(), ...result };
   const version = result.tail.match(/version\s+"(\d+)[^"]*"/);
   const code = result.timedOut ? 'JAVA_STARTUP_TIMEOUT' : !result.ok ? 'JAVA_STARTUP_FAILED' :
