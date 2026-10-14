@@ -71,8 +71,11 @@ not sets. Object property insertion order outside the explicit projection is ign
 
 The executable differential domain is:
 
-- Plain, side-effect-free snapshot/row objects. No getters, proxies, `toJSON`, cycles,
-  symbol keys, or prototype-dependent business fields.
+- Plain, side-effect-free snapshot/row objects with own enumerable data properties
+  and dense plain arrays. No non-enumerable fields, accessors, getters, proxies,
+  `toJSON`, cycles, symbol keys, or prototype-dependent business fields. The adapter
+  rejects non-enumerable/accessor properties and sparse arrays before serialization;
+  proxies and cyclic/complex business values are outside the declared domain.
 - Required `item` object and `segments` array; child collections are arrays or
   missing/null. Missing/null child collections become empty arrays. Aliases contain
   strings; child rows have scalar business fields.

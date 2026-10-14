@@ -48,3 +48,19 @@ test('declared differential scope and domain cannot silently shrink or admit los
   assert.notEqual(referenceJSON(duplicate), referenceJSON(removed), 'multiplicity is not set equality');
   assert.notEqual(knowledgeRevision(duplicate), knowledgeRevision(removed));
 });
+
+test('bridge rejects non-enumerable fields, accessors and sparse arrays instead of misprojecting them', () => {
+  const hidden = baseline();
+  Object.defineProperty(hidden.item, 'background_note', { value: 'hidden', enumerable: false });
+  assert.throws(() => transport(hidden), /own enumerable data properties/);
+  assert.notEqual(knowledgeRevision(hidden), knowledgeRevision(baseline()));
+  const getter = baseline(); let calls = 0;
+  Object.defineProperty(getter.item, 'background_note', { get: () => { calls++; return 'value'; }, enumerable: true });
+  assert.throws(() => transport(getter), /own enumerable data properties/);
+  assert.equal(calls, 0, 'reject before invoking business getters');
+  for (const group of ['aliases', 'mentions', 'revisions', 'facts', 'segments']) {
+    const sparse = baseline();
+    (group === 'segments' ? sparse : sparse.item)[group] = Array(2);
+    assert.throws(() => transport(sparse), /dense plain array/);
+  }
+});

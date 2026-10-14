@@ -24,18 +24,46 @@ export function transportScalar(value) {
   if (Number.isSafeInteger(value)) return { tag: 'integer', value: Object.is(value, -0) ? 0 : value };
   throw new TypeError('Outside Lean domain: expected nullish, boolean, UTF-16 string, or safe integer');
 }
+function plainRecord(value) {
+  if (!value || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw new TypeError('Outside Lean domain: expected a plain data record');
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (typeof key !== 'string' || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError('Outside Lean domain: expected own enumerable data properties');
+    }
+  }
+  return value;
+}
+function collection(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Reflect.ownKeys(value).length !== value.length + 1) {
+    throw new TypeError('Outside Lean domain: expected a dense plain array');
+  }
+  for (let i = 0; i < value.length; i++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError('Outside Lean domain: expected a dense data array');
+    }
+  }
+  return value;
+}
 export function transport(snapshot) {
+  plainRecord(snapshot);
+  plainRecord(snapshot.item);
+  if (!Array.isArray(snapshot.segments)) throw new TypeError('Outside Lean domain: required segments array');
   // Nested collections are separate fields in the tagged AST. Missing/undefined
   // scalar properties remain absent; null has its own explicit tag.
-  const row = (value, omitted = []) => Object.entries(value).filter(([key, v]) =>
+  const row = (value, omitted = []) => Object.entries(plainRecord(value)).filter(([key, v]) =>
     !omitted.includes(key) && v !== undefined).map(([key, value]) => [key, transportScalar(value)]);
   return { item: row(snapshot.item, ['aliases', 'mentions', 'revisions', 'facts']),
-    aliases: (snapshot.item.aliases || []).map(value => {
+    aliases: collection(snapshot.item.aliases).map(value => {
       if (typeof value !== 'string') throw new TypeError('Outside Lean domain: aliases must be strings');
       return transportScalar(value);
     }),
-    ...Object.fromEntries(['mentions', 'revisions', 'facts'].map(key => [key, (snapshot.item[key] || []).map(value => row(value))])),
-    segments: snapshot.segments.map(value => row(value)) };
+    ...Object.fromEntries(['mentions', 'revisions', 'facts'].map(key => [key, collection(snapshot.item[key]).map(value => row(value))])),
+    segments: collection(snapshot.segments).map(value => row(value)) };
 }
 export function referenceJSON(snapshot) {
   const row = (value, names) => Object.fromEntries(names.map(key => [key, value[key] ?? null]));
