@@ -35,6 +35,11 @@ export async function validateSchedulerReleaseContract(report, directory) {
     assert.equal(row.kind, entry.kind); assert.equal(row.log, `${row.id}.log`); asset(row.log);
     if (['implementation-replay', 'implementation-negative'].includes(row.kind)) {
       assert.equal(row.data, `${row.id}.json`); const values = await json(asset(row.data)); assert.equal(row.samples, values.length);
+      let replayEnd = start;
+      for (const replay of values) {
+        const [from, to] = interval(replay);
+        assert.ok(from >= replayEnd && to <= end, `scheduler_replay_interval:${row.id}`); replayEnd = to;
+      }
       assert.deepEqual(await json(asset(row.log)), values.map(value => ({ trace: value.sourceTrace, complete: value.complete, ok: value.ok, classification: value.classification })), 'scheduler_replay_log_binding');
     } else {
       assert.equal(row.cwd, row.kind === 'implementation-regression' ? root : path.join(evidenceRoot, 'work', row.id), 'wrong_scheduler_cwd');

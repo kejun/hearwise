@@ -38,7 +38,7 @@ async function fixture(t, profile = 'fast') {
     const row = { id: entry.id, kind: entry.kind, startedAt: time(index * 100 + 10), finishedAt: time(index * 100 + 20), log: entry.id + '.log', complete: true, status: 'passed' };
     if (['implementation-replay', 'implementation-negative'].includes(entry.kind)) {
       row.data = entry.id + '.json'; row.samples = 1;
-      const value = { sourceTrace: 'synthetic-trace', complete: true, ok: entry.kind !== 'implementation-negative', classification: entry.kind === 'implementation-negative' ? 'implementation_mismatch' : 'matched' };
+      const value = { sourceTrace: 'synthetic-trace', startedAt: time(index * 100 + 12), finishedAt: time(index * 100 + 18), complete: true, ok: entry.kind !== 'implementation-negative', classification: entry.kind === 'implementation-negative' ? 'implementation_mismatch' : 'matched' };
       await put(row.data, [value]); await put(row.log, [{ trace: value.sourceTrace, complete: value.complete, ok: value.ok, classification: value.classification }]);
     } else {
       row.cwd = entry.kind === 'implementation-regression' ? root : path.join(output, 'work', entry.id);
@@ -105,4 +105,19 @@ test('scheduler release binding requires the complete 175-test TAP tree, not a c
   }
   await put('implementation-regressions.log', tap); await symlink(path.join(directory, 'simulation.log'), path.join(directory, 'unbound-symlink'));
   await assert.rejects(validateSchedulerReleaseContract(report, directory), /unsafe path or symlink/);
+});
+
+test('scheduler raw replay timestamps stay within their stage in actual serial order independently of controlled clocks', async t => {
+  const { report, directory, put } = await fixture(t), row = report.results.find(row => row.id === 'replay-witnesses');
+  const values = JSON.parse(await readFile(path.join(directory, row.data), 'utf8')), first = values[0];
+  const set = async replay => { row.samples = replay.length; await put(row.data, replay); await put(row.log, replay.map(value => ({ trace: value.sourceTrace, complete: value.complete, ok: value.ok, classification: value.classification }))); };
+  for (const offset of [-365 * 86400000, 365 * 86400000]) {
+    const changed = structuredClone(first); for (const key of ['startedAt', 'finishedAt']) changed[key] = new Date(Date.parse(changed[key]) + offset).toISOString();
+    await set([changed]); await assert.rejects(validateSchedulerReleaseContract(report, directory), /scheduler_replay_interval/);
+  }
+  const a = { ...first, finishedAt: new Date(Date.parse(first.startedAt) + 1).toISOString() };
+  const b = { ...first, sourceTrace: 'synthetic-second-trace', startedAt: a.finishedAt };
+  await set([a, b]); assert.equal(await validateSchedulerReleaseContract(report, directory), true);
+  await set([b, a]); await assert.rejects(validateSchedulerReleaseContract(report, directory), /scheduler_replay_interval/);
+  await set([first, { ...first, sourceTrace: b.sourceTrace }]); await assert.rejects(validateSchedulerReleaseContract(report, directory), /scheduler_replay_interval/);
 });
