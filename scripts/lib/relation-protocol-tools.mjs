@@ -48,14 +48,31 @@ export async function setupProtocolTools() {
   return checkProtocolTools();
 }
 
+// Infrastructure startup is separate from each model's exploration budget.
+// There is one attempt, with process-group cleanup and explicit timeout status.
+export const JAVA_STARTUP_TIMEOUT_MS = 30000;
+export async function probeJavaVersion({ command = 'java', args = ['-version'], timeoutMs = JAVA_STARTUP_TIMEOUT_MS } = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > JAVA_STARTUP_TIMEOUT_MS) throw new Error('Invalid Java startup deadline');
+  const startedAt = new Date().toISOString();
+  const result = await runProcess(command, args, { timeoutMs });
+  const execution = { command, args, timeoutMs, startedAt, finishedAt: new Date().toISOString(), ...result };
+  const version = result.tail.match(/version\s+"(\d+)[^"]*"/);
+  const code = result.timedOut ? 'JAVA_STARTUP_TIMEOUT' : !result.ok ? 'JAVA_STARTUP_FAILED' :
+    !version || Number(version[1]) < toolchain.java.minimumMajor ? 'JAVA_VERSION_UNSUPPORTED' : null;
+  if (code) {
+    const reason = code === 'JAVA_STARTUP_TIMEOUT' ? 'Java startup probe timed out' : code === 'JAVA_STARTUP_FAILED' ?
+      'Java startup probe failed' : `Java >=${toolchain.java.minimumMajor} is required`;
+    throw Object.assign(new Error(`${reason}: ${JSON.stringify(execution)}`), { code, execution });
+  }
+  return { major: Number(version[1]), output: result.tail.trim(), execution };
+}
+
 export async function checkProtocolTools() {
   const installed = JSON.parse(await readFile('node_modules/@informalsystems/quint/package.json', 'utf8'));
   if (installed.version !== toolchain.quint.version) throw new Error(`Quint must be exactly ${toolchain.quint.version}; run npm ci --ignore-scripts`);
   if (await fileDigest(archive) !== toolchain.apalache.archiveSha256 || await fileDigest(jar) !== toolchain.apalache.jarSha256) throw new Error('Apalache archive/JAR does not match the pinned toolchain');
-  const java = await runProcess('java', ['-version'], { timeoutMs: 5000 });
-  const version = java.tail.match(/version\s+"(\d+)[^"]*"/);
-  if (!java.ok || !version || Number(version[1]) < toolchain.java.minimumMajor) throw new Error(`Java >=${toolchain.java.minimumMajor} is required: ${java.tail}`);
+  const java = await probeJavaVersion();
   return { quint: installed.version, apalache: toolchain.apalache.version, tlc: toolchain.apalache.bundledTlcVersion,
     apalacheJarSha256: toolchain.apalache.jarSha256, apalacheArchiveSha256: toolchain.apalache.archiveSha256,
-    java: java.tail.trim(), node: process.version, sqlite: process.versions.sqlite, quintHome };
+    java: java.output, javaProbe: java.execution, node: process.version, sqlite: process.versions.sqlite, quintHome };
 }
