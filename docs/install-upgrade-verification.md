@@ -141,3 +141,16 @@ Intel/ARM, Windows, Linux ARM and other runtimes are not_run. Browser microphone
 speaker, mobile/background audio and real devices are not_run. Disk-full, kernel
 crash, storage-controller failure and real power loss are not_run. Building or
 serving HTML does not establish audio acceptance or broaden platform support.
+
+## Current-source CI aggregation
+
+The release gate requires the dedicated install-upgrade job and exactly one report
+attempt. Its thin adapter reuses the same raw evaluator and finalized-summary
+checks. It derives the expected original repository from the actual Git root and
+the original capture directory from the checked-in job's fixed
+`verification-evidence/upgrade/run-*` convention, never from fields in the report.
+This permits the CI artifact download layout within the same checkout origin;
+it is not an arbitrary cross-machine origin override. The original local reader
+still requires the real capture directory. Other platforms and physical failure
+classes remain not_run, and this technical slot does not close the umbrella
+business or external upgrade-support acceptance requirements.

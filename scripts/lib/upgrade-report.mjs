@@ -9,13 +9,15 @@ export function upgradeChecks(directory) {
   return [{ name: 'data', command: ['test-support/upgrade-worker.mjs', path.resolve(directory, 'observations.json')], timeoutMs: 60000 },
     { name: 'install', command: ['test-support/upgrade-install.mjs', path.resolve(directory, 'install.json')], timeoutMs: 240000 }];
 }
-async function inspectUpgradeReport(directory, { release = false } = {}) {
+async function inspectUpgradeReport(directory, { release = false } = {}, ciArtifact = false) {
   const reasons = [], evidence = { data: { reasons: [], artifactReasons: [] }, install: { reasons: [], artifactReasons: [] } };
   const report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8'));
   const current = await atomicitySource(), cwd = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 5000 }).trim();
+  const expectedDirectory = ciArtifact ? path.join(cwd, 'verification-evidence/upgrade', path.basename(directory)) : path.resolve(directory);
+  if (ciArtifact) assert.match(path.basename(directory), /^run-[A-Za-z0-9]+$/, 'invalid_upgrade_run_directory');
   if (report.budgetMs !== 300000 || Date.parse(report.finishedAt) - Date.parse(report.startedAt) > 300000) reasons.push('outer_budget_mismatch');
   if (report.profile !== 'install-upgrade' || report.version !== upgradeVersion) reasons.push('wrong_profile');
-  if (report.cwd !== cwd || report.directory !== path.resolve(directory)) reasons.push('execution_location_mismatch');
+  if (report.cwd !== cwd || report.directory !== expectedDirectory) reasons.push('execution_location_mismatch');
   if (!stableAtomicitySources(report.sourceStart, report.sourceEnd, release) || !stableAtomicitySources(report.sourceEnd, current, release)) reasons.push('source_missing_changed_or_dirty');
   if (!Number.isFinite(Date.parse(report.startedAt)) || !Number.isFinite(Date.parse(report.finishedAt)) || report.finishedAt < report.startedAt || Date.parse(report.finishedAt) > Date.now() || report.error || report.cleanupOk !== true) reasons.push('incomplete_run');
   const artifacts = new Map();
@@ -24,7 +26,7 @@ async function inspectUpgradeReport(directory, { release = false } = {}) {
       const bytes = await readFile(path.join(directory, row.path)); assert.equal(hash(bytes), row.sha256); artifacts.set(row.path, bytes);
     } catch { (row.path?.startsWith('install') ? evidence.install : evidence.data).artifactReasons.push(`missing_changed_or_duplicate_artifact:${row.path}`); }
   }
-  const checks = upgradeChecks(directory);
+  const checks = upgradeChecks(expectedDirectory);
   if (JSON.stringify(report.checks?.map(row => row.name)) !== JSON.stringify(checks.map(row => row.name))) reasons.push('missing_or_duplicate_check');
   try { assertSerialUpgradeChecks(report.checks); } catch { reasons.push('overlapping_or_missing_check_windows'); }
   for (const expected of checks) {
@@ -74,6 +76,12 @@ export async function evaluateUpgradeReport(directory, options) {
 export async function readUpgradeReport(directory, options) {
   const { report, summary } = await inspectUpgradeReport(directory, options);
   return finalizedUpgradeSummary(report, summary);
+}
+// This separate adapter accepts relocated CI artifacts only at the fixed origin
+// used by the checked-in install-upgrade job. No report-supplied origin is trusted.
+export async function readUpgradeCIReport(directory, options) {
+  const { report, summary } = await inspectUpgradeReport(directory, options, true);
+  return { source: { sha: report.sourceStart?.sha, dirty: report.sourceStart?.dirty }, summary: finalizedUpgradeSummary(report, summary) };
 }
 export function finalizedUpgradeSummary(report, summary) {
   if (report.finalized === true && report.complete === summary.complete && report.ok === summary.ok && isDeepStrictEqual(report.summary, summary)) return summary;
