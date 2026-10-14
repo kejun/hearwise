@@ -47,7 +47,9 @@
     "verify:import-protocol": "node scripts/verify-import-protocol.mjs",
     "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs",
     "preverify:security": "npm run build",
-    "verify:security": "node scripts/verify-security-browser.mjs"
+    "verify:security": "node scripts/verify-security-browser.mjs",
+    "prequality:asr-mt": "npm run build",
+    "quality:asr-mt": "node scripts/evaluate-asr-translation-quality.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

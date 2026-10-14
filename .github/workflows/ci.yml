@@ -22,6 +22,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2 # Assessment fixtures require HEAD and HEAD~1.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
@@ -35,6 +36,8 @@ jobs:
       - run: npm run verify:trace-business -- --node-only --release
       - name: Verify credential and request security boundaries
         run: npm run verify:security -- --node-only --release
+      - name: Check offline ASR and MT evaluation plumbing (no quality scores or paid calls)
+        run: npm run quality:asr-mt -- offline --release
       - name: Verify relation property and evidence contract
         run: npm run verify -- --release
       - name: Preserve test progress and watchdog diagnostics
