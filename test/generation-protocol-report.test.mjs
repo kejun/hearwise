@@ -197,3 +197,35 @@ test('parent abort between action enqueue and execution does not start actual wo
   controller.abort(); await assert.rejects(action, /Generation replay aborted/); await bounded.close();
   assert.equal(starts, 0); assert.equal(closes, 1); await assert.rejects(access(database), { code: 'ENOENT' });
 });
+
+test('witness failure timelines distinguish output delivery from actual process exit and close', async () => {
+  const check = execution => {
+    const events = execution.lifecycle;
+    assert.ok(events && Number.isSafeInteger(events.spawn.pid) && events.spawn.pid > 0);
+    assert.ok(events.spawn.atMs >= 0);
+    assert.equal(events.exit.code, execution.code); assert.equal(events.exit.signal, execution.signal);
+    assert.equal(events.close.code, execution.code); assert.equal(events.close.signal, execution.signal);
+    assert.ok(events.exit.atMs >= events.spawn.atMs && events.close.atMs >= events.exit.atMs);
+    assert.ok(events.close.atMs <= execution.durationMs + 1);
+    for (const stream of ['stdout', 'stderr']) {
+      const output = events[stream]; assert.equal(output.bytes, Buffer.byteLength(execution[stream]));
+      if (output.bytes === 0) assert.deepEqual(output, { chunks: 0, bytes: 0, firstAtMs: null, lastAtMs: null });
+      else {
+        assert.ok(Number.isSafeInteger(output.chunks) && output.chunks > 0);
+        assert.ok(output.firstAtMs >= events.spawn.atMs && output.lastAtMs >= output.firstAtMs);
+        assert.ok(output.lastAtMs <= events.close.atMs);
+      }
+    }
+  };
+  await assert.rejects(runGenerationWitness(['-e', "const fs=require('node:fs');fs.writeSync(1,'first\\nlast\\n');fs.writeSync(2,'problem\\n');process.exit(7)"]), error => {
+    check(error.witnessExecution); assert.equal(error.witnessExecution.timeoutMs, 10000);
+    assert.equal(error.witnessExecution.stdout, 'first\nlast\n'); assert.equal(error.witnessExecution.stderr, 'problem\n');
+    assert.equal(error.witnessExecution.code, 7); assert.equal(error.witnessExecution.killed, false);
+    assert.deepEqual(JSON.parse(error.message.split('Generation witness execution: ')[1]).lifecycle, error.witnessExecution.lifecycle);
+    return true;
+  });
+  await assert.rejects(runGenerationWitness(['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 50 }), error => {
+    check(error.witnessExecution); assert.equal(error.witnessExecution.signal, 'SIGTERM'); assert.equal(error.witnessExecution.killed, true);
+    return true;
+  });
+});

@@ -10,11 +10,27 @@ import { normalizeGenerationTrace, generationReplayRefinement } from '../scripts
 
 export async function runGenerationWitness(argv, { cwd, env, timeoutMs = 10000, signal } = {}) {
   const startedAt = new Date().toISOString(), started = performance.now();
-  try { return await promisify(execFile)(process.execPath, argv, { cwd, env, timeout: timeoutMs, signal }); }
+  const emptyStream = () => ({ chunks: 0, bytes: 0, firstAtMs: null, lastAtMs: null });
+  const lifecycle = { spawn: null, stdout: emptyStream(), stderr: emptyStream(), exit: null, close: null };
+  const elapsed = () => Math.round((performance.now() - started) * 1000) / 1000;
+  try {
+    const pending = promisify(execFile)(process.execPath, argv, { cwd, env, timeout: timeoutMs, signal });
+    const child = pending.child;
+    child.once('spawn', () => { lifecycle.spawn = { atMs: elapsed(), pid: child.pid }; });
+    for (const stream of ['stdout', 'stderr']) child[stream]?.on('data', chunk => {
+      // Parent delivery times, not claims about when the child printed or ran.
+      const output = lifecycle[stream], atMs = elapsed();
+      output.firstAtMs ??= atMs; output.lastAtMs = atMs;
+      output.chunks++; output.bytes += Buffer.byteLength(chunk);
+    });
+    child.once('exit', (code, signal) => { lifecycle.exit = { atMs: elapsed(), code, signal }; });
+    child.once('close', (code, signal) => { lifecycle.close = { atMs: elapsed(), code, signal }; });
+    return await pending;
+  }
   catch (error) {
     error.witnessExecution = { command: process.execPath, argv, cwd, timeoutMs, startedAt, finishedAt: new Date().toISOString(),
       durationMs: Math.round(performance.now() - started), code: error.code ?? null, signal: error.signal ?? null,
-      killed: error.killed === true, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+      killed: error.killed === true, stdout: error.stdout ?? '', stderr: error.stderr ?? '', lifecycle: structuredClone(lifecycle) };
     error.message += `\nGeneration witness execution: ${JSON.stringify(error.witnessExecution)}`;
     throw error;
   }
