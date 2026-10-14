@@ -11,8 +11,13 @@ import { runProcess } from './process.mjs';
 
 const supported = {
   'relation-protocol': ['HW-03', 'HW-04', 'HW-05', 'HW-10'], 'knowledge-protocol': ['HW-03', 'HW-04', 'HW-05', 'HW-10'],
-  revision: ['HW-06', 'HW-07'], 'name-interval': ['HW-06', 'HW-07']
+  revision: ['HW-06', 'HW-07']
 };
+export const historicalCapabilities = Object.freeze({
+  supported: Object.keys(supported),
+  unavailable: [{ suite: 'name-interval', reason: 'original_execution_origin_not_recorded',
+    scope: 'Legacy runnable mutation hashes contain absolute source import URLs. Cross-checkout reconstruction cannot establish the original execution origin; current-source acceptance remains available.' }]
+});
 export async function historicalBindings(suite, profile, originalReport) {
   if (!Object.hasOwn(supported, suite)) throw new Error('Historical suite is not supported');
   const files = execFileSync('git', ['ls-files', '-z'], { timeout: 10000 }).toString('utf8').split('\0').filter(Boolean);
@@ -40,6 +45,7 @@ export async function historicalBindings(suite, profile, originalReport) {
 }
 export async function validateHistoricalEvidence(suite, directory, { profile = 'fast' } = {}) {
   const target = sourceVersion(), result = { suite, ok: false, eligible: false, sourceMode: 'historical', target, reasons: [], fullProjectAcceptance: false };
+  if (suite === 'name-interval') return { ...result, reasons: ['original_execution_origin_not_recorded'], limitation: historicalCapabilities.unavailable[0].scope };
   if (!Object.hasOwn(supported, suite)) return { ...result, reasons: ['historical_validator_not_registered'] };
   let source;
   try { source = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8')).source; }

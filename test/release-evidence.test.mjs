@@ -18,6 +18,8 @@ test('fixed release purposes expose all fifteen business domains and unfrozen ex
     assert.equal(result.requirements.length, 15); assert.ok(result.requirements.every(row => row.status === 'not_run'));
     assert.equal(result.external.length, 8); assert.ok(result.external.every(row => row.status === 'not_run' && row.validator === null && row.frozenConfiguration === null));
     assert.equal(result.automaticPaidCalls, false);
+    assert.deepEqual(result.historicalCapabilities.supported, ['relation-protocol', 'knowledge-protocol', 'revision']);
+    assert.equal(result.historicalCapabilities.unavailable[0].suite, 'name-interval');
   }
   await assert.rejects(releaseEvidence({}, { purpose: 'skip-heavy' }));
   await assert.rejects(releaseEvidence({}, { profile: 'shallow' }));
@@ -36,6 +38,7 @@ test('missing, duplicate, wrong-suite and ambiguous evidence cannot become a cur
 test('historical reader rejects unsupported and absent evidence and binds its conservative dependency closure', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'historical-gate-missing-')); t.after(() => rm(directory, { recursive: true, force: true }));
   assert.deepEqual((await validateHistoricalEvidence('quality', directory)).reasons, ['historical_validator_not_registered']);
+  assert.deepEqual((await validateHistoricalEvidence('name-interval', directory)).reasons, ['original_execution_origin_not_recorded']);
   assert.deepEqual((await validateHistoricalEvidence('revision', directory)).reasons, ['missing_original_report']);
   await writeFile(path.join(directory, 'report.json'), JSON.stringify({ source: { sha: '0'.repeat(40), dirty: true }, ok: true }));
   assert.deepEqual((await validateHistoricalEvidence('revision', directory)).reasons, ['unclean_or_invalid_source']);

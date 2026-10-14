@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { purposes, technicalSuites, fullRequirements, externalRequirements } from '../../verification/release/policy.mjs';
 import { sourceVersion } from './verification-evidence.mjs';
+import { historicalCapabilities } from './historical-release-evidence.mjs';
 import { impactPlan } from './verification-impact.mjs';
 import { validateNodeEvidence, validateBrowserEvidence } from './runner-report-evidence.mjs';
 import { validatePilotEvidence } from './pilot-release-evidence.mjs';
@@ -64,7 +65,7 @@ export async function releaseEvidence(manifest, { purpose = 'pr', profile = 'fas
   const external = externalRequirements.map(row => ({ ...row, status: 'not_run', reasons: ['validator_not_registered', 'configuration_or_threshold_not_frozen'] }));
   const fullAcceptance = technicalPassed && requirements.every(row => row.status === 'passed') && external.every(row => row.status === 'passed');
   const ok = purpose === 'release' ? fullAcceptance : technicalPassed;
-  return { schemaVersion: 1, purpose, profile, target, impact, reasons, required, rows, historical, technicalPassed, fullAcceptance, fullProjectAcceptance: fullAcceptance,
+  return { schemaVersion: 1, purpose, profile, target, impact, reasons, required, rows, historical, historicalCapabilities, technicalPassed, fullAcceptance, fullProjectAcceptance: fullAcceptance,
     releaseEligible: purpose === 'release' && fullAcceptance, ok,
     status: ok ? 'passed' : rows.some(row => row.status === 'failed') ? 'failed' : 'incomplete',
     requirements, external, automaticPaidCalls: false,
