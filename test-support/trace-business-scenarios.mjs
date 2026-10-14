@@ -58,6 +58,7 @@ export async function runWorkflowScenario(name) {
       assert.deepEqual(late.query.job, before.query.job); assert.deepEqual(late.query.graph.relations, []);
       assert.equal(late.activeCount, 1, 'Old cleanup cannot release the new task');
       assert.deepEqual(late.snapshot, before.snapshot, 'Late usage must not append a successful old execution');
+      late.beforeLate = { query: before.query, snapshot: before.snapshot, activeCount: before.activeCount };
       const oldLedger = h.store.db.prepare('SELECT attempt,outcome,usage_json FROM relation_requests WHERE job_id=?').all(oldJob.id);
       assert.equal(oldLedger.length, 1); assert.equal(JSON.parse(oldLedger[0].usage_json).total_tokens, 71);
       assert.equal(oldLedger[0].outcome, 'late_response'); late.oldLedger = oldLedger; captures.push(late);

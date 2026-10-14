@@ -32,6 +32,7 @@ jobs:
       - run: npm run check:version
       - run: npm run typecheck
       - run: npm test
+      - run: npm run verify:trace-business -- --node-only --release
       - name: Verify relation property and evidence contract
         run: npm run verify -- --release
       - name: Preserve test progress and watchdog diagnostics

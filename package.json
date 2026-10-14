@@ -25,6 +25,8 @@
     "preverify": "npm run build",
     "verify": "node scripts/verify.mjs",
     "verify:report": "node scripts/verify-report.mjs",
+    "preverify:trace-business": "npm run build",
+    "verify:trace-business": "node scripts/verify-trace-business-browser.mjs",
     "preverify:revision": "npm run build",
     "verify:revision": "node scripts/verify-revision.mjs",
     "preverify:name-interval": "npm run build",

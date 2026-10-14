@@ -12,9 +12,10 @@ import { deadline } from '../test-support/lifecycle.mjs';
 
 async function fixture(t, source) {
   const directory = await mkdtemp(path.join(tmpdir(), 'trace-notification-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
   const preload = path.join(directory, 'fault.mjs'); await writeFile(preload, source);
   const f = await speechFixture({ extraEnv: { NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import=${preload}`.trim() } });
-  t.after(async () => { try { await f.close(); } finally { await rm(directory, { recursive: true, force: true }); } });
+  t.after(() => f.close());
   return f;
 }
 async function connect(t, f, route) {

@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { speechFixture } from './speech-fixture.mjs';
 import { relationWireEnvelope } from './relation-wire-fixture.mjs';
 import { DatabaseSync } from 'node:sqlite';
+import { deadline } from './lifecycle.mjs';
 
 export const traceEvents = logs => logs.split('\n').filter(line => line.startsWith('execution_trace ')).map(line => JSON.parse(line.slice(16)));
 export async function until(check, timeout = 12000) {
@@ -16,7 +17,8 @@ async function socket(base, route) {
   const ws = new WebSocket(base.replace('http', 'ws') + route), events = [], frames = [];
   ws.on('message', (raw, binary) => { if (!binary) events.push(JSON.parse(raw.toString()));
     else frames.push({ epoch: raw.readUInt32LE(0), unit: raw.readUInt32LE(4), bytes: raw.length }); });
-  await once(ws, 'open');
+  try { await deadline(() => once(ws, 'open'), 3000, 'Full Trace WebSocket startup'); }
+  catch (error) { ws.terminate(); throw error; }
   return { ws, events, frames, send: message => ws.send(JSON.stringify(message)) };
 }
 
@@ -55,7 +57,8 @@ export async function fullTraceFixture({ observations = false } = {}) {
     await until(() => speech.events.some(e => e.type === 'speech.unit-end'));
     const end = speech.events.find(e => e.type === 'speech.unit-end');
     speech.send({ type: 'speech.progress', epoch: 7, playedUnit: end.unit, consumedSamples: end.samples });
-    const asrClosed = once(asr.ws, 'close'); asr.send({ type: 'stop' }); await asrClosed;
+    if (observations) speech.send({ type: 'speech.progress', epoch: 7, playedUnit: end.unit, consumedSamples: end.samples });
+    const asrClosed = once(asr.ws, 'close'); asr.send({ type: 'stop' }); await deadline(() => asrClosed, 3000, 'Full Trace ASR stop');
     await until(() => speech.events.some(e => e.type === 'speech.finished'));
     await until(() => traceEvents(f.logs()).some(e => e.step_key === 'knowledge.execute' && e.state === 'succeeded'));
     // Cover the second TTS provider and HTTP preview translation independently.
