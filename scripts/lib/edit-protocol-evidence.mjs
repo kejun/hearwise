@@ -57,7 +57,8 @@ export async function validateEditProtocolEvidence(directory, { release = false 
   let report;
   try { report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8')); }
   catch { return { ok: false, reasons: ['missing_or_invalid_report'], rows, target, fullProjectAcceptance: false }; }
-  if (!report || !Array.isArray(report.results) || !Array.isArray(report.artifacts)) return { ok: false, reasons: ['invalid_report_shape'], rows, target, fullProjectAcceptance: false };
+  if (!report || !Array.isArray(report.results) || !Array.isArray(report.artifacts) ||
+      [...report.results, ...report.artifacts].some(value => !value || typeof value !== 'object' || Array.isArray(value))) return { ok: false, reasons: ['invalid_report_shape'], rows, target, fullProjectAcceptance: false };
   const pin = JSON.parse(await readFile('verification/relation-protocol/toolchain.json', 'utf8'));
   if (report.schemaVersion !== 1 || report.domain !== 'edit-protocol' || report.specificationVersion !== target.specificationVersion || report.modelVersion !== target.modelVersion) reasons.push('invalid_contract');
   if (report.source?.sha !== target.source.sha || report.modelDigest !== target.modelDigest || report.lockDigest !== target.lockDigest) reasons.push('stale');

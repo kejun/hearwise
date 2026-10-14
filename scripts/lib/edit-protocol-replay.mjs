@@ -93,7 +93,7 @@ export async function replayEditTrace(trace, createAdapter, { stepTimeoutMs = 15
   try {
     if (!validateEditTrace(trace)) throw new Error('Invalid edit replay contract');
     adapter = await deadline(() => createAdapter(trace.config), stepTimeoutMs, 'edit adapter startup');
-    const compare = async expected => {
+    const compare = expected => deadline(async () => {
       const actual = clone(await adapter.project()), durable = clone(await adapter.observe());
       const durableViolations = clone(await adapter.check?.() || []);
       result.observations.push({ step: currentStep, actual, durable, durableViolations });
@@ -104,7 +104,7 @@ export async function replayEditTrace(trace, createAdapter, { stepTimeoutMs = 15
         return false;
       }
       return true;
-    };
+    }, stepTimeoutMs, `edit projection ${currentStep}`);
     if (!await compare(trace.initial)) { result.complete = true; return result; }
     for (const [index, step] of trace.steps.entries()) {
       currentStep = index;

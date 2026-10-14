@@ -52,6 +52,8 @@ test('driver treats unavailable operations, deadline and failed cleanup as unrep
   assert.equal(thrown.classification, 'unreplayable'); assert.equal(thrown.complete, false);
   const timed = await replayEditTrace(trace, async () => ({ ...base, act: () => new Promise(() => {}) }), { stepTimeoutMs: 5 });
   assert.equal(timed.classification, 'unreplayable'); assert.match(timed.error.message, /edit action/);
+  const observation = await replayEditTrace(trace, async () => ({ ...base, project: () => new Promise(() => {}), act() {} }), { stepTimeoutMs: 5 });
+  assert.equal(observation.classification, 'unreplayable'); assert.match(observation.error.message, /edit projection/);
   const cleanup = await replayEditTrace(trace, async () => ({ ...base, act() {}, close() { throw new Error('Still running'); } }));
   assert.equal(cleanup.classification, 'unreplayable'); assert.equal(cleanup.complete, false); assert.equal(cleanup.cleanupError, 'Still running');
 });
