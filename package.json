@@ -66,7 +66,9 @@
     "preverify:generation-protocol": "npm run build",
     "verify:generation-protocol": "node scripts/verify-generation-protocol.mjs",
     "verify:generation-protocol:report": "node scripts/verify-generation-report.mjs",
-    "verify:m1:report": "node scripts/verify-m1-report.mjs"
+    "verify:m1:report": "node scripts/verify-m1-report.mjs",
+    "prequality:semantic": "npm run build",
+    "quality:semantic": "node scripts/evaluate-semantic-quality.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
