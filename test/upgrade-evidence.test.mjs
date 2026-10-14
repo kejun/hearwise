@@ -33,7 +33,7 @@ test('upgrade result rejects interrupted, missing, timed out and nonzero exits',
   assert.equal(Boolean(passedExecution(null)), false); assert.equal(new Set(expectedCases).size, 45);
 });
 
-import { upgradeCheckStatus } from '../scripts/lib/upgrade-report.mjs';
+import { upgradeCheckStatus, assertSerialUpgradeChecks } from '../scripts/lib/upgrade-report.mjs';
 test('upgrade gate distinguishes complete failed evidence from missing and interrupted evidence', () => {
   const complete = { execution: { code: 0, signal: null, timedOut: false, interrupted: false, ok: true }, raw: { complete: true } };
   assert.equal(upgradeCheckStatus(complete), 'passed');
@@ -84,4 +84,11 @@ test('upgrade control generation failure stays data-local and saves its diagnost
     assert.equal(upgradeCheckStatus({ ...completed, reasons: [report.controlsError.message] }), 'failed');
     assert.equal(upgradeCheckStatus(completed), 'passed');
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('upgrade report rejects overlapping data and installer execution windows', () => {
+  const checks = [{ name: 'data', startedAt: 10, finishedAt: 20 }, { name: 'install', startedAt: 20, finishedAt: 30 }];
+  assertSerialUpgradeChecks(checks);
+  assert.throws(() => assertSerialUpgradeChecks([{ ...checks[0] }, { ...checks[1], startedAt: 19 }]));
+  assert.throws(() => assertSerialUpgradeChecks(checks.toReversed()));
 });

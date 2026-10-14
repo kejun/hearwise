@@ -25,6 +25,7 @@ export async function readUpgradeReport(directory, { release = false } = {}) {
   }
   const checks = upgradeChecks(directory);
   if (JSON.stringify(report.checks?.map(row => row.name)) !== JSON.stringify(checks.map(row => row.name))) reasons.push('missing_or_duplicate_check');
+  try { assertSerialUpgradeChecks(report.checks); } catch { reasons.push('overlapping_or_missing_check_windows'); }
   for (const expected of checks) {
     const entry = evidence[expected.name], errors = entry.reasons, row = report.checks?.find(row => row.name === expected.name);
     entry.execution = row?.execution;
@@ -67,4 +68,9 @@ export function upgradeCheckStatus({ execution, raw, reasons = [], artifactReaso
   const finished = execution && [0, 1].includes(execution.code) && execution.signal === null && execution.timedOut === false && execution.interrupted === false;
   if (globalReasons.length || artifactReasons.length || !finished || !raw || raw.complete !== true) return 'incomplete';
   return execution.code === 0 && execution.ok === true && !reasons.length ? 'passed' : 'failed';
+}
+
+export function assertSerialUpgradeChecks(checks) {
+  assert.equal(checks.length, 2); assert.equal(checks[0].name, 'data'); assert.equal(checks[1].name, 'install');
+  assert.ok(checks[0].finishedAt <= checks[1].startedAt, 'actual data and install processes run serially');
 }
