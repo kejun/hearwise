@@ -109,10 +109,15 @@ try {
   assert.equal(await page.evaluate(() => navigator.mediaSession.playbackState), 'none');
   assert.ok(await page.evaluate(() => Object.values(window.mediaActions).every(handler => handler === null)));
   const commits = fixture.stats.commits.length;
+  // Freeze only automatic ASR production so this current-caption assertion
+  // cannot race the next synthetic final. Audio and real ASR/MT remain active.
+  fixture.setAutoSentences(false);
   fixture.final('Sentence 99.');
   await page.locator('#translation').filter({ hasText: '99' }).waitFor({ state: 'attached' });
   assert.equal(fixture.stats.commits.length, commits);
   await page.getByRole('button', { name: '开启译文播报', exact: true }).click();
+  // A newly enabled speech stream intentionally accepts future sentences.
+  fixture.setAutoSentences(true);
   await until(() => fixture.stats.commits.length > commits);
   await page.getByRole('button', { name: '停止聆听', exact: true }).click();
   await page.getByRole('button', { name: '开启译文播报', exact: true }).waitFor();
@@ -149,6 +154,7 @@ try {
   await page.getByRole('button', { name: '收起吸顶字幕', exact: true }).click();
   assert.equal(await page.locator('#pinned-toggle').getAttribute('aria-expanded'), 'false');
   assert.ok((await page.locator('#pinned-caption').boundingBox()).height < expandedHeight);
+  fixture.setAutoSentences(false);
   fixture.final('Sentence 777.');
   await page.locator('#pinned-translation').filter({ hasText: '777' }).waitFor({ state: 'attached' });
   assert.equal(await page.locator('#pinned-translation').isHidden(), true);
