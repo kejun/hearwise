@@ -5,6 +5,7 @@ import { runProcess } from './process.mjs';
 import { digest, writeJson } from './verification-evidence.mjs';
 import { checkProtocolTools, quintCli, quintHome, toolchain } from './relation-protocol-tools.mjs';
 import { formalPlan, checkerConclusion } from './formal-protocol-evidence.mjs';
+import { sourceSnapshot, sameSourceSnapshot, validBuildSource } from './runner-evidence-contract.mjs';
 
 // A shared execution/evidence interface. Domain definitions supply their model,
 // projections and acceptance controls; neither domain can reuse another's pass.
@@ -16,8 +17,11 @@ export async function runFormalProtocol(definition) {
   const root = path.resolve(process.env[definition.environmentVariable] || definition.defaultDirectory);
   await mkdir(root, { recursive: true });
   const directory = await mkdtemp(path.join(root, 'run-'));
+  const sourceStart = await sourceSnapshot();
+  if (!validBuildSource(sourceStart)) throw new Error('Build source differs from checkout; run npm run build before verification');
   const context = await definition.metadata(), startedAt = new Date().toISOString();
-  const report = { ...context, profile, startedAt, finishedAt: null, complete: false, ok: false, tools: null,
+  const report = { ...context, sourceStart, sourceEnd: null, profile, startedAt, finishedAt: null, complete: false, ok: false, tools: null,
+    executionContext: { repositoryRoot: process.cwd(), evidenceDirectory: directory, quintCli, overallTimeoutMs: definition.overallTimeoutMs?.[profile] ?? (profile === 'deep' ? 1200000 : 480000), jvmArgs: '-Xmx2G' },
     domain: config, propertyCoverage: definition.coverage(config), results: [], artifacts: [], execution: { complete: false, timedOut: false, interrupted: false } };
   await writeJson(path.join(directory, 'report.json'), report);
   console.log(`${definition.label} evidence: ${directory}`);
@@ -139,6 +143,10 @@ export async function runFormalProtocol(definition) {
       catch { report.complete = false; report.execution.complete = false; }
     }
     const target = await definition.metadata();
+    try { report.sourceEnd = await sourceSnapshot(); } catch (error) { report.error = { message: error.message }; }
+    if (!sameSourceSnapshot(sourceStart, report.sourceEnd) || !validBuildSource(report.sourceEnd)) {
+      report.complete = false; report.execution.complete = false; report.error = { message: 'Source or actual build changed during execution' };
+    }
     if (JSON.stringify(target) !== JSON.stringify(context)) { report.complete = false; report.execution.complete = false; report.error = { message: 'Source or verification inputs changed during execution' }; }
     await save();
   }

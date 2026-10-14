@@ -1,3 +1,8 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { digest } from '../scripts/lib/verification-evidence.mjs';
 import { isDeepStrictEqual } from 'node:util';
 
 const primaryCases = ['append', 'replace'].flatMap(mode => ['stale-review', 'expired-upload'].map(name => ({ mode, name })));
@@ -70,4 +75,28 @@ export function summarizeImportBrowserEvidence(observations) {
   });
   const complete = results.every(result => result.complete) && !(observations.errors || []).length;
   return { results, complete, ok: complete && results.every(result => result.ok) };
+}
+
+export async function importBrowserSourceStamp() {
+  const git = args => execFileSync('git', args, { encoding: 'utf8', timeout: 5000 }).trim();
+  const files = new Map(), pending = ['scripts/verify-import-protocol-browser.mjs', 'scripts/run-browser-tests.mjs',
+    'server.mjs', 'test-support/import-protocol-control.mjs', 'public/app.js', 'public/index.html', 'public/style.css',
+    'scripts/build.mjs', 'verification/import-protocol/properties.mjs', 'package.json', 'package-lock.json'];
+  // Bind the actual generated server bundle and local transitive helpers, not
+  // merely HEAD or the dirty boolean. The fixture loads the server via a child.
+  while (pending.length) {
+    const file = pending.pop();
+    if (files.has(file)) continue;
+    const bytes = await readFile(file);
+    files.set(file, digest(bytes));
+    if (!/\.(?:mjs|js)$/.test(file)) continue;
+    for (const match of bytes.toString().matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)['"](\.[^'"]+)['"]/g)) {
+      const dependency = path.normalize(path.join(path.dirname(file), match[1]));
+      assert.ok(!path.isAbsolute(dependency) && !dependency.startsWith('..'), 'source stays inside checkout');
+      pending.push(dependency);
+    }
+  }
+  return { sha: git(['rev-parse', '--verify', 'HEAD']),
+    dirty: Boolean(git(['status', '--porcelain', '--untracked-files=normal'])),
+    digests: Object.fromEntries([...files].sort(([a], [b]) => a.localeCompare(b))) };
 }

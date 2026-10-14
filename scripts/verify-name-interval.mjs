@@ -5,6 +5,7 @@ import { profile, requiredSteps, requiredArtifacts, gate } from '../verification
 import { sourceVersion, writeJson, digest, checkArtifacts } from './lib/verification-evidence.mjs';
 import { runProcess } from './lib/process.mjs';
 import { tapMetrics } from './lib/tap-summary.mjs';
+import { nameIntervalSources as sources } from './lib/lean-source-files.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => arg !== '--release')) throw new Error('Usage: npm run verify:name-interval -- [--release]');
@@ -12,14 +13,6 @@ const root = path.resolve(process.env.NAME_INTERVAL_EVIDENCE_DIR || 'name-interv
 await mkdir(root, { recursive: true });
 const directory = await mkdtemp(path.join(root, 'run-'));
 const leanDirectory = path.resolve('verification/lean');
-const sources = ['knowledge-edit.mjs', 'knowledge-name-replacement.mjs', 'relation-storage.mjs', 'storage.mjs', 'data-transfer.mjs',
-  'verification/lean/Revision.lean', 'verification/lean/NameInterval.lean', 'verification/lean/NameIntervalMain.lean',
-  'verification/lean/NameIntervalAxiomAudit.lean', 'verification/lean/lean-toolchain', 'verification/lean/lakefile.toml',
-  'verification/lean/lake-manifest.json', 'verification/name-interval/corpus.mjs',
-  'verification/name-interval/differential.mjs', 'verification/name-interval/profile.mjs',
-  'test-support/name-replacement-fixture.mjs', 'test/knowledge-name-replacement.test.mjs',
-  'test-support/name-replacement-import-fixture.mjs', 'test/knowledge-name-replacement-import.test.mjs',
-  'scripts/lib/process.mjs', 'scripts/lib/tap-summary.mjs', 'scripts/lib/verification-evidence.mjs', 'scripts/verify-name-interval.mjs', 'package.json', 'package-lock.json', '.github/workflows/ci.yml'];
 const profileDigest = digest(JSON.stringify(profile));
 const report = { schemaVersion: 1, profileVersion: profile.version, profileDigest, profile, source: sourceVersion(),
   startedAt: new Date().toISOString(), finishedAt: null, complete: false, interrupted: false, ok: false,

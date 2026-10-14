@@ -5,7 +5,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { createEditFixture, editTables } from './edit-protocol-fixture.mjs';
 import { deadline } from './lifecycle.mjs';
-import { writeJson } from '../scripts/lib/verification-evidence.mjs';
+import { digest, writeJson } from '../scripts/lib/verification-evidence.mjs';
 
 const directory = path.resolve(process.argv[2] || 'browser-evidence');
 await mkdir(directory, { recursive: true });
@@ -59,7 +59,16 @@ async function layoutAndScreenshot(value, name) {
   }), true, 'Visible editor must fit desktop/narrow viewport');
   await page.screenshot({ path: path.join(directory, name) });
 }
-const counts = value => ({ writes: value.writes, explicitSaves: value.explicitSaves, receiptReads: value.receiptReads, submissions: value.submissions });
+async function capture(fixture, value, label) {
+  return { label, snapshot: fixture.snapshot(), tables: editTables(fixture.store), client: counts(value), errors: [...value.errors], providerCalls: fixture.stats.providerRequests.length,
+    ui: await value.page.evaluate(() => {
+      const get = name => document.querySelector('#knowledge-edit-' + name), dialog = document.querySelector('#knowledge-editor'), box = dialog.getBoundingClientRect();
+      return { open: dialog.open, name: get('name').value, source: get('source').value, status: get('status').textContent,
+        disabled: Object.fromEntries(['name', 'save', 'delete', 'suggest', 'close'].map(name => [name, get(name).disabled])),
+        scrollWidth: dialog.scrollWidth, clientWidth: dialog.clientWidth, left: box.left, right: box.right, width: innerWidth };
+    }) };
+}
+const counts = value => ({ writes: value.writes, explicitSaves: value.explicitSaves, receiptReads: value.receiptReads, submissions: structuredClone(value.submissions) });
 async function change(fixture, name) {
   const snapshot = fixture.snapshot();
   const response = await fetch(fixture.url + '/name-replacements', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': randomUUID() },
@@ -69,10 +78,12 @@ async function change(fixture, name) {
 async function runScenario(width, scenario) {
   const fixture = await createEditFixture(), opened = [], release = deferred();
   const open = async options => { const value = await client(fixture, width, options); opened.push(value); return value; };
-  let details;
+  let details; const evidence = [];
+  const record = async (label, client) => { evidence.push(await capture(fixture, client, label)); };
   try {
     if (scenario === 'conflict') {
       const a = await open(), b = await open(), initial = fixture.snapshot();
+      await record('initial', b);
       await b.page.locator('#knowledge-edit-name').fill('Mira');
       await submit(a, 'Tibo'); await a.page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
       const conflict = b.page.waitForResponse(response => response.url() === fixture.url + '/name-replacements' && response.status() === 409);
@@ -82,14 +93,17 @@ async function runScenario(width, scenario) {
       assert.equal(await b.page.locator('#knowledge-edit-name').inputValue(), 'Mira');
       assert.equal(await b.page.locator('#knowledge-edit-source').inputValue(), 'Tibo');
       assert.equal(b.writes, 1); assert.equal(a.submissions[0].revision, initial.revision); assert.equal(b.submissions[0].revision, initial.revision);
-      await layoutAndScreenshot(b, `edits-${width}-${scenario}.png`);
+      await record('conflict', b); await layoutAndScreenshot(b, `edits-${width}-${scenario}.png`);
       await b.page.locator('#knowledge-edit-close').focus(); await b.page.keyboard.press('Enter');
       await b.open(); assert.equal(await b.page.locator('#knowledge-edit-name').inputValue(), 'Tibo');
+      await record('reopened', b);
       await submit(b, 'Mira'); await b.page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
       assert.equal(b.writes, 2); assert.equal(fixture.snapshot().item.canonical_name, 'Mira');
+      await record('continued', b);
       details = { clients: [counts(a), counts(b)], originalRevision: initial.revision, saved: fixture.snapshot().revision };
     } else if (scenario.startsWith('unknown-')) {
       const a = await open(), before = fixture.snapshot(); let actualCommit;
+      await record('initial', a);
       await a.page.route(fixture.url + '/edits/**', route => route.fulfill({ status: 502, contentType: 'text/html', body: 'Synthetic unavailable receipt' }), { times: 1 });
       await a.page.route(fixture.url + '/name-replacements', async route => {
         const response = await route.fetch(); assert.equal(response.status(), 200); actualCommit = await response.json();
@@ -107,17 +121,20 @@ async function runScenario(width, scenario) {
       assert.notEqual(fixture.snapshot().revision, before.revision);
       assert.equal(fixture.store.knowledgeEditJob(fixture.listeningId, fixture.itemId, actualCommit.job.id).saved, true);
       await layoutAndScreenshot(a, `edits-${width}-${scenario}.png`);
+      await record('unknown', a);
       const beforeClose = editTables(fixture.store);
       await a.page.locator('#knowledge-edit-close').focus(); await a.page.keyboard.press('Enter'); await a.open();
       assert.deepEqual(editTables(fixture.store), beforeClose, 'Closing/reopening an uncertain editor performs no business write');
       assert.equal(a.writes, 1);
       assert.equal(await a.page.locator('#knowledge-edit-name').inputValue(), 'Tibo');
       assert.equal(await a.page.locator('#knowledge-edit-save').isEnabled(), true);
+      await record('reopened', a);
       await submit(a, 'Mira'); await a.page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
       assert.equal(a.writes, 2); assert.equal(fixture.snapshot().item.canonical_name, 'Mira');
+      await record('continued', a);
       details = { ...counts(a), committedBeforeTransportFailure: true, receipt: actualCommit.job, reopened: 'Tibo', continued: 'Mira', closeReopenNoWrite: true };
     } else if (scenario === 'rollback') {
-      const a = await open(), before = editTables(fixture.store);
+      const a = await open(), before = editTables(fixture.store); await record('initial', a);
       await a.page.route(fixture.url + '/name-replacements', async route => {
         await fixture.control(route.request().headers()['idempotency-key'], 'request', { rollback: true, pause: false }); await route.continue();
       }, { times: 1 });
@@ -125,12 +142,13 @@ async function runScenario(width, scenario) {
       assert.equal(await a.page.locator('#knowledge-edit-name').inputValue(), 'Tibo');
       assert.equal(await a.page.locator('#knowledge-edit-save').isEnabled(), true);
       assert.deepEqual(editTables(fixture.store), before); assert.equal(a.receiptReads, 0); assert.equal(a.writes, 1);
-      await layoutAndScreenshot(a, `edits-${width}-${scenario}.png`);
+      await record('rolled-back', a); await layoutAndScreenshot(a, `edits-${width}-${scenario}.png`);
       await submit(a, 'Tibo'); await a.page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
       assert.equal(a.writes, 2); assert.equal(fixture.snapshot().item.canonical_name, 'Tibo');
+      await record('continued', a);
       details = { ...counts(a), allTablesRolledBack: true, explicitRetrySucceeded: true };
     } else if (scenario === 'late-success') {
-      const a = await open(), committed = deferred();
+      const a = await open(), committed = deferred(); await record('initial', a);
       await a.page.route(fixture.url + '/name-replacements', async route => {
         const response = await route.fetch(); assert.equal(response.status(), 200); committed.resolve();
         await release.promise; await route.fulfill({ response });
@@ -138,25 +156,28 @@ async function runScenario(width, scenario) {
       await submit(a, 'Tibo'); await deadline(() => committed.promise, 5000, 'First actual commit');
       assert.equal(await a.page.locator('#knowledge-edit-close').isDisabled(), true);
       await a.page.keyboard.press('Escape'); assert.equal(await a.page.locator('#knowledge-editor').isVisible(), true);
+      await record('busy-after-commit', a);
       const b = await open(); assert.equal(await b.page.locator('#knowledge-edit-name').inputValue(), 'Tibo');
+      await record('later-client', b);
       await submit(b, 'Mira'); await b.page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
-      assert.equal(fixture.snapshot().item.canonical_name, 'Mira'); release.resolve();
+      assert.equal(fixture.snapshot().item.canonical_name, 'Mira'); await record('later-save', b); release.resolve();
       await a.page.locator('#knowledge-editor').waitFor({ state: 'hidden' });
       await a.open(); assert.equal(await a.page.locator('#knowledge-edit-name').inputValue(), 'Mira');
       assert.equal(a.writes, 1); assert.equal(b.writes, 1);
       await layoutAndScreenshot(a, `edits-${width}-${scenario}.png`);
+      await record('reopened', a);
       details = { clients: [counts(a), counts(b)], lateResponseDoesNotRevert: true, loaded: 'Mira' };
     } else throw new Error('Unknown edit scenario');
     for (const value of opened) { assert.deepEqual(value.errors, []); assert.equal(value.writes, value.explicitSaves); }
     assert.equal(fixture.stats.providerRequests.length, 0);
-    return { scenario, complete: true, ok: true, ...details, providerCalls: 0 };
+    return { scenario, complete: true, ok: true, ...details, evidence, providerCalls: 0 };
   } finally { release.resolve(); for (const value of opened) await value.context.close(); await fixture.close(); }
 }
 async function negativeClient() {
   const fixture = await createEditFixture(); let a;
   try {
     a = await client(fixture, 390, { mutant: true });
-    await change(fixture, 'Tibo');
+    await change(fixture, 'Tibo'); const before = await capture(fixture, a, 'before-mutant-save');
     const overwritten = a.page.waitForResponse(response => response.url() === fixture.url + '/name-replacements' && response.status() === 200);
     await submit(a, 'Mira'); const excess = await deadline(() => a.excess.promise, 5000, 'Actual broken editor automatic resend');
     assert.equal((await (await overwritten).json()).job.saved, true);
@@ -164,7 +185,8 @@ async function negativeClient() {
     assert.deepEqual(excess, { writes: 2, explicitSaves: 1 }); assert.equal(fixture.snapshot().item.canonical_name, 'Mira');
     assert.equal(fixture.stats.providerRequests.length, 0); assert.deepEqual(a.errors, []);
     await a.page.screenshot({ path: path.join(directory, 'edits-390-auto-resend-negative.png') });
-    return { complete: true, classification: 'implementation_mismatch', property: 'HW-06-06',
+    const source = await readFile('public/knowledge-editor.js', 'utf8'), anchor = 'current.revision = snapshot.revision;', replacement = anchor + "\n    setTimeout(() => { void save('POST'); }, 0); // Deliberately broken response-handler retry.";
+    return { evidence: [before, await capture(fixture, a, 'after-mutant-save')], sourceSha256: digest(source), mutantSha256: digest(source.replace(anchor, replacement)), complete: true, classification: 'implementation_mismatch', property: 'HW-06-06',
       mutation: 'Actual served public/knowledge-editor.js conflict handler sends a second POST after adopting the latest revision',
       counterexample: { ...counts(a), overwrittenName: 'Tibo', persistedName: 'Mira', firstExcessRequest: excess.writes } };
   } finally { await a?.context.close(); await fixture.close(); }

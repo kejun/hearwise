@@ -5,6 +5,7 @@ import { profile, requiredSteps, requiredArtifacts, gate } from '../verification
 import { sourceVersion, writeJson, digest, checkArtifacts } from './lib/verification-evidence.mjs';
 import { runProcess } from './lib/process.mjs';
 import { tapMetrics } from './lib/tap-summary.mjs';
+import { revisionSources as sources } from './lib/lean-source-files.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => arg !== '--release')) throw new Error('Usage: npm run verify:revision -- [--release]');
@@ -12,10 +13,6 @@ const root = path.resolve(process.env.REVISION_EVIDENCE_DIR || 'revision-evidenc
 await mkdir(root, { recursive: true });
 const directory = await mkdtemp(path.join(root, 'run-'));
 const leanDirectory = path.resolve('verification/lean');
-const sources = ['knowledge-revision.mjs', 'verification/lean/Revision.lean', 'verification/lean/Main.lean',
-  'verification/lean/AxiomAudit.lean', 'verification/lean/lean-toolchain', 'verification/lean/lakefile.toml',
-  'verification/lean/lake-manifest.json', 'verification/revision/corpus.mjs', 'verification/revision/differential.mjs',
-  'verification/revision/profile.mjs', 'test-support/knowledge-revision-fixture.mjs', 'test/knowledge-revision.test.mjs', 'scripts/lib/tap-summary.mjs', 'package-lock.json'];
 const profileDigest = digest(JSON.stringify(profile));
 const report = { schemaVersion: 1, profileVersion: profile.version, profileDigest, profile, source: sourceVersion(),
   startedAt: new Date().toISOString(), finishedAt: null, complete: false, interrupted: false, ok: false,
