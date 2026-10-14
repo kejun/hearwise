@@ -42,7 +42,12 @@
     "preperformance:collect": "npm run build",
     "performance:collect": "node scripts/collect-performance.mjs",
     "performance:report": "node scripts/verify-performance-report.mjs",
-    "performance:compare": "node scripts/compare-performance.mjs"
+    "performance:compare": "node scripts/compare-performance.mjs",
+    "preverify:security": "npm run build",
+    "verify:security": "node scripts/verify-security-browser.mjs",
+    "preverify:import-protocol": "npm run build",
+    "verify:import-protocol": "node scripts/verify-import-protocol.mjs",
+    "verify:import-protocol:report": "node scripts/verify-import-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

@@ -1,0 +1,23 @@
+{
+  "quint": { "package": "@informalsystems/quint", "version": "0.33.0", "simulationBackend": "typescript" },
+  "apalache": {
+    "version": "0.62.1",
+    "release": "https://github.com/apalache-mc/apalache/releases/tag/v0.62.1",
+    "url": "https://github.com/apalache-mc/apalache/releases/download/v0.62.1/apalache.tgz",
+    "archiveSha256": "38202a8c4ebeb3ab73e0fe5a7e4bb948442d46ad5de8a7fb45c9e5cac2beb2a6",
+    "jarSha256": "880c0b2b72354816f12e9a9755829f2907071e9a181ffea1937954c23d54739d",
+    "cacheRelativePath": "apalache-dist-0.62.1/apalache",
+    "bundledTlcVersion": "1.8.0",
+    "bundledZ3Version": "4.14.1",
+    "dependencySource": "https://github.com/apalache-mc/apalache/blob/v0.62.1/project/Dependencies.scala"
+  },
+  "java": { "minimumMajor": 21, "testedRuntime": "OpenJDK 21.0.12.1+1-1-deb13u1-Debian" },
+  "itfSpecification": "https://apalache-mc.org/docs/adr/015adr-trace.html",
+  "notes": [
+    "QUINT_HOME controls the backend cache; verify both archive and installed JAR SHA256.",
+    "TLC is embedded in the pinned Apalache JAR. Its runtime Version display is not a reliable release identifier.",
+    "Use a dedicated local server endpoint. --apalache-version does not verify an already running server.",
+    "The TypeScript simulation backend avoids a separate Rust evaluator download.",
+    "The JAR includes platform-specific Z3 native libraries; no separate system Z3 install is required."
+  ]
+}
