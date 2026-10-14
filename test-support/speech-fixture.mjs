@@ -10,12 +10,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, onTtsCommit, extraEnv = {}, serverImports = [] } = {}) {
+export async function speechFixture({ autoSentences = false, autoNow = () => Date.now(), audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, onTtsCommit, extraEnv = {}, serverImports = [] } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
   const filename = path.join(directory, 'test.sqlite');
   let seeded;
   if (seed) { const store = new ListeningStore(filename); try { seeded = await seed(store); } finally { store.close(); } }
-  const stats = { providerRequests: [], connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
+  const stats = { audioFrames: 0, automaticSentences: 0, providerRequests: [], connections: 0, commits: [], sessions: [], asrClients: new Set(), responses: 0, authorizations: [], models: [],
     mtRequests: [], mtAborted: 0, fishRequests: [], fishAborted: 0, holdFish: false };
   const mt = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
@@ -62,10 +62,14 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
       payload: { output: { sentence: { sentence_id: id, text, sentence_end: end, begin_time: 0, end_time: 1500 } } } }));
   }
   asr.on('connection', ws => {
-    stats.asrClients.add(ws); let last = Date.now();
+    stats.asrClients.add(ws); let last = autoNow();
     ws.on('close', () => stats.asrClients.delete(ws));
     ws.on('message', (raw, binary) => {
-      if (binary) { if (autoSentences && Date.now() - last > 2000) { last = Date.now(); final(); } return; }
+      if (binary) {
+        stats.audioFrames++;
+        if (autoSentences && autoNow() - last > 2000) { last = autoNow(); stats.automaticSentences++; final(); }
+        return;
+      }
       const message = JSON.parse(raw.toString());
       if (message.header?.action === 'run-task') ws.send(JSON.stringify({ header: { event: 'task-started' } }));
       if (message.header?.action === 'finish-task') {
@@ -132,7 +136,11 @@ export async function speechFixture({ autoSentences = false, audioSamples = 2400
   } finally {
     child.stdout.removeListener('data', onData); child.removeListener('error', onError); child.removeListener('exit', onExit);
   }
-  return { base, stats, final, seeded, logs: () => logs, close };
+  return { base, stats, final, async withAutoSentencesPaused(operation) {
+    if (typeof operation !== 'function') throw new TypeError('Automatic sentence scope requires an operation');
+    const previous = autoSentences; autoSentences = false;
+    try { return await operation(); } finally { autoSentences = previous; }
+  }, seeded, logs: () => logs, close };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const f = await speechFixture({ autoSentences: true, audioSamples: 24000 });

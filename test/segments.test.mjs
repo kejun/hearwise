@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { startServer } from '../test-support/server-fixture.mjs';
+import { stopChild, closeServer } from '../test-support/lifecycle.mjs';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ListeningStore } from '../storage.mjs';
 
@@ -91,22 +92,21 @@ test('GET /api/listenings/:id/segments 参数校验与实时补齐查询', async
       }
     });
   });
-  const port = 37000 + Math.floor(Math.random() * 1000);
-  const child = spawn(process.execPath, ['server.mjs'], { cwd: path.resolve('.'), env: { ...process.env, PORT: String(port),
-    LISTENING_DB: path.join(dir, 'history.sqlite'), ASR_ENDPOINT: `ws://127.0.0.1:${asrServer.address().port}`,
-    MT_ENDPOINT: `http://127.0.0.1:${modelPort}/chat/completions` }, stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stderr.on('data', d => process.stderr.write('[server] ' + d));
-  child.stdout.on('data', d => process.stderr.write('[server] ' + d));
+  let app;
   t.after(async () => {
-    child.kill(); await new Promise(resolve => child.once('exit', resolve));
-    await new Promise(resolve => asrServer.close(resolve));
-    await new Promise(resolve => modelServer.close(resolve));
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      const results = await Promise.allSettled([app ? stopChild(app.child) : Promise.resolve(),
+        closeServer(asrServer, 'segments ASR'), closeServer(modelServer, 'segments model')]);
+      const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+      if (errors.length) throw new AggregateError(errors, 'Segments HTTP fixture cleanup failed');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
-  const base = `http://127.0.0.1:${port}`;
-  await waitFor(async () => { try { return (await fetch(base)).ok; } catch { return false; } });
-
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  app = await startServer({ env: {
+    LISTENING_DB: path.join(dir, 'history.sqlite'), ASR_ENDPOINT: `ws://127.0.0.1:${asrServer.address().port}`,
+    MT_ENDPOINT: `http://127.0.0.1:${modelPort}/chat/completions` } });
+  const { base } = app;
+  const ws = new WebSocket(base.replace('http:', 'ws:') + '/ws');
+  t.after(() => ws.terminate());
   const events = [];
   ws.on('message', raw => events.push(JSON.parse(raw.toString())));
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });

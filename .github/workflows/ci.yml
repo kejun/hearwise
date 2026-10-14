@@ -157,10 +157,10 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-  process-crash:
-    name: Process SIGKILL recovery model and SQLite replay
+  scheduler:
+    name: Scheduler admission, conditional fairness and real replay
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -177,53 +177,18 @@ jobs:
           echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
       - run: npm ci --ignore-scripts
       - run: npm run preflight
-      - run: npm run setup:process-crash
+      - run: npm run setup:scheduler
         env:
           QUINT_HOME: ${{ runner.temp }}/hearwise-quint
-      - run: npm run verify:process-crash -- --release
-        env:
-          QUINT_HOME: ${{ runner.temp }}/hearwise-quint
-      - name: Preserve model, replay and counterexample evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: process-crash-evidence-${{ github.sha }}
-          path: verification-evidence/process-crash/
-          retention-days: 14
-          if-no-files-found: warn
-
-  edit-protocol:
-    name: Edit protocol model and SQLite replay
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          cache: npm
-      - name: Select the runner's Java 21
-        shell: bash
-        run: |
-          test -x "$JAVA_HOME_21_X64/bin/java"
-          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
-          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
-      - run: npm ci --ignore-scripts
-      - run: npm run preflight
-      - run: npm run setup:edit-protocol
-        env:
-          QUINT_HOME: ${{ runner.temp }}/hearwise-quint
-      - run: npm run verify:edit-protocol -- --release
+      - run: npm run verify:scheduler -- --release
         env:
           QUINT_HOME: ${{ runner.temp }}/hearwise-quint
       - name: Preserve model, replay and counterexample evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: edit-protocol-evidence-${{ github.sha }}
-          path: verification-evidence/edit-protocol/
+          name: scheduler-evidence-${{ github.sha }}
+          path: verification-evidence/scheduler/
           retention-days: 14
           if-no-files-found: warn
 
@@ -389,3 +354,73 @@ jobs:
           path: revision-evidence/
           retention-days: 14
           if-no-files-found: warn
+  edit-protocol:
+    name: Edit protocol model and SQLite replay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Select the runner's Java 21
+        shell: bash
+        run: |
+          test -x "$JAVA_HOME_21_X64/bin/java"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+      - run: npm ci --ignore-scripts
+      - run: npm run preflight
+      - run: npm run setup:edit-protocol
+        env:
+          QUINT_HOME: ${{ runner.temp }}/hearwise-quint
+      - run: npm run verify:edit-protocol -- --release
+        env:
+          QUINT_HOME: ${{ runner.temp }}/hearwise-quint
+      - name: Preserve model, replay and counterexample evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: edit-protocol-evidence-${{ github.sha }}
+          path: verification-evidence/edit-protocol/
+          retention-days: 14
+          if-no-files-found: warn
+
+  process-crash:
+    name: Process SIGKILL recovery model and SQLite replay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Select the runner's Java 21
+        shell: bash
+        run: |
+          test -x "$JAVA_HOME_21_X64/bin/java"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+      - run: npm ci --ignore-scripts
+      - run: npm run preflight
+      - run: npm run setup:process-crash
+        env:
+          QUINT_HOME: ${{ runner.temp }}/hearwise-quint
+      - run: npm run verify:process-crash -- --release
+        env:
+          QUINT_HOME: ${{ runner.temp }}/hearwise-quint
+      - name: Preserve model, replay and counterexample evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: process-crash-evidence-${{ github.sha }}
+          path: verification-evidence/process-crash/
+          retention-days: 14
+          if-no-files-found: warn
+
