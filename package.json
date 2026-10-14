@@ -56,7 +56,11 @@
     "quality:asr-mt": "node scripts/evaluate-asr-translation-quality.mjs",
     "preverify:import-atomicity": "npm run build",
     "verify:import-atomicity": "node scripts/verify-import-atomicity.mjs",
-    "verify:import-atomicity:report": "node scripts/verify-import-atomicity-report.mjs"
+    "verify:import-atomicity:report": "node scripts/verify-import-atomicity-report.mjs",
+    "setup:playback-protocol": "node scripts/setup-relation-protocol.mjs",
+    "preverify:playback-protocol": "npm run build",
+    "verify:playback-protocol": "node scripts/verify-playback-protocol.mjs",
+    "verify:playback-protocol:report": "node scripts/verify-playback-protocol-report.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
