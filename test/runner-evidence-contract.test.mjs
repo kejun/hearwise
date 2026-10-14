@@ -21,7 +21,7 @@ test('real Node aggregate fixes TAP and isolates inherited node:test context wit
   assert.ok(Object.keys(report.sourceStart.digests).includes('dist/server/index.js'));
 });
 test('all browser checks and mandatory image outputs remain explicitly registered', () => {
-  assert.deepEqual(browserChecks, ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback']);
+  assert.deepEqual(browserChecks, ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'name-protocol']);
   assert.deepEqual(Object.keys(browserScreenshots).sort(), [...browserChecks].sort());
   assert.equal(browserScreenshots.session.length, 7); assert.equal(browserScreenshots['relation-result'].length, 12);
   assert.deepEqual(browserScreenshots.speech, Object.values(rootScreenshots));

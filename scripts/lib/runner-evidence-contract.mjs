@@ -1,3 +1,4 @@
+import { nameBrowserAssets } from '../../test-support/name-protocol-browser-evidence.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, lstat } from 'node:fs/promises';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { digest, sourceVersion } from './verification-evidence.mjs';
 
-export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity'];
+export const browserChecks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback', 'import-atomicity', 'name-protocol'];
 export async function findNodeTests(directory = 'test') {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(entries.map(entry => entry.isDirectory() ? findNodeTests(path.join(directory, entry.name)) :
@@ -24,6 +25,7 @@ export const rootScreenshots = {
 };
 export const browserScreenshots = {
   'import-atomicity': ['append', 'replace'].flatMap(mode => [`atomicity-${mode}-failure.png`, `atomicity-${mode}-restored.png`]),
+  'name-protocol': nameBrowserAssets.filter(file => file.endsWith('.png')),
   playback: [...[1280, 390].flatMap(width => ['text', 'paused-seek', 'stale-events', 'unlock-race'].map(name => `playback-${width}-${name}.png`)), 'playback-1280-negative-unlock.png'],
   'trace-business': ['trace-business-desktop.png', 'trace-business-mobile.png', 'trace-business-incomplete.png'],
   speech: Object.values(rootScreenshots),
