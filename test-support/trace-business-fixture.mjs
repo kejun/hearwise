@@ -26,7 +26,7 @@ export async function traceBusinessFixture({ domain = 'knowledge', sinkThrows = 
   const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-trace-business-'));
   const filename = path.join(directory, 'business.sqlite');
   let store = new ListeningStore(filename), clock = Date.now(), reply = () => ({ items: [] }), closing;
-  const calls = [], notifications = { attempted: 0, delivered: 0, errors: 0 }, held = new Set();
+  const calls = [], adapterCalls = [], notifications = { attempted: 0, delivered: 0, errors: 0 }, held = new Set();
   const runtime = createTaskRuntime({ onEvent: sinkThrows ? () => { throw new Error(TRACE_SENTINEL); } : undefined });
   const server = http.createServer(async (req, res) => {
     try {
@@ -73,16 +73,18 @@ export async function traceBusinessFixture({ domain = 'knowledge', sinkThrows = 
   function capture(label) {
     const snapshot = runtime.diagnostics(), report = traceReport(snapshot), business = buildBusinessOverview(report, run.listeningId);
     assert.ok(!JSON.stringify({ snapshot, report, business }).includes(TRACE_SENTINEL), 'Credential reached Trace output');
-    return { label, snapshot, report, business, query: query(), calls: structuredClone(calls), notifications: { ...notifications }, activeCount: runtime.activeCount };
+    return { label, snapshot, report, business, query: query(), calls: structuredClone(calls), adapterCalls: structuredClone(adapterCalls),
+      notifications: { ...notifications }, activeCount: runtime.activeCount };
   }
   function start({ extract, context: transform = x => x } = {}) {
     const current = domain === 'knowledge' ? store.nextJob(run.listeningId) : store.getRelationJob(job.id);
     assert.ok(current, 'Business query must still admit the task');
     clock = Math.max(clock, current.ready_at || 0, current.retry_at ? Date.parse(current.retry_at) : 0);
     if (domain === 'knowledge') store.markJob(job.id, 'running');
+    const override = extract ? { extract: (...args) => { adapterCalls.push({ domain, jobId: current.id }); return extract(...args); } } : {};
     const workflow = domain === 'knowledge' ? createKnowledgeWorkflow({ store, endpoint, now: () => clock,
-      onItems: notify, onProgress: notify, onRejected: notify, onDiagnostic: notify, onError, ...(extract ? { extract } : {}) }) :
-      createRelationWorkflow({ store, endpoint, now: () => clock, onChange: notify, onError, ...(extract ? { extract } : {}) });
+      onItems: notify, onProgress: notify, onRejected: notify, onDiagnostic: notify, onError, ...override }) :
+      createRelationWorkflow({ store, endpoint, now: () => clock, onChange: notify, onError, ...override });
     const operation = context => domain === 'knowledge' ? workflow.execute(current, TRACE_SENTINEL, transform(context)) :
       workflow.execute(current, TRACE_SENTINEL, context.signal, transform(context));
     if (domain === 'knowledge') return runtime.start(`knowledge:${job.id}`, { listening_id: run.listeningId, job_id: job.id,
@@ -98,9 +100,11 @@ export async function traceBusinessFixture({ domain = 'knowledge', sinkThrows = 
         finally { store.close(); await rm(directory, { recursive: true, force: true }); } }
     })();
   }
-  return { run, segment, job, filename, calls, notifications, runtime, get store() { return store; },
+  return { run, segment, get job() { return job; }, filename, calls, notifications, runtime, get store() { return store; },
     setReply(fn) { reply = fn; }, start, capture, query, async dispatch(options) { return deadline(() => start(options).promise, 5000, 'Trace workflow dispatch'); },
     parseRelation(input, relations = []) { const request = buildRelationRequest(input), wire = JSON.parse(request.body.messages[1].content);
       return request.parse(JSON.stringify({ contract_version: wire.contract_version, evidence_version: wire.evidence_version, relations })); },
+    nextRelationGeneration() { store.enableRelations(run.listeningId, { retry: true, now: clock });
+      job = store.nextRelationJob(run.listeningId, { quietMs: 0, now: clock }); assert.ok(job); return job; },
     reopen() { store.close(); store = new ListeningStore(filename); }, close };
 }

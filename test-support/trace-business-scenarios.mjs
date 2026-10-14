@@ -4,7 +4,7 @@ import { deadline } from './lifecycle.mjs';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 export const workflowScenarioNames = ['knowledge-empty', 'knowledge-partial', 'knowledge-retry', 'knowledge-notification-sink',
-  'knowledge-cancel-late', 'relation-empty', 'relation-filtered', 'relation-partial', 'relation-retry', 'relation-notification'];
+  'knowledge-cancel-late', 'relation-empty', 'relation-filtered', 'relation-partial', 'relation-retry', 'relation-notification', 'relation-old-generation-usage'];
 
 export function checkWorkflowCapture(capture, { domain, state, calls, items, accepted, rejected, queryState, outcome, next }) {
   const { report, business, query, snapshot } = capture;
@@ -35,7 +35,43 @@ export async function runWorkflowScenario(name) {
   const captures = []; let cleanup = false;
   const capture = (label, expected) => { const row = h.capture(label); checkWorkflowCapture(row, { domain, ...expected }); captures.push(row); return row; };
   try {
-    if (name === 'knowledge-cancel-late') {
+    if (name === 'relation-old-generation-usage') {
+      const entries = [], start = () => {
+        const entered = deferred(), response = deferred();
+        const task = h.start({ extract: async (_key, input, _endpoint, options) => {
+          entries.push({ input, options, response }); entered.resolve(); return response.promise;
+        } });
+        return { task, entered };
+      };
+      const oldJob = h.job, old = start(); await deadline(() => old.entered.promise, 2000, 'Old relation request');
+      h.store.cancelRelations(h.run.listeningId); old.task.cancel(); await assert.rejects(old.task.promise);
+      const cancelled = h.capture('durably cancelled');
+      assert.equal(cancelled.query.processing.state, 'cancelled'); assert.equal(cancelled.business.tasks[0].state, 'cancelled');
+      assert.equal(cancelled.activeCount, 0); captures.push(cancelled);
+      const newJob = h.nextRelationGeneration(); assert.notEqual(newJob.id, oldJob.id); assert.ok(newJob.epoch > oldJob.epoch);
+      const fresh = start(); await deadline(() => fresh.entered.promise, 2000, 'New relation request');
+      const before = h.capture('new generation in flight');
+      entries[0].options.onUsage({ total_tokens: 71 }); entries[0].options.onUsage({ total_tokens: 71 });
+      entries[0].response.resolve({ ...h.parseRelation(entries[0].input), usage: { total_tokens: 71 } }); await tick();
+      const late = h.capture('duplicate late usage stays on old request');
+      assert.equal(late.query.processing.usageLastHour.totalTokens, 71); assert.equal(late.query.processing.round.totalTokens, 0);
+      assert.deepEqual(late.query.job, before.query.job); assert.deepEqual(late.query.graph.relations, []);
+      assert.equal(late.activeCount, 1, 'Old cleanup cannot release the new task');
+      assert.deepEqual(late.snapshot, before.snapshot, 'Late usage must not append a successful old execution');
+      const oldLedger = h.store.db.prepare('SELECT attempt,outcome,usage_json FROM relation_requests WHERE job_id=?').all(oldJob.id);
+      assert.equal(oldLedger.length, 1); assert.equal(JSON.parse(oldLedger[0].usage_json).total_tokens, 71);
+      assert.equal(oldLedger[0].outcome, 'late_response'); late.oldLedger = oldLedger; captures.push(late);
+      entries[1].options.onUsage({ total_tokens: 21 });
+      entries[1].response.resolve({ ...h.parseRelation(entries[1].input), usage: { total_tokens: 21 } });
+      assert.equal((await deadline(() => fresh.task.promise, 3000, 'New relation completion')).outcome, 'empty');
+      const complete = h.capture('new generation committed');
+      assert.equal(complete.query.processing.usageLastHour.totalTokens, 92); assert.equal(complete.query.processing.round.totalTokens, 21);
+      assert.equal(complete.query.job.state, 'complete'); assert.equal(complete.query.ledger.length, 1);
+      assert.equal(complete.business.tasks.find(task => task.job === oldJob.id).state, 'cancelled');
+      assert.equal(complete.business.tasks.find(task => task.job === newJob.id).state, 'succeeded');
+      assert.equal(complete.adapterCalls.length, 2); assert.equal(complete.calls.length, 0); assert.equal(complete.activeCount, 0);
+      captures.push(complete);
+    } else if (name === 'knowledge-cancel-late') {
       const received = deferred(), response = deferred(); let requestContext;
       const task = h.start({ extract: async (_key, _input, _endpoint, context) => {
         requestContext = context; received.resolve(); return response.promise;
@@ -54,7 +90,7 @@ export async function runWorkflowScenario(name) {
       h.reopen(); const recovered = h.capture('SQLite recovery projection');
       assert.equal(recovered.query.checkpoint.job.state, 'pending');
       assert.equal(recovered.query.checkpoint.parts[0].initial_requests, 1);
-      assert.equal(recovered.query.detail.knowledge.length, 0); assert.equal(h.calls.length, 0);
+      assert.equal(recovered.query.detail.knowledge.length, 0); assert.equal(h.calls.length, 0); assert.equal(recovered.adapterCalls.length, 1);
       captures.push(before, after, recovered);
     } else if (domain === 'knowledge') {
       if (name === 'knowledge-partial') h.setReply(input => input.focus_segments ? {
