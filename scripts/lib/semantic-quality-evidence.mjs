@@ -20,7 +20,7 @@ export async function readSemanticCapture(directory, targetSource, { release = f
   assert.equal(report.complete, true); assert.equal(report.cleanup, true); assert.equal(report.errorCode, undefined);
   assert.equal(report.qualityEvaluated, false); assert.equal(report.fullQualityAcceptance, false);
   assert.equal(report.qualityStatus, 'not_run'); assert.equal(report.liveCalls, 0); same(report.errors, []);
-  same(report.models, { knowledge: KNOWLEDGE_MODEL, relation: RELATION_MODEL, knowledgeContract: CONTRACT_REVISION, relationContract: RELATION_CONTRACT_VERSION, buildRelationRequest });
+  same(report.models, { knowledge: KNOWLEDGE_MODEL, relation: RELATION_MODEL, knowledgeContract: CONTRACT_REVISION, relationContract: RELATION_CONTRACT_VERSION });
   same(report.sourceStart, report.sourceEnd); same(report.sourceStart, targetSource);
   if (release) assert.equal(targetSource.dirty, false);
   assert.ok(Number.isFinite(Date.parse(report.startedAt)) && Date.parse(report.finishedAt) >= Date.parse(report.startedAt));
