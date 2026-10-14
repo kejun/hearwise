@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { digest } from './verification-evidence.mjs';
 import { checkerConclusion } from './formal-protocol-evidence.mjs';
 import { properties } from '../../verification/generation-protocol/properties.mjs';
+import { validateFlatTap } from './release-tap-evidence.mjs';
+import regressionNames from '../../verification/generation-protocol/regressions.json' with { type: 'json' };
 
 export const generationRepositoryRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/\/$/, '');
 export const generationModelRoot = path.join(generationRepositoryRoot, 'verification/generation-protocol');
@@ -17,7 +19,7 @@ export const loadGenerationTools = async () => JSON.parse(await readFile(path.jo
 export async function generationMetadata() {
   const git = args => execFileSync('git', ['-C', generationRepositoryRoot, ...args], { encoding: 'utf8', timeout: 5000 }).trim();
   const config = await loadGenerationConfig();
-  const modelFiles = [...config.modelSpecifications, 'config.json', 'tlc.json', 'toolchain.json', 'properties.mjs',
+  const modelFiles = [...config.modelSpecifications, 'config.json', 'tlc.json', 'toolchain.json', 'properties.mjs', 'regressions.json',
     '../relation-protocol/protocol.qnt', '../knowledge-protocol/protocol.qnt'];
   const inputs = await Promise.all(modelFiles.map(async file => [file, await readFile(path.join(generationModelRoot, file), 'utf8')]));
   const files = [...new Set([...git(['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean),
@@ -34,19 +36,22 @@ export async function generationMetadata() {
 export function generationPlan(config) {
   return [
     { id: 'model-regressions', kind: 'implementation-regression', count: config.modelSpecifications.length +
-      Object.keys(config.witnesses.counts).length + Object.keys(config.guards.counts).length + Object.keys(config.directedMutants.counts).length + 2 },
+      Object.keys(config.witnesses.counts).length + Object.keys(config.guards.counts).length + Object.keys(config.directedMutants.counts).length + 2,
+      names: [...config.modelSpecifications.map(file => `generation model typechecks: ${file}`),
+        ...[config.witnesses, config.guards, config.directedMutants].flatMap(suite => Object.keys(suite.counts).map(main => `generation model regression: ${main}`)),
+        'finite quotient erases only action labels, never guards or semantic state', 'full product budgets are imported unchanged and are not advertised as the concurrency Cartesian product'] },
     ...config.domains.flatMap(domain => [{ id: `tlc-${domain.main}`, kind: 'finite-state-complete', domain }, { id: `bounded-${domain.main}`, kind: 'bounded-model-check', domain }]),
-    ...config.witnesses.mains.map(main => ({ id: `witness-${main}`, kind: 'model-witness', main, refined: false, count: config.witnesses.counts[main] })),
+    ...config.witnesses.mains.map(main => ({ id: `witness-${main}`, kind: 'model-witness', main, refined: false, count: config.witnesses.counts[main], names: config.witnesses.names[main] })),
     ...config.domains.filter(row => row.kind === 'generation-envelope').map(domain => ({ id: `simulation-${domain.main}`, kind: 'simulation', main: domain.traceMain, domain, refined: false, count: config.simulation.selectedTraces })),
     ...config.refinement.domains.flatMap(domain => [
-      { id: `witness-${domain.witnessMain}`, kind: 'model-witness', main: domain.witnessMain, domain, refined: true, count: config.refinement.counts[domain.witnessMain] },
+      { id: `witness-${domain.witnessMain}`, kind: 'model-witness', main: domain.witnessMain, domain, refined: true, count: config.refinement.counts[domain.witnessMain], names: config.refinement.names[domain.witnessMain] },
       { id: `simulation-${domain.main}`, kind: 'simulation', main: domain.main, domain, refined: true, count: config.simulation.selectedTraces }
     ]),
     ...config.mutants.map(mutant => ({ id: `negative-${mutant.main}`, kind: 'model-negative', main: mutant.main, mutant, count: 1 })),
     { id: 'replay-witnesses', kind: 'implementation-replay', sourceKind: 'model-witness', count: config.refinement.expectedTestCount },
     { id: 'replay-simulation', kind: 'implementation-replay', sourceKind: 'simulation', count: config.refinement.expectedSimulationTraces },
     ...config.implementationControls.map(control => ({ id: `implementation-negative-${control.id}`, kind: 'implementation-negative', control, count: 1 })),
-    { id: 'implementation-regressions', kind: 'implementation-regression', count: generationRegressionCount }
+    { id: 'implementation-regressions', kind: 'implementation-regression', count: generationRegressionCount, names: regressionNames }
   ];
 }
 export function generationCoverage(config) {
@@ -90,7 +95,11 @@ export function generationCommand(entry, config, profile, { repositoryRoot, evid
 }
 export function generationCommandConclusion(entry, execution, log, bound) {
   const result = checkerConclusion(entry.kind, execution, log, bound);
-  if (entry.kind === 'implementation-regression') result.ok &&= result.metrics?.tests === entry.count;
-  if (entry.kind === 'model-witness') result.ok &&= new RegExp(`\\b${entry.count} passing\\b`).test(log) && !/\b[1-9]\d* failing\b/.test(log);
+  if (entry.kind === 'implementation-regression') {
+    result.ok &&= result.metrics?.tests === entry.count;
+    try { validateFlatTap(log, entry.names); } catch { result.ok = false; result.complete = false; }
+  }
+  if (entry.kind === 'model-witness') result.ok &&= new RegExp(`\\b${entry.count} passing\\b`).test(log) && !/\b[1-9]\d* failing\b/.test(log) &&
+    JSON.stringify([...log.matchAll(/^\s+ok (\w+) passed 1 test\(s\)\r?$/gm)].map(match => match[1])) === JSON.stringify(entry.names);
   return result;
 }

@@ -93,6 +93,9 @@ export function validateGenerationReplayEvidence(trace, replay) {
       expect(raw.admission.controlled === true && raw.admission.permit === expected.admissionPermit && integer(raw.clock), 'admission_environment');
       expect(integer(raw.hostPid) && raw.hostPid > 0, 'host_process_identity');
       expect(typeof raw.database.file === 'string' && integer(raw.database.device) && integer(raw.database.inode) && raw.database.storeGeneration === expected.restartCount + 1, 'database_identity');
+      const durableTables = protocol === 'knowledge' ? ['listenings', 'listening_runs', 'segments', 'jobs', 'knowledge_aliases', 'knowledge_mentions', 'knowledge_revisions', 'knowledge', 'facts', 'foreignKeys'] :
+        ['listenings', 'listening_runs', 'segments', 'relation_rounds', 'relation_windows', 'relation_jobs', 'relation_requests', 'knowledge_items', 'knowledge_facts', 'knowledge_aliases', 'knowledge_mentions', 'knowledge_revisions', 'relations', 'relation_assertions', 'relation_supports', 'relation_revisions', 'foreignKeys'];
+      expect(equal(Object.keys(raw.durable).sort(), durableTables.sort()) && durableTables.every(table => Array.isArray(raw.durable[table])), 'durable_table_roster');
       expect(Array.isArray(raw.durable.foreignKeys) && raw.durable.foreignKeys.length === 0, 'foreign_key_violation');
       for (const segment of raw.durable.segments) {
         expect(!knownSegments.has(segment.id) || equal(knownSegments.get(segment.id), segment), 'source_segment_rewritten');

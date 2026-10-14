@@ -132,6 +132,7 @@ export async function createGenerationFixture({ protocol, capacity = 1, controll
     let durable;
     try {
       durable = { listenings: db.prepare('SELECT * FROM listenings ORDER BY id').all(),
+        listening_runs: db.prepare('SELECT * FROM listening_runs ORDER BY rowid').all(),
         segments: db.prepare('SELECT * FROM segments ORDER BY listening_id,sequence_no').all(),
         jobs: db.prepare('SELECT * FROM extraction_jobs ORDER BY listening_id,from_sequence').all().map(job => ({ ...job,
           progress: JSON.parse(job.progress_json), parts: db.prepare('SELECT * FROM extraction_parts WHERE job_id=? ORDER BY part_no').all(job.id).map(part => ({ ...part,
@@ -307,8 +308,8 @@ async function createRelationGenerationFixture({ capacity, controlledAdmission }
   const snapshot = () => {
     const db = new DatabaseSync(filename, { readOnly: true }); let durable;
     try {
-      durable = Object.fromEntries(['listenings', 'segments', 'relation_rounds', 'relation_windows', 'relation_jobs', 'relation_requests',
-        'knowledge_items', 'knowledge_facts', 'knowledge_aliases', 'knowledge_mentions', 'knowledge_revisions', 'relations', 'relation_assertions', 'relation_supports'].map(table => [table,
+      durable = Object.fromEntries(['listenings', 'listening_runs', 'segments', 'relation_rounds', 'relation_windows', 'relation_jobs', 'relation_requests',
+        'knowledge_items', 'knowledge_facts', 'knowledge_aliases', 'knowledge_mentions', 'knowledge_revisions', 'relations', 'relation_assertions', 'relation_supports', 'relation_revisions'].map(table => [table,
         db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
       durable.foreignKeys = db.prepare('PRAGMA foreign_key_check').all();
     } finally { db.close(); }

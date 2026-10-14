@@ -21,3 +21,12 @@ test('M1 reader cannot turn previous asset availability or missing reports into 
   assert.equal(result.domains.length, 4); assert.ok(result.domains.every(row => row.status === 'not_run'));
   assert.ok(result.rows.every(row => row.status === 'incomplete'));
 });
+
+test('M1 singleton artifact downloads use the exact domain directories consumed by discovery', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const workflow = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  for (const artifact of ['relation-protocol', 'knowledge-protocol', 'process-crash', 'generation-protocol']) {
+    const pattern = `${artifact}-evidence-${'${{ github.sha }}'}`;
+    assert.ok(workflow.includes(`pattern: ${pattern}\n          path: verification-evidence/m1-inputs/${pattern}`));
+  }
+});

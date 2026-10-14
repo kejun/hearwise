@@ -153,7 +153,60 @@
     },
     "expectedTestCount": 39,
     "seed": "42",
-    "maxSamples": 1
+    "maxSamples": 1,
+    "names": {
+      "relation_single_witnesses": [
+        "normalSuccessTest",
+        "normalFailureTest",
+        "cancelLateSuccessTest",
+        "cancelLateFailureTest",
+        "oldResponseWhileNewActiveTest",
+        "outOfOrderGenerationTest",
+        "duplicateSettlementTest",
+        "deleteLateRestartTest",
+        "deleteRestartLateTest",
+        "successfulRestartTest",
+        "repeatedLateUsageIsAttemptScopedTest"
+      ],
+      "relation_multi_cap1_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest"
+      ],
+      "relation_multi_cap2_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "oldPhysicalExceedsLocalCapacityTest",
+        "twoListeningOutOfOrderTest"
+      ],
+      "knowledge_single_witnesses": [
+        "normalSuccessTest",
+        "normalFailureTest",
+        "cancelLateSuccessTest",
+        "cancelLateFailureTest",
+        "oldResponseWhileNewActiveTest",
+        "outOfOrderGenerationTest",
+        "duplicateSettlementTest",
+        "deleteLateRestartTest",
+        "deleteRestartLateTest",
+        "successfulRestartTest"
+      ],
+      "knowledge_multi_cap1_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "cancelDoesNotCancelPendingJobTest"
+      ],
+      "knowledge_multi_cap2_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "oldPhysicalExceedsLocalCapacityTest",
+        "twoListeningOutOfOrderTest",
+        "cancelDoesNotCancelPendingJobTest"
+      ]
+    }
   },
   "guards": {
     "specification": "guards.qnt",
@@ -349,7 +402,60 @@
     "expectedTestCount": 39,
     "expectedSimulationTraces": 18,
     "clockAdvanceMs": 6000,
-    "interpretation": "Fixed ready task environment with explicit one-use provider permits; each permit projects to base lifecycle stutter. Not general scheduler fairness or all production availability."
+    "interpretation": "Fixed ready task environment with explicit one-use provider permits; each permit projects to base lifecycle stutter. Not general scheduler fairness or all production availability.",
+    "names": {
+      "replay_relation_single_witnesses": [
+        "normalSuccessTest",
+        "normalFailureTest",
+        "cancelLateSuccessTest",
+        "cancelLateFailureTest",
+        "oldResponseWhileNewActiveTest",
+        "outOfOrderGenerationTest",
+        "duplicateSettlementTest",
+        "deleteLateRestartTest",
+        "deleteRestartLateTest",
+        "successfulRestartTest",
+        "repeatedLateUsageIsAttemptScopedTest"
+      ],
+      "replay_relation_multi_cap1_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest"
+      ],
+      "replay_relation_multi_cap2_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "oldPhysicalExceedsLocalCapacityTest",
+        "twoListeningOutOfOrderTest"
+      ],
+      "replay_knowledge_single_witnesses": [
+        "normalSuccessTest",
+        "normalFailureTest",
+        "cancelLateSuccessTest",
+        "cancelLateFailureTest",
+        "oldResponseWhileNewActiveTest",
+        "outOfOrderGenerationTest",
+        "duplicateSettlementTest",
+        "deleteLateRestartTest",
+        "deleteRestartLateTest",
+        "successfulRestartTest"
+      ],
+      "replay_knowledge_multi_cap1_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "cancelDoesNotCancelPendingJobTest"
+      ],
+      "replay_knowledge_multi_cap2_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "oldPhysicalExceedsLocalCapacityTest",
+        "twoListeningOutOfOrderTest",
+        "cancelDoesNotCancelPendingJobTest"
+      ]
+    }
   },
   "implementationControls": [
     {

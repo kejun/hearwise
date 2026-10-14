@@ -5,6 +5,7 @@ import { digest } from './verification-evidence.mjs';
 import { normalizeITFStates } from './protocol-replay.mjs';
 import { normalizeGenerationTrace, validateGenerationTrace } from './generation-protocol-replay.mjs';
 import { validateGenerationReplayEvidence } from './generation-protocol-evidence.mjs';
+import { validateGenerationNegativeFrame } from './generation-negative-frame.mjs';
 import { generationMetadata, generationPlan, generationCoverage, generationCommand, generationCommandConclusion,
   generationTraceConfig, loadGenerationConfig, loadGenerationTools } from './generation-protocol-plan.mjs';
 
@@ -31,6 +32,7 @@ export function generationHeaderReasons(report, target, config, pinned, { releas
   add(equal(report?.domain, config) && equal(report?.propertyCoverage, generationCoverage(config)), 'invalid_domain_or_properties');
   add(report?.overallTimeoutMs === config.profiles[report?.profile]?.overallTimeoutMs, 'invalid_overall_deadline');
   add(interval(report), 'invalid_timestamps');
+  add(Date.parse(report.finishedAt) - Date.parse(report.startedAt) <= report.overallTimeoutMs + 15000, 'worker_deadline_exceeded');
   add(['platform', 'arch', 'osRelease'].every(key => typeof report?.environment?.[key] === 'string' && report.environment[key]), 'missing_environment');
   const e = report?.execution;
   add(report?.complete === true && e?.complete === true && e.code === 0 && e.signal === null && e.timedOut === false && e.interrupted === false, 'incomplete_execution');
@@ -39,6 +41,9 @@ export function generationHeaderReasons(report, target, config, pinned, { releas
   add(within(report, supervisor) && se?.code === 0 && se.signal === null && se.timedOut === false && se.interrupted === false &&
     supervisor?.timeoutMs === report.overallTimeoutMs + 15000 && supervisor?.cwd === e?.repositoryRoot &&
     equal(supervisor?.argv, [path.join(e?.repositoryRoot || '', 'scripts/verify-generation-protocol.mjs'), '--worker', e?.evidenceRoot, report.profile]), 'invalid_supervisor');
+  add(Number.isFinite(se?.durationMs) && se.durationMs >= 0 && se.durationMs <= supervisor.timeoutMs + 5000 &&
+    se.durationMs <= Date.parse(supervisor.finishedAt) - Date.parse(supervisor.startedAt) + 1 &&
+    Date.parse(supervisor.finishedAt) - Date.parse(supervisor.startedAt) <= supervisor.timeoutMs + 6000, 'supervisor_deadline_exceeded');
   const tools = report?.tools, java = tools?.java?.match(/version\s+"(\d+)/)?.[1];
   add(tools?.quint === pinned.quint.version && tools?.apalache === pinned.apalache.version && tools?.tlc === pinned.apalache.bundledTlcVersion &&
     tools?.apalacheJarSha256 === pinned.apalache.jarSha256 && tools?.apalacheArchiveSha256 === pinned.apalache.archiveSha256 && Number(java) >= pinned.java.minimumMajor &&
@@ -60,9 +65,9 @@ export function generationModelViolation(entry, itf) {
 export async function validateGenerationControl(trace, control, data, { repositoryRoot, sourceDigests } = {}) {
   const reasons = [], add = (condition, reason) => { if (!condition) reasons.push(reason); };
   try {
-    // Native SQLite rows have null prototypes; serialized evidence has ordinary
-    // objects. Compare their recorded values identically before/after saving.
-    data = structuredClone(data);
+    // Compare precisely the persisted JSON contract: SQLite prototypes and
+    // undefined optional callback fields are not part of the recorded bytes.
+    data = JSON.parse(JSON.stringify(data));
     add(equal(data?.control, control), 'wrong_control');
     add(validateGenerationReplayEvidence(trace, data.normal).ok, 'normal_control_failed');
     const broken = data.broken, difference = broken?.difference, index = difference?.step;
@@ -107,6 +112,7 @@ export async function validateGenerationControl(trace, control, data, { reposito
         trial.jobId === old.jobId && equal(trial.payload, old.responseValue) && trial.variant.accepted === 1 &&
         equal(trial.variantAfter.durable, raw.durable) && raw.durable.relation_supports.some(row => row.job_id === old.jobId && row.state === 'active'), 'stale_write_not_observed');
     } else add(false, 'unknown_control');
+    add(await validateGenerationNegativeFrame(trace, broken, control), 'invalid_mutated_final_frame');
   } catch (error) { add(false, `malformed_control:${error.name}`); }
   return { ok: reasons.length === 0, reasons };
 }
@@ -143,9 +149,12 @@ export async function validateGenerationEvidence(directory, options = {}) {
         const conclusion = generationCommandConclusion(entry, result.execution, log, command.bound);
         add(conclusion.ok && conclusion.complete && equal(result.metrics, conclusion.metrics || null), 'raw_command_not_passed');
         add(Number.isFinite(result.execution.durationMs) && result.execution.durationMs >= 0 &&
-          result.execution.durationMs <= Date.parse(result.finishedAt) - Date.parse(result.startedAt) + 1, 'invalid_process_duration');
+          result.execution.durationMs <= command.timeoutMs + 2500 && result.execution.durationMs <= Date.parse(result.finishedAt) - Date.parse(result.startedAt) + 1 &&
+          Date.parse(result.finishedAt) - Date.parse(result.startedAt) <= command.timeoutMs + 6500, 'invalid_process_duration');
         if (['model-witness', 'simulation', 'model-negative'].includes(entry.kind)) {
           add(Array.isArray(result.traces) && result.traces.length === entry.count && new Set(result.traces).size === entry.count, 'wrong_trace_count');
+          if (entry.kind === 'model-witness') add(equal(result.traces.map(file => path.basename(file)).sort(),
+            entry.names.map((name, index) => `${entry.main}-${name}-${index}.itf.json`).sort()), 'wrong_witness_roster');
           for (const file of result.traces) {
             add(safeArtifact(file) && file.startsWith(`traces/${entry.id}/`) && artifacts.has(file), 'missing_native_trace');
             const itf = JSON.parse(artifacts.get(file)); normalizeGenerationTrace(itf, generationTraceConfig(entry));

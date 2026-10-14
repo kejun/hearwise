@@ -19,10 +19,15 @@ for (const control of config.implementationControls) test(`raw negative-control 
   const corruptions = [value => { value.normal.observations.at(-1).durable.raw.durable = {}; },
     value => { value.broken.classification = 'matched'; }, value => { value.broken.counterexample.steps.pop(); },
     value => { value.broken.observations[0].durable.raw.queries = {}; }, value => { value.broken.difference.step++; },
-    value => { value.control = { ...value.control, mutation: 'none' }; }];
+    value => { value.control = { ...value.control, mutation: 'none' }; },
+    value => { value.broken.observations.at(-1).durable.raw.queries = {}; },
+    value => { value.broken.observations.at(-1).durable.raw.ledger = []; },
+    value => { value.broken.observations.at(-1).durable.raw.durable.segments[0].original_text = 'FORGED'; }];
   if (control.mutation === 'omit_transaction_guard') corruptions.push(
     value => { value.broken.observations.at(-1).durable.boundaryTrials[0].metadata.originalSha256 = 'a'.repeat(64); },
-    value => { value.broken.observations.at(-1).durable.boundaryTrials[0].inputRestored = false; });
+    value => { value.broken.observations.at(-1).durable.boundaryTrials[0].inputRestored = false; },
+    value => { value.broken.observations.at(-1).durable.raw.durable.listenings[0].title = 'Unrelated change'; },
+    value => { value.broken.observations.at(-1).durable.raw.durable.relation_assertions[0].statement = 'Unrelated assertion'; });
   for (const [index, mutate] of corruptions.entries()) { const changed = structuredClone(data); mutate(changed);
     assert.equal((await validateGenerationControl(trace, control, changed, context)).ok, false, `corruption ${index}`); }
 });
@@ -39,12 +44,13 @@ test('generation report header binds exact source, toolchain, build, environment
       apalacheJarSha256: pinned.apalache.jarSha256, apalacheArchiveSha256: pinned.apalache.archiveSha256, java: 'openjdk version "21"', node: 'v24.0.0', sqlite: '3.50.4' } };
   report.supervisor = { startedAt: report.startedAt, finishedAt: report.finishedAt, cwd: '/repo',
     argv: ['/repo/scripts/verify-generation-protocol.mjs', '--worker', '/evidence', 'fast'], timeoutMs: report.overallTimeoutMs + 15000,
-    execution: { code: 0, signal: null, timedOut: false, interrupted: false } };
+    execution: { code: 0, signal: null, timedOut: false, interrupted: false, durationMs: 1200000 } };
   assert.deepEqual(generationHeaderReasons(report, target, config, pinned, { release: true }), []);
   const changes = [r => { r.source.sha = 'c'.repeat(40); }, r => { r.modelDigest = 'd'.repeat(64); }, r => { r.sourceDigests = {}; },
     r => { r.runtimeBuild.git_sha = 'e'.repeat(40); }, r => { r.propertyCoverage.pop(); }, r => { r.execution.timedOut = true; },
     r => { delete r.execution; }, r => { r.finishedAt = r.startedAt.replace('12:00', '11:00'); }, r => { r.environment = {}; },
-    r => { r.tools.apalache = 'different'; }, r => { r.overallTimeoutMs++; }, r => { r.domain.domains.pop(); }, r => { r.source.dirty = true; }];
+    r => { r.tools.apalache = 'different'; }, r => { r.overallTimeoutMs++; }, r => { r.domain.domains.pop(); }, r => { r.source.dirty = true; },
+    r => { r.finishedAt = r.supervisor.finishedAt = '2027-10-14T12:20:00Z'; }, r => { r.supervisor.execution.durationMs = 100000000; }];
   for (const change of changes) { const changed = structuredClone(report); change(changed); assert.notEqual(generationHeaderReasons(changed, target, config, pinned, { release: true }).length, 0); }
 });
 
@@ -65,4 +71,16 @@ test('generation plan keeps complete domains, exact trace rosters and rejects in
   assert.equal(generationCommandConclusion(entry, execution, log, 8).ok, true);
   for (const patch of [{ code: 1 }, { signal: 'SIGTERM' }, { timedOut: true }, { interrupted: true }]) assert.equal(generationCommandConclusion(entry, { ...execution, ...patch }, log, 8).ok, false);
   assert.equal(generationCommandConclusion(entry, execution, log, 12).ok, false);
+});
+
+test('both exact regression rosters require every TAP body, order and test name', () => {
+  const execution = { code: 0, signal: null, timedOut: false, interrupted: false };
+  for (const entry of generationPlan(config).filter(row => row.kind === 'implementation-regression')) {
+    const footer = `1..${entry.count}\n# tests ${entry.count}\n# suites 0\n# pass ${entry.count}\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1\n`;
+    const body = entry.names.map((name, i) => `ok ${i + 1} - ${name.replaceAll('\\', '\\\\').replaceAll('#', '\\#')}`).join('\n') + '\n';
+    const good = 'TAP version 13\n' + body + footer;
+    assert.equal(generationCommandConclusion(entry, execution, good).ok, true);
+    for (const bad of ['TAP version 13\n' + footer, good.replace(entry.names[0], 'wrong test'), good.replace(/^ok 1 - .+\n/m, ''), good.replace('ok 2 -', 'ok 1 -'), good.replace(/^ok 2 - .+\n/m, '$&Bail out!\n')])
+      assert.equal(generationCommandConclusion(entry, execution, bad).ok, false);
+  }
 });
