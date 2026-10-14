@@ -21,6 +21,7 @@ const exclusiveFiles = new Set([
   'test/runner-report-evidence.test.mjs',
   'test/process-crash-trace.test.mjs',
   'test/relation-result-evidence.test.mjs',
+  'test/realtime-baseline-integration.test.mjs',
   'test/session-evidence.test.mjs',
   'test/verification-evidence.test.mjs'
 ]);
