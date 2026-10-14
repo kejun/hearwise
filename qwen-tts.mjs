@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { TTS_MODEL, TTS_INSTRUCT_MODEL, TTS_REGIONS, TTS_SAMPLE_RATE } from './public/speech-protocol.js';
 
 const RESPONSE_HISTORY_LIMIT = 4096;
+const RESPONSE_HISTORY_BYTES = 1024 * 1024;
 
 // One response at a time per persistent Qwen session. Cancellation closes the transport;
 // Qwen does not document response.cancel for this model.
@@ -10,7 +11,7 @@ export class QwenTts {
   constructor(config, { endpoint = process.env.TTS_ENDPOINT, timeoutMs = 15000 } = {}) {
     this.config = config; this.endpoint = endpoint; this.timeoutMs = timeoutMs;
     this.ws = null; this.pending = null; this.connecting = null; this.closed = false;
-    this.responseIds = new Set();
+    this.responseIds = new Set(); this.responseIdBytes = 0;
   }
   send(type, data = {}) {
     if (this.ws?.readyState !== WebSocket.OPEN) throw new Error('语音连接已断开');
@@ -29,7 +30,7 @@ export class QwenTts {
       });
       // IDs belong to this transport. A new connection may reuse a provider ID;
       // callbacks from the previous connection are fenced by ws identity below.
-      this.responseIds = new Set();
+      this.responseIds = new Set(); this.responseIdBytes = 0;
       let settled = false;
       const timer = setTimeout(() => fail(new Error('语音连接超时，请检查网络与地域')), this.timeoutMs);
       const fail = error => {
@@ -60,7 +61,7 @@ export class QwenTts {
         // created event arrives before this task's own created event.
         if (event.type === 'response.created' && !task.responseId && typeof event.response?.id === 'string' && event.response.id.length && !this.responseIds.has(event.response.id)) {
           task.responseId = event.response.id;
-          this.responseIds.add(task.responseId);
+          this.responseIds.add(task.responseId); this.responseIdBytes += Buffer.byteLength(task.responseId, 'utf8');
         }
         if (event.type === 'response.audio.delta' && task.responseId && event.response_id === task.responseId) {
           const bytes = Buffer.concat([task.tail, Buffer.from(event.delta || '', 'base64')]);
@@ -81,7 +82,9 @@ export class QwenTts {
     if (this.pending) throw new Error('语音任务仍在进行');
     // Bound the history without forgetting IDs on a live transport. Rotate only
     // between tasks; invalidating identity first makes late close/error harmless.
-    if (this.responseIds.size >= RESPONSE_HISTORY_LIMIT) {
+    // A valid long ID can cross the byte threshold once (maxPayload still bounds
+    // that event). Do not truncate/reject it or evict IDs on the same transport.
+    if (this.responseIds.size >= RESPONSE_HISTORY_LIMIT || this.responseIdBytes >= RESPONSE_HISTORY_BYTES) {
       const retired = this.ws; this.ws = null; this.ready = false;
       retired?.terminate();
     }

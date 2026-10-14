@@ -94,3 +94,33 @@ test('Qwen retires a full response-ID history by rotating its idle connection be
     assert.deepEqual([...tts.responseIds], ['response-1']);
   } finally { tts.close(); await closeServer(server, 'Qwen bounded response history fixture'); }
 });
+
+test('Qwen history also bounds retained response-ID bytes without rejecting long valid IDs or replaying text', { timeout: 5000 }, async () => {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 }); await once(server, 'listening');
+  let connections = 0, commits = 0;
+  server.on('connection', ws => {
+    connections++; let local = 0; const send = event => ws.send(JSON.stringify(event));
+    send({ type: 'session.created' });
+    ws.on('message', raw => {
+      const event = JSON.parse(raw);
+      if (event.type === 'session.update') send({ type: 'session.updated' });
+      if (event.type !== 'input_text_buffer.commit') return;
+      commits++; const id = String(++local) + '😀'.repeat(131071) + 'xyz';
+      assert.equal(Buffer.byteLength(id), 512 * 1024);
+      send({ type: 'response.created', response: { id } });
+      send({ type: 'response.audio.delta', response_id: id, delta: 'AQI=' });
+      send({ type: 'response.done', response: { id, status: 'completed' } });
+    });
+  });
+  const tts = new QwenTts({ key: 'local-fixture-only', region: 'beijing', voice: 'Cherry', rate: 1 },
+    { endpoint: `ws://127.0.0.1:${server.address().port}`, timeoutMs: 1000 });
+  try {
+    let received = 0;
+    for (let n = 1; n <= 3; n++) {
+      const result = await tts.synthesize(`Accepted unit ${n}.`, () => received++);
+      assert.equal(result.attempts, 1); assert.equal(Buffer.byteLength(result.id), 512 * 1024);
+    }
+    assert.equal(connections, 2); assert.equal(commits, 3); assert.equal(received, 3);
+    assert.equal(tts.responseIds.size, 1); assert.equal(tts.responseIdBytes, 512 * 1024);
+  } finally { tts.close(); await closeServer(server, 'Qwen response byte-history fixture'); }
+});

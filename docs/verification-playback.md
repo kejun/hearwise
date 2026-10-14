@@ -17,7 +17,7 @@
 
 1. 旧 controller 使用无界 Number 递增作为回调身份和 uint32 wire epoch。实际 `0xffffffff` 边界后产生非法 wire 值，超过 `Number.MAX_SAFE_INTEGER` 后还可能复用数值身份。回归只在真实源码副本中设置初始计数，不改业务逻辑。现 wire 始终在 1…0xffffffff 内，局部 callback owner 和 resume revision 使用永不复用的对象身份。另有明确的模2测试加速器固定三代 1/2/1 ABA，不把小模数当生产值。
 2. 旧 Qwen `response.created` 可将当前任务重新绑定到旧响应。仅保护第一次 created 仍不够：已完成旧 ID 先到时也会错误认领。真实 WS 回归固定当前 created 前/后到达、不是紧邻上一条的历史重复。每个实际连接记录已绑定的 ID；当前任务不重绑，历史 ID 不重新认领。
-3. 历史上限为4096个 ID。只在无 pending 的下一任务先失效旧 ws 身份再关闭它，实际新连接创建时才换 ID 集合。真实4097次本地 WS 请求断言恰好两连接、4097次 commit、每次 attempts=1；旧连接 queued close/error/created/PCM 不影响新任务，新连接可以合法复用 `response-1`。没有对活跃任务清缓存或新增合成重试。
+3. 历史阈值为4096个 ID 或累计1MiB UTF-8 ID字节。单个合法ID可以越过字节阈值一次，仍受既有4MiB消息上限限制；不截断或拒绝ID。只在无 pending 的下一任务先失效旧 ws 身份再关闭它，实际新连接创建时才换 ID 集合。真实4097次本地 WS 请求断言恰好两连接、4097次 commit、每次 attempts=1；旧连接 queued close/error/created/PCM 不影响新任务，新连接可以合法复用 `response-1`。另以三个512KiB多字节ID的真实WS请求验证第三请求才换连接、正好三次commit和三次PCM，证明字节数不是JavaScript字符串长度。没有对活跃任务清缓存或新增合成重试。
 
 已有 reconnect 夹具曾为两次不同 commit 共用 `response.id='r'`，与新固定的历史身份约束冲突。保留该完整失败日志后，将夹具 ID 改为每 commit 不同；原 `commits=3`、`pcm=2`、部分音频后不重试断言未放松。
 
@@ -45,7 +45,7 @@ Qwen 协议按 response ID 关联 created/delta/done，参考[官方服务端事
 
 ## 证据与门禁
 
-`node scripts/verify-playback-browser.mjs --node-only` 真跑 identity15、text4、transports10 项，但四个性质均保持 `not_run`，整体退出1。完整入口为 `npm run test:browser -- playback`，必须由可启动锁定 Chromium 的环境运行。
+`node scripts/verify-playback-browser.mjs --node-only` 真跑 identity16、text4、transports10 项，但四个性质均保持 `not_run`，整体退出1。完整入口为 `npm run test:browser -- playback`，必须由可启动锁定 Chromium 的环境运行。
 
 共用严格 canonical TAP footer 解析器；本 profile 另绑定每阶段精确项数。整体检查共享150s deadline，父180s保留30s清理/报告余量；超时立即停止后续步骤。按性质应用的 execution 独立汇总，单项失败不污染不相关性质，但整体仍失败。
 

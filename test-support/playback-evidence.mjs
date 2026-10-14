@@ -8,7 +8,7 @@ import { playbackProvenance, validPlaybackProvenance, stablePlaybackSources } fr
 import { playbackGolden } from './playback-speech-fixture.mjs';
 
 export { runChecks as runPlaybackChecks } from '../scripts/lib/verification-checks.mjs';
-export const playbackCounts = { identity: 15, text: 4, transports: 10 };
+export const playbackCounts = { identity: 16, text: 4, transports: 10 };
 export const playbackAssets = ['browser.json', ...[1280, 390].flatMap(width => ['text', 'paused-seek', 'stale-events', 'unlock-race'].map(name => `playback-${width}-${name}.png`)), 'playback-1280-negative-unlock.png'];
 const hashFiles = (directory, names) => Promise.all(names.map(async name => ({ path: name, sha256: digest(await readFile(path.join(directory, name))) })));
 export function playbackTap(log, name) {

@@ -14,7 +14,7 @@ export const playbackProperties = definitions.map(([id, title, requirement, doma
   consequence: '旧声音重新出现、播放状态被旧回调覆盖、文本漏读或重播、错误响应混入新句。',
   preconditions: '合法归档记录，真实文件SQLite和本地供应商桩；浏览器使用实际AudioContext、AudioWorklet及真实WS。',
   state: '对象owner、uint32 wire epoch、原生解锁/恢复、来源区间、provider响应ID、unit/frame/sample序列与消费回执。',
-  assumptions: 'Qwen每连接单在途；首次未见response.created标识当前提交，未见过的无关联迟到created无法靠协议推断。已绑定ID记忆有界4096，只有实际换连接才重置。',
+  assumptions: 'Qwen每连接单在途；首次未见response.created标识当前提交，未见过的无关联迟到created无法靠协议推断。已绑定ID记忆阈值4096个或1MiB UTF-8字节（单ID受4MiB消息上限），只有实际换连接才重置。',
   owners: ['KEJ-75 实施与独立审查者：有限域与实际边界', '发布负责人：形式化与浏览器分别验收'],
   methods: ['actual-player-worklet-service-sqlite-bridge', 'real-websocket-stub-provider', 'golden-text-interval-ledger', 'automated-chromium'],
   implementation: ['public/speech-controller.js', 'public/speech-player.js', 'public/speech-buffer.js', 'public/speech-output-processor.js',
