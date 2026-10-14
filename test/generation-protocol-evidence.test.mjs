@@ -30,12 +30,17 @@ for (const protocol of ['knowledge', 'relation']) test(`${protocol} raw generati
     value => { for (const observation of value.observations) for (const call of observation.durable.raw.calls) for (const segment of call.input.focus_segments) segment.text += ' FORGED'; },
     value => { value.observations.at(-1).durable.raw.durable.segments[0].original_text += ' FORGED'; },
     value => { for (const observation of value.observations) for (const call of observation.durable.raw.calls) if (call.responseWire !== null) call.responseWire = '{"items":[]}'; },
-    value => { Object.values(value.observations.at(-1).durable.raw.queries)[0].graph.nodes[0].facts[0].content = 'FORGED'; }
+    value => { Object.values(value.observations.at(-1).durable.raw.queries)[0].graph.nodes[0].facts[0].content = 'FORGED'; },
+    value => { for (const observation of value.observations) for (const row of observation.durable.raw.ledger.filter(row => row.event === 'provider_started')) Object.assign(row, { index: 99, jobId: 'forged', listeningId: 'unrelated' }); },
+    value => { for (const observation of value.observations) for (const row of observation.durable.raw.ledger.filter(row => row.event === 'provider_delivery')) Object.assign(row, { index: 99, response: 'failure', delivery: 42 }); },
+    value => { for (const observation of value.observations) for (const row of observation.durable.raw.executions) Object.assign(row, { listeningId: 'unrelated', attempt: 999 }); }
   ];
   if (protocol === 'knowledge') corruptions.push(
     value => { value.observations.at(-1).durable.raw.durable.jobs[0].parts = []; },
     value => { value.observations.at(-1).durable.raw.durable.jobs[0].state = 'failed'; },
-    value => { value.observations.at(-1).durable.raw.durable.facts[0].content = 'forged'; }
+    value => { value.observations.at(-1).durable.raw.durable.facts[0].content = 'forged'; },
+    value => { for (const observation of value.observations) for (const job of observation.durable.raw.durable.jobs) for (const part of job.parts) part.repair_reserved = 99; },
+    value => { for (const observation of value.observations) for (const job of observation.durable.raw.durable.jobs) { job.progress.extra_requests = 2; job.progress_json = JSON.stringify(job.progress); } }
   );
   else corruptions.push(
     value => { value.observations.at(-1).durable.raw.durable.relation_requests = []; },

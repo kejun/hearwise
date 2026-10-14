@@ -101,6 +101,22 @@ export function validateGenerationReplayEvidence(trace, replay) {
       expect(Array.isArray(raw.calls) && Array.isArray(raw.executions) && Array.isArray(raw.ledger), 'raw_roster');
       expect(raw.calls.length === bindings.requests.filter(row => row.callIndex !== null).length && raw.executions.length === raw.calls.length, 'call_execution_roster');
       expect(raw.ledger.every((row, i) => row.sequence === i), 'ledger_sequence');
+      for (const call of raw.calls) {
+        const executions = raw.executions.filter(row => row.jobId === call.jobId);
+        expect(executions.length === 1 && executions[0].listeningId === call.listeningId && typeof executions[0].settled === 'boolean' &&
+          (protocol === 'knowledge' ? executions[0].attempt === 1 : !Object.hasOwn(executions[0], 'attempt')), 'execution_owner_identity');
+        for (const event of ['provider_reserved', 'provider_started']) {
+          const rows = raw.ledger.filter(row => row.event === event && row.index === call.index);
+          expect(rows.length === (event === 'provider_reserved' ? 1 : Number(call.sent)) && rows.every(row => row.jobId === call.jobId && row.listeningId === call.listeningId), 'provider_ledger_identity');
+        }
+        const deliveries = raw.ledger.filter(row => row.event === 'provider_delivery' && row.index === call.index);
+        expect(deliveries.length === call.deliveries && deliveries.every((row, i) => row.delivery === i + 1 && row.response === (i ? 'ok' : call.response)), 'provider_ledger_delivery');
+      }
+      for (const row of raw.ledger.filter(row => ['provider_reserved', 'provider_started', 'provider_delivery', 'provider_abort_observed', 'provider_usage'].includes(row.event)))
+        expect(integer(row.index) && row.index < raw.calls.length, 'provider_ledger_actor');
+      if (protocol === 'knowledge') for (const job of raw.durable.jobs) expect(
+        equal(JSON.parse(job.progress_json), job.progress) && job.progress.cycle === 1 && job.progress.extra_requests === 0 && job.progress.protocol_retries === 0 &&
+        [0, 1].includes(job.attempts) && job.parts.length === 1 && job.parts.every(part => part.repair_reserved === 0 && [0, 1].includes(part.initial_requests)), 'knowledge_envelope_budget');
       for (const row of raw.ledger.filter(row => row.event === 'admission_readiness')) expect(integer(row.clock) &&
         typeof row.permit === 'boolean' && row.readyAt === row.clock + (row.permit ? 0 : 60000), 'provider_readiness');
       const permits = raw.ledger.filter(row => row.event === 'admission_permit'), admissions = raw.ledger.filter(row => row.event === 'admission_consumed');
@@ -124,6 +140,17 @@ export function validateGenerationReplayEvidence(trace, replay) {
         expect(raw.clock === previous.raw.clock + (step.action === 'permit' ? 6000 : 0), 'virtual_clock_changed');
         expect(equal(bindings.sessions, previous.bindings.sessions), 'session_identity_changed');
         const added = raw.ledger.slice(previous.raw.ledger.length);
+        const actionRequest = bindings.requests.find(row => row.id === step.actor);
+        const actionCall = step.action === 'reserve' ? raw.calls.at(-1) : raw.calls[actionRequest?.callIndex];
+        for (const [event, action] of [['provider_reserved', 'reserve'], ['provider_started', 'send']]) {
+          const rows = added.filter(row => row.event === event);
+          expect(rows.length === Number(step.action === action) && rows.every(row => row.index === actionCall.index && row.jobId === actionCall.jobId && row.listeningId === actionCall.listeningId), 'provider_action_binding');
+        }
+        const delivered = added.filter(row => row.event === 'provider_delivery');
+        expect(delivered.length === Number(['response', 'duplicate'].includes(step.action)) && delivered.every(row => row.index === actionCall.index &&
+          row.response === (step.response === 'failed' ? 'failure' : 'ok') && row.delivery === previous.raw.calls[row.index].deliveries + 1), 'delivery_action_binding');
+        const usage = added.filter(row => row.event === 'provider_usage');
+        expect(usage.length === Number(step.action === 'usage') && usage.every(row => row.index === actionCall.index && row.totalTokens === 7), 'usage_action_binding');
         expect(added.filter(row => row.event === 'restart_http').length === Number(step.action === 'restart'), 'restart_action_binding');
         if (step.action === 'restart') {
           const closed = added.filter(row => row.event === 'local_resources_closed');
@@ -159,6 +186,8 @@ export function validateGenerationReplayEvidence(trace, replay) {
         }
         for (const call of previous.raw.calls) {
           const next = raw.calls[call.index]; expect(equal(select(next, identity), select(call, identity)), 'rewritten_provider_identity');
+          const beforeExecution = previous.raw.executions.find(row => row.jobId === call.jobId), afterExecution = raw.executions.find(row => row.jobId === call.jobId);
+          expect(equal(select(beforeExecution, ['jobId', 'listeningId', 'attempt']), select(afterExecution, ['jobId', 'listeningId', 'attempt'])), 'execution_identity_changed');
           const request = bindings.requests.find(row => row.callIndex === call.index), targeted = step.actor === request.id;
           const delivery = targeted && ['response', 'duplicate'].includes(step.action);
           expect(next.deliveries === call.deliveries + Number(delivery), 'provider_delivery_count');
