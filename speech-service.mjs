@@ -23,7 +23,10 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
     let sessionTrace;
     const unitTraces = new Map();
     const completedSamples = new Map();
-    const metric = (event, extra = {}) => onMetric({ event, consumer: owner, run: consumer?.runId, provider, model, ...extra });
+    const metric = (event, extra = {}) => {
+      try { onMetric({ event, consumer: owner, run: consumer?.runId, provider, model, ...extra }); }
+      catch { /* Diagnostics cannot fail playback or interrupt resource cleanup. */ }
+    };
     const send = data => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ ...data, epoch })); };
     const dispose = (graceful = false) => {
       if (closed) return;
@@ -32,7 +35,9 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
       unitTraces.clear(); sessionTrace?.cancel('consumer_closed');
       tts?.close(graceful); tts = null;
       phraseRequest?.abort(); ledger?.close();
-      consumers.delete(consumer); onDispose(consumer?.listeningId); setHead(owner, null); units = []; activeKey = null;
+      consumers.delete(consumer);
+      try { onDispose(consumer?.listeningId); } catch { /* Notification cannot interrupt this consumer's cleanup. */ }
+      setHead(owner, null); units = []; activeKey = null;
     };
     const finish = (type, message, error) => {
       if (type === 'speech.finished') sessionTrace?.succeed();
@@ -224,7 +229,11 @@ export function createSpeechService({ store, taskRuntime, setHead = () => {}, cr
     client.on('message', (raw, binary) => {
       if (closed) return;
       let msg;
-      try { if (binary) throw new Error(); msg = JSON.parse(raw.toString()); }
+      try {
+        if (binary) throw new Error();
+        msg = JSON.parse(raw.toString());
+        if (!msg || typeof msg !== 'object' || Array.isArray(msg)) throw new Error('Invalid message shape');
+      }
       catch { return finish('speech.error', '播报消息格式无效'); }
       if (msg.type === 'speech.stop') {
         sessionTrace?.cancel('user_cancelled');

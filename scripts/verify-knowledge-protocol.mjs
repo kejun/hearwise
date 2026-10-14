@@ -6,4 +6,4 @@ import { createKnowledgeProtocolAdapter } from '../test-support/knowledge-protoc
 await runFormalProtocol({ ...knowledgeEvidenceDefinition, modelRoot: knowledgeModelRoot, label: 'Knowledge protocol', script: 'verify:knowledge-protocol',
   environmentVariable: 'KNOWLEDGE_PROTOCOL_EVIDENCE_DIR', defaultDirectory: 'verification-evidence/knowledge-protocol',
   replayTrace: replayKnowledgeTrace, createAdapter: createKnowledgeProtocolAdapter, validateEvidence: validateKnowledgeEvidence,
-  regressionFiles: ['test/knowledge-protocol-replay.test.mjs', 'test/model-trace-driver.test.mjs'] });
+  regressionFiles: ['test/knowledge-protocol-replay.test.mjs', 'test/knowledge-model-guards.test.mjs', 'test/model-trace-driver.test.mjs'] });

@@ -1,0 +1,275 @@
+{
+  "schemaVersion": 1,
+  "specification": "configurations.qnt",
+  "init": "Init",
+  "step": "Step",
+  "invariant": "Safety",
+  "single": {
+    "main": "single",
+    "tokens": [
+      0
+    ],
+    "maximumPreviewGenerations": 2,
+    "maximumExternalWrites": 2,
+    "maximumRestarts": 1,
+    "maximumPostWriteFailures": 1,
+    "apalacheDepth": 8
+  },
+  "multiple": {
+    "mains": [
+      {
+        "main": "two_tokens",
+        "tokens": [
+          0,
+          1
+        ]
+      }
+    ],
+    "maximumPreviewGenerations": 2,
+    "maximumExternalWrites": 2,
+    "maximumRestarts": 1,
+    "maximumPostWriteFailures": 1,
+    "modes": [
+      "append",
+      "replace"
+    ],
+    "requestChoices": "Every enabled upload, re-preview, mode/generation request, external write connection, expiration callback, restart and one-shot post-write failure is nondeterministic. No fixed scripts.",
+    "scope": "Two independently uploaded tokens; successful commit of either invalidates the other preview revision. All enabled orderings within the exact bounds are enumerated.",
+    "apalacheDepth": 8
+  },
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "mains": [
+      "single_witnesses",
+      "two_tokens_witnesses"
+    ],
+    "seed": "42",
+    "maxSamples": 1,
+    "expectedTestCount": 30,
+    "outputPattern": "{main}-{test}-{seq}.itf.json",
+    "counts": {
+      "single_witnesses": 24,
+      "two_tokens_witnesses": 6
+    }
+  },
+  "mutants": [
+    {
+      "main": "mutant_skip_version",
+      "expectedViolation": "versionBound",
+      "maxSteps": 3,
+      "semantics": "Suppress the stored preview revision check while preserving all other commit guards."
+    },
+    {
+      "main": "mutant_skip_expiry",
+      "expectedViolation": "expiryBound",
+      "maxSteps": 3,
+      "semantics": "Deliver the original expiry callback but deliberately retain a usable pending upload instead of invalidating it."
+    },
+    {
+      "main": "mutant_retain_token",
+      "expectedViolation": "singleConsumption",
+      "maxSteps": 4,
+      "semantics": "Retain the usable token after commit by removing both consumed and immediate Map deletion defenses; re-preview allows a second successful commit. Removing only consumed is equivalent while Map deletion remains."
+    }
+  ],
+  "traceContract": {
+    "variables": [
+      "lastAction",
+      "actor",
+      "requestedMode",
+      "requestedGeneration",
+      "fault",
+      "lastHTTPStatus",
+      "lastHTTPCode",
+      "businessIds",
+      "clientGeneration",
+      "clientMode",
+      "clientCurrentCount",
+      "clientAddedCount",
+      "clientSkippedCount",
+      "uploaded",
+      "present",
+      "expired",
+      "uploadEpoch",
+      "previewRevision",
+      "consumptionCount",
+      "dbRevision",
+      "writes",
+      "restarts",
+      "failures",
+      "versionAccepted",
+      "expiryAccepted",
+      "modeAccepted",
+      "generationAccepted",
+      "epochAccepted",
+      "beforeBusinessIds"
+    ],
+    "projectionFields": [
+      "lastHTTPStatus",
+      "lastHTTPCode",
+      "businessIds",
+      "clientGeneration",
+      "clientMode",
+      "clientCurrentCount",
+      "clientAddedCount",
+      "clientSkippedCount"
+    ],
+    "ghostVariables": [
+      "uploaded",
+      "present",
+      "expired",
+      "uploadEpoch",
+      "previewRevision",
+      "consumptionCount",
+      "dbRevision",
+      "writes",
+      "restarts",
+      "failures",
+      "versionAccepted",
+      "expiryAccepted",
+      "modeAccepted",
+      "generationAccepted",
+      "epochAccepted",
+      "beforeBusinessIds"
+    ],
+    "normalization": "Strip module namespaces through the last ::; reject duplicate normalized variable names.",
+    "integerEncoding": {
+      "#bigint": "decimal integer string"
+    },
+    "mapEncoding": {
+      "#map": [
+        [
+          "integer upload token index",
+          "ITF value"
+        ]
+      ]
+    },
+    "setEncoding": {
+      "#set": [
+        "integer business ID; normalize to sorted unique arrays"
+      ]
+    },
+    "actor": "Upload token index for upload/preview/commit/expire/cleanup; -1 for init/same_write/other_write/restart/stutter.",
+    "requestedMode": "append/replace for upload and preview; append/replace/invalid for commit; empty string otherwise.",
+    "requestedGeneration": "1 for upload; new successful generation for preview (0 on rejected preview); request generation 0..2 for commit; 0 otherwise. Unissued generations use an invalid opaque value in HTTP replay.",
+    "fault": "true only for a qualified commit with the one-shot post-write COMMIT fault; false for every other action.",
+    "lastHTTPStatus": "Latest completed modeled HTTP response; init=0. Non-HTTP actions preserve the preceding status/code.",
+    "lastHTTPCode": "Empty string for successful HTTP responses and init; exact server error code for rejection or injected failure.",
+    "businessIds": "Initial local listening ID normalizes to 0; token t contains one listening normalized to t+1. Replace sets {t+1}; append unions {t+1}. Actual adapter additionally checks full persistent row/schema snapshots on rejection and rollback.",
+    "clientMetadata": "Maps contain only the latest successful validate/preview response, not inferred server Map contents. Initial generation/counts are 0 and mode is empty. Rejected preview and all commits preserve these maps.",
+    "revision": "Internal equality abstraction of SHA256(total_changes,data_version,schema_version); actual public HTTP status plus persisted row snapshots establishes implementation conformance. Raw revision counters and pendingImports are not observable projection fields. Obsolete preview revision values are quotiented to -1 after a real revision change, preserving every equality guard and every public projection.",
+    "externalWrites": "same_write and other_write each change persisted content but preserve the business ID set. Both invalidate every older preview; shared maximum is two writes, with either connection chosen independently.",
+    "transactionBoundary": "Request body/upload awaits precede each HTTP action. The commit action linearizes synchronous qualification, SQLite BEGIN/validation/writes/COMMIT or ROLLBACK, consumed assignment and Map deletion. No invented pause exists inside that critical section.",
+    "postWriteFailure": "At most one injected failure at real SQLite COMMIT after writes. ROLLBACK preserves rows/schema; total_changes still advances, invalidating older previews. Append returns 409 APPEND_FAILED; replace returns 500 RESTORE_FAILED. Explicit re-preview is required before successful retry.",
+    "cleanup": "Asynchronous filesystem cleanup is a stutter of all public and qualification state. Response latency during unlink is abstracted away; file deletion cannot requalify a token.",
+    "expiry": "expire is delivery of the actual 900000-ms timer callback installed by validate. Preview never installs or renews that timer. No claim about a hard real-time deadline, scheduler fairness or eventual callback delivery.",
+    "restart": "One genuine server process death/new process is represented by clearing all pending tokens while preserving imported business IDs and the client-held preview metadata. Subsequent fresh upload of the other token is possible.",
+    "safety": "versionBound, expiryBound, modeBound, generationBound, restartBound, singleConsumption, refusedCommitUnchanged, successfulCommitResult, tokenDomains and finiteDomain."
+  },
+  "profiles": {
+    "fast": {
+      "default": true,
+      "apalacheDepth": {
+        "single": 8,
+        "two_tokens": 8
+      },
+      "tlc": "Both declared finite domains must finish complete enumeration.",
+      "claim": "Apalache is bounded to the explicit fast depths; TLC is complete only for the declared finite domains."
+    },
+    "deep": {
+      "default": false,
+      "apalacheDepth": {
+        "single": 12,
+        "two_tokens": 12
+      },
+      "tlc": "Same complete finite domains as fast.",
+      "claim": "Separate deep run; pending, interrupted, missing or timed-out checks are not passes."
+    }
+  },
+  "profileRationale": "Finite-domain bounds are unchanged by profiles. Final-model probes completed single TLC (83,751 generated / 5,552 distinct / queue0 / graph depth10) in2.463s and two_tokens TLC (8,733,905 generated / 318,766 distinct / queue0 / graph depth13) in108.007s. Bounded Apalache depth8 completed in13.902s (single) and63.183s (two_tokens). Initial unquotiented two-token TLC timed out90s and depth12 timed out180s; those probes are not passes. Fast is depth8; deep independently requests depth12. Every final run must establish its own completed TLC enumeration and bounded-check status.",
+  "simulation": {
+    "seed": "20261014",
+    "samples": 100,
+    "maximumSteps": 30,
+    "selectedTraces": 5
+  },
+  "exclusions": [
+    "unbounded token, preview generation, write, restart or fault counts",
+    "wall-clock deadline and fairness/liveness guarantees",
+    "SQLite row-copy, trigger and foreign-key atomicity proof (KEJ-73)",
+    "malformed JSON, invalid uploads, runtime-busy resources and filesystem failures",
+    "concurrent external-connection commits inside the synchronous SQLite transaction; the SQLite write lock is assumed",
+    "automatic model-provider calls and browser confirmation behavior are separate implementation evidence",
+    "UI cancellation has no server-side cancel-token endpoint; browser-specific tests cover cancelling the confirmation"
+  ],
+  "costProbes": {
+    "purpose": "Provisional local sizing only; not source-stamped final acceptance. Concurrent probes may affect wall time.",
+    "toolchain": {
+      "quint": "0.33.0",
+      "apalache": "0.62.1",
+      "tlcBundled": "1.8.0",
+      "tlcWorkers": 1,
+      "tlcMaxHeap": "1G",
+      "apalacheMaxHeap": "2G"
+    },
+    "modelFileSha256": {
+      "protocol.qnt": "36fd666334383eba014c1a869e79ee7af1a5a972d3e9a669e9a4648b7f566565",
+      "configurations.qnt": "5ed7077d3b699c1264a1aa2875b3edf4de61ec4db6792ba0794d846c76a0964a",
+      "witnesses.qnt": "3421cc70cd346cc4f8c37953e941fab2c7ba31fd7d2b02636af65e6c9db2a828",
+      "tlc.json": "053eb86e4fb6270146e722352e83bcf1ca9dc6dd950aa9cd15b900a51bf5f7ec"
+    },
+    "tlc": {
+      "single": {
+        "complete": true,
+        "generated": 83751,
+        "distinct": 5552,
+        "queued": 0,
+        "graphDepth": 10,
+        "checkerMilliseconds": 2463
+      },
+      "two_tokens": {
+        "complete": true,
+        "generated": 8733905,
+        "distinct": 318766,
+        "queued": 0,
+        "graphDepth": 13,
+        "checkerMilliseconds": 108007
+      }
+    },
+    "apalacheFast": {
+      "single": {
+        "complete": true,
+        "depth": 8,
+        "checkerMilliseconds": 13902
+      },
+      "two_tokens": {
+        "complete": true,
+        "depth": 8,
+        "checkerMilliseconds": 63183
+      }
+    },
+    "recommendedProcessBudgetsMs": {
+      "tlcSingle": 60000,
+      "tlcTwoTokens": 240000,
+      "apalacheFast": 240000,
+      "apalacheDeepTwoTokens": 900000
+    },
+    "earlierIncompleteProbes": [
+      {
+        "phase": "before internal revision quotient",
+        "checker": "TLC",
+        "main": "two_tokens",
+        "timeoutMs": 90000,
+        "complete": false
+      },
+      {
+        "phase": "before internal revision quotient",
+        "checker": "Apalache",
+        "main": "two_tokens",
+        "depth": 12,
+        "timeoutMs": 180000,
+        "complete": false
+      }
+    ]
+  }
+}
