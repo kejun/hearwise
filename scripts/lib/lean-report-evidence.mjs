@@ -192,9 +192,11 @@ export async function validateLeanEvidence(kind, directory, { release = true } =
     assert.ok(log.startsWith('TAP version 13\n') || log.startsWith('TAP version 13\r\n'));
     // A fabricated footer alone is not raw Node test evidence. These existing
     // regression suites are flat; require their actual numbered reporter rows.
-    const rows = [...log.matchAll(/^(?:not )?ok (\d+) - .+$/gm)];
-    assert.equal(rows.length, footer?.plan);
-    assert.ok(rows.every((row, i) => Number(row[1]) === i + 1));
+    const rows = [...log.matchAll(/^(not )?ok (\d+) - (.+)$/gm)];
+    assert.equal(rows.length, footer?.plan); assert.equal(rows.length, footer?.tests); assert.equal(footer?.suites, 0);
+    assert.equal(rows.filter(row => row[1]).length, footer?.fail);
+    assert.equal(rows.filter(row => !row[1]).length, footer?.pass);
+    assert.ok(rows.every((row, i) => Number(row[2]) === i + 1 && !/#\s*(?:SKIP|TODO)\b/i.test(row[3])));
     assert.deepEqual(metrics, report[contract.metrics]);
     assert.equal(metrics.tapComplete, true);
   });
