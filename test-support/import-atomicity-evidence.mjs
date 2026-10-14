@@ -102,10 +102,23 @@ function boundaryEvidence(row, source) {
     if (crashed) assert.equal(row.marker.name, row.boundary);
   } else assert.ok(!crashed && row.fault === 'write');
 }
-export function validateAtomicityObservations(observations) {
+function withinExecutionWindow(rows, window) {
+  if (!window) return;
+  const start = Date.parse(window.startedAt), finish = Date.parse(window.finishedAt);
+  assert.ok(Number.isFinite(start) && Number.isFinite(finish) && start <= finish, 'invalid execution window');
+  for (const row of rows) {
+    const records = [...(row.lifecycle || []), ...(row.events || []), ...(row.failureEvents || []), ...(row.marker ? [row.marker] : [])];
+    for (const record of records) {
+      const at = Date.parse(record.at);
+      assert.ok(Number.isFinite(at) && at >= start && at <= finish, 'observation outside execution window');
+    }
+  }
+}
+export function validateAtomicityObservations(observations, window) {
   const reasons = [];
   try {
     assert.equal(observations.version, atomicityVersion);
+    withinExecutionWindow(observations.scenarios, window);
     const rows = observations.scenarios, expectedIds = [...dataCases.map(kind => `data/${kind}`), ...atomicityCases.map(caseId)];
     assert.deepEqual(rows.map(row => row.id).sort(), expectedIds.sort(), 'exact required matrix');
     for (const row of rows) {
@@ -166,8 +179,9 @@ export function validateAtomicityObservations(observations) {
   } catch (error) { reasons.push(error.message); }
   return { ok: reasons.length === 0, reasons };
 }
-export function validateAtomicityBrowser(browser) {
+export function validateAtomicityBrowser(browser, window) {
   try {
+    withinExecutionWindow(browser.scenarios, window);
     assert.ok(browser.chromium); assert.equal(browser.scenarios.length, 2);
     assert.deepEqual(browser.scenarios.map(row => row.mode).sort(), ['append', 'replace']);
     assert.deepEqual(browser.cleanup, [{ target: 'Chromium', ok: true }]);

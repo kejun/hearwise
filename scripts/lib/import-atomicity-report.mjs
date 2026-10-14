@@ -39,7 +39,7 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
   }
   const node = check('node'), regressions = check('regressions'), browserCheck = check('browser');
   let raw, nodeValidation = { ok: false, reasons: ['observations_missing'] };
-  try { raw = JSON.parse(artifacts.get('observations.json')); nodeValidation = validateAtomicityObservations(raw);
+  try { raw = JSON.parse(artifacts.get('observations.json')); nodeValidation = validateAtomicityObservations(raw, report);
     if (!isDeepStrictEqual(raw.source, { sha: report.sourceStart.sha, dirty: report.sourceStart.dirty })) nodeValidation = { ok: false, reasons: ['runtime_source_mismatch'] }; } catch { /* fail closed */ }
   let controlsValid = false;
   try {
@@ -54,7 +54,7 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
   let browser, browserValidation = { ok: false, reasons: ['browser_not_run'] };
   if (!report.nodeOnly) {
     try {
-      browser = JSON.parse(artifacts.get('browser.json')); browserValidation = validateAtomicityBrowser(browser);
+      browser = JSON.parse(artifacts.get('browser.json')); browserValidation = validateAtomicityBrowser(browser, report);
       if (!isDeepStrictEqual(browser.source, { sha: report.sourceStart.sha, dirty: report.sourceStart.dirty })) browserValidation = { ok: false, reasons: ['runtime_source_mismatch'] };
       for (const row of browser.scenarios) for (const screenshot of row.screenshots) {
         if (!artifacts.has(screenshot.path) || hash(artifacts.get(screenshot.path)) !== screenshot.sha256) browserValidation = { ok: false, reasons: ['screenshot_missing_or_changed'] };
