@@ -11,6 +11,7 @@ export const playbackProjectionFields = [...playbackScalarFields, ...Object.keys
 export const playbackVariables = ['lastAction', 'actor', 'choice', ...playbackProjectionFields];
 export const fixtureTexts = { A: ['甲。', '乙。'], B: ['丙。', '丁。'] };
 const equal = isDeepStrictEqual;
+const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 
 export function normalizePlaybackTrace(itf, config) {
   const states = normalizeITFStates(itf, playbackVariables);
@@ -31,7 +32,22 @@ export function validPlaybackTrace(trace) {
       state[field] && equal(Object.keys(state[field]).sort(), keys) && Object.values(state[field]).every(value => typeof value === typeof initial &&
         (typeof initial !== 'number' || Number.isSafeInteger(value) && value >= 0)));
   const actions = ['start', 'seek', 'unlock', 'stop', 'switchRecord', 'pause', 'resume', 'resumeComplete', 'pcm', 'complete', 'consume', 'settled', 'late', 'frame', 'stutter'];
-  return valid(trace.initial) && trace.steps.every(step => valid(step.expected) && actions.includes(step.action) && Number.isInteger(step.actor) && typeof step.choice === 'string');
+  const initial = { created: 0, active: 0, selectedRecord: 'A', paused: false, resuming: false,
+    ...Object.fromEntries(Object.entries(playbackMapDefaults).map(([field, value]) => [field, Object.fromEntries(keys.map(key => [key, value]))])) };
+  return valid(trace.initial) && equal(trace.initial, initial) && trace.steps.every((step, index) => {
+    if (!valid(step.expected) || !actions.includes(step.action) || !Number.isInteger(step.actor) || typeof step.choice !== 'string') return false;
+    const prior = index ? trace.steps[index - 1].expected : trace.initial;
+    if (step.action === 'start') return step.actor === prior.created + 1 && step.actor <= trace.config.owners && /^([AB])-(paused|playing)-[12]$/.test(step.choice) &&
+      (trace.config.maxPcm !== 0 || step.choice === 'A-playing-1');
+    if (step.action === 'seek') return trace.config.maxPcm !== 0 && prior.active > 0 && step.actor === prior.created + 1 && step.actor <= trace.config.owners && ['1', '2'].includes(step.choice);
+    if (step.action === 'switchRecord') return trace.config.maxPcm !== 0 && step.actor === prior.active && ['A', 'B'].includes(step.choice);
+    if (step.action === 'stutter') return step.actor === 0 && step.choice === '';
+    if (['stop', 'pause', 'resume'].includes(step.action)) return step.actor > 0 && step.actor === prior.active && step.choice === '';
+    if (step.actor < 1 || step.actor > prior.created) return false;
+    if (step.action === 'late') return ['suspended', 'error', 'close', 'socket-error'].includes(step.choice);
+    if (step.action === 'frame') return ['wrong-epoch', 'reordered', 'interleaved', 'malformed', 'duplicate'].includes(step.choice);
+    return step.choice === '';
+  });
 }
 
 // This is a projection of observations of the real controller/player/service.
@@ -66,7 +82,7 @@ export function auditPlaybackObservation(raw, actual, config) {
     require(Object.keys(raw.records).sort().join(',') === 'A,B', 'record_count');
     for (const [name, texts] of Object.entries(fixtureTexts)) {
       const record = raw.records[name];
-      require(typeof record.listeningId === 'string' && record.listeningId.length > 0 && typeof record.runId === 'string', `record_identity_${name}`);
+      require(uuid(record.listeningId) && uuid(record.runId), `record_identity_${name}`);
       require(equal(record.rows.map(row => [row.sequence_no, row.original_text, row.translation_text, row.translation_state]),
         texts.map((text, i) => [i + 1, `Source ${name}${i + 1}.`, text, 'complete'])), `sqlite_text_${name}`);
       require(record.rows.every(row => row.listening_id === record.listeningId && row.run_id === record.runId), `sqlite_owner_${name}`);
@@ -82,6 +98,13 @@ export function auditPlaybackObservation(raw, actual, config) {
       require(transcript.length === (o.unlocked ? 1 : 0), `transcript_count_${g.id}`);
       if (transcript.length) require(transcript[0].listeningId === record.listeningId && transcript[0].runId === record.runId &&
         transcript[0].startPosition === g.positionAtCreation && transcript[0].epoch === o.epoch && [1, 2].includes(o.epoch), `transcript_owner_${g.id}`);
+      require(g.incoming.every(message => ['speech.ready', 'speech.state', 'speech.unit', 'speech.unit-end', 'speech.backlog', 'speech.finished'].includes(message.type) && message.epoch === o.epoch), `incoming_domain_${g.id}`);
+      require(g.outgoing.every(message => ['speech.transcript', 'speech.pause', 'speech.resume', 'speech.progress', 'speech.stop'].includes(message.type) && message.epoch === o.epoch), `outgoing_domain_${g.id}`);
+      const terminal = g.incoming.findIndex(message => message.type === 'speech.finished');
+      require(terminal < 0 || terminal === g.incoming.length - 1, `terminal_message_${g.id}`);
+      require(Array.isArray(g.serverPackets) && g.serverPackets.length === g.sentFrames, `server_packet_count_${g.id}`);
+      require(g.serverPackets.every((packet, index) => packet.generation === g.id && packet.epoch === o.epoch && packet.unit === index + 1 &&
+        packet.frame === 0 && packet.declaredSamples === 2 && packet.byteLength === 20 && equal(packet.samples, [513, 1027])), `server_packet_header_${g.id}`);
       const units = g.incoming.filter(message => message.type === 'speech.unit');
       const ends = g.incoming.filter(message => message.type === 'speech.unit-end');
       const available = fixtureTexts[g.record].slice(g.positionAtCreation - 1);
@@ -109,14 +132,50 @@ export function auditPlaybackObservation(raw, actual, config) {
   return [...new Set(violations)];
 }
 
+// Records, owner identities and already-observed events cannot be rewritten
+// between snapshots even when each individual snapshot is internally consistent.
+export function auditPlaybackHistory(previous, raw) {
+  if (!previous) return [];
+  const violations = [], require = (condition, code) => { if (!condition) violations.push(code); };
+  const prefix = (before, after) => Array.isArray(before) && Array.isArray(after) && after.length >= before.length && equal(after.slice(0, before.length), before);
+  try {
+    require(equal(raw.records, previous.records), 'immutable_sqlite_records');
+    require(raw.generations.length >= previous.generations.length && raw.generations.length <= previous.generations.length + 1, 'monotone_owner_count');
+    for (const old of previous.generations) {
+      const next = raw.generations.find(g => g.id === old.id);
+      require(Boolean(next) && next.record === old.record && next.positionAtCreation === old.positionAtCreation, `immutable_owner_${old.id}`);
+      require(prefix(old.incoming, next.incoming) && prefix(old.outgoing, next.outgoing) && prefix(old.serverPackets, next.serverPackets), `append_only_messages_${old.id}`);
+      require(next.requests.length >= old.requests.length && old.requests.every((request, i) => {
+        const current = next.requests[i];
+        return current.generation === request.generation && current.text === request.text && (!request.emitted || current.emitted) && (!request.completed || current.completed);
+      }), `monotone_requests_${old.id}`);
+      require((!old.player.closed || next.player.closed) && (!old.player.nodeAttached || next.player.nodeAttached) &&
+        (!old.providerClosed || next.providerClosed) && (!old.settling || next.settling) && next.sentFrames >= old.sentFrames, `monotone_lifecycle_${old.id}`);
+      require(['write', 'consumedSamples', 'playedUnit'].every(key => next.player.buffer[key] >= old.player.buffer[key]), `monotone_buffer_${old.id}`);
+    }
+  } catch (error) { violations.push(`malformed_history:${error.name}`); }
+  return [...new Set(violations)];
+}
+export function auditPlaybackReplay(replay, config) {
+  if (!Array.isArray(replay?.observations) || !replay.observations.length) return ['missing_replay_observations'];
+  let previous;
+  const violations = [];
+  for (const observation of replay.observations) {
+    violations.push(...auditPlaybackObservation(observation.durable, observation.actual, config), ...auditPlaybackHistory(previous, observation.durable));
+    previous = observation.durable;
+  }
+  return [...new Set(violations)];
+}
+
 export async function createAuditedPlaybackAdapter(config) {
   const real = await createPlaybackAdapter({ wireModulus: 2, ...(config.mutation && config.mutation !== 'none' ? { mutation: config.mutation } : {}) });
-  const positions = new Map();
-  let raw;
+  const positions = new Map(), serverPackets = new Map(), capturedSockets = new WeakSet();
+  let raw, previous;
   const observe = () => {
     const observed = real.observe();
     const generations = real.generations.map(g => ({ id: g.id, record: g.record, positionAtCreation: positions.get(g.id),
       requests: g.requests.map(r => ({ generation: r.generation, text: r.text, emitted: r.emitted, completed: r.completed })),
+      serverPackets: structuredClone(serverPackets.get(g.id) || []),
       incoming: structuredClone(g.incoming), outgoing: structuredClone(g.outgoing), sentFrames: g.sentFrames,
       providerClosed: g.providerClosed, settling: g.settling,
       player: { closed: g.player.closed, paused: g.player.paused, nodeAttached: Boolean(g.player.node),
@@ -150,11 +209,34 @@ export async function createAuditedPlaybackAdapter(config) {
       else if (['stop', 'pause', 'resume'].includes(action)) await real[action]();
       else if (['unlock', 'resumeComplete', 'pcm', 'complete', 'consume', 'settled'].includes(action)) await real[action](actor);
       else throw new Error(`Unsupported playback action: ${action}`);
-      for (const g of real.generations) if (!positions.has(g.id)) positions.set(g.id, real.changes.at(-1).position);
+      for (const g of real.generations) {
+        if (!positions.has(g.id)) positions.set(g.id, real.changes.at(-1).position);
+        if (g.socket && !capturedSockets.has(g.socket)) {
+          // Observe the real server transport bytes without changing or replacing
+          // them. Unlock sends metadata; later explicit pcm actions emit bytes.
+          const original = g.socket.client.send, packets = [];
+          serverPackets.set(g.id, packets); capturedSockets.add(g.socket);
+          g.socket.client.send = function (...args) {
+            const data = args[0];
+            if (Buffer.isBuffer(data)) {
+              const packet = { generation: g.id, byteLength: data.byteLength, epoch: null, unit: null, frame: null, declaredSamples: null, samples: [] };
+              if (data.byteLength >= 16) {
+                [packet.epoch, packet.unit, packet.frame, packet.declaredSamples] = [0, 4, 8, 12].map(offset => data.readUInt32LE(offset));
+                for (let offset = 16; offset + 1 < data.byteLength; offset += 2) packet.samples.push(data.readInt16LE(offset));
+              }
+              packets.push(packet);
+            }
+            return original.apply(this, args);
+          };
+        }
+      }
     },
     project() { const value = observe(); return projectPlaybackObservation(value.observed, value.generations, config.owners); },
     observe,
-    check() { return auditPlaybackObservation(raw, projectPlaybackObservation(raw.observed, raw.generations, config.owners), config); },
+    check() {
+      const violations = [...auditPlaybackObservation(raw, projectPlaybackObservation(raw.observed, raw.generations, config.owners), config), ...auditPlaybackHistory(previous, raw)];
+      previous = raw; return violations;
+    },
     close: () => real.close()
   };
   const act = adapter.act;

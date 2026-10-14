@@ -6,7 +6,7 @@ import { digest, sourceVersion } from './verification-evidence.mjs';
 import { normalizeITFStates } from './protocol-replay.mjs';
 import { formalPlan, validateFormalEvidence, checkerConclusion } from './formal-protocol-evidence.mjs';
 import { tapMetrics } from './tap-summary.mjs';
-import { normalizePlaybackTrace, auditPlaybackObservation } from './playback-protocol-replay.mjs';
+import { normalizePlaybackTrace, auditPlaybackObservation, auditPlaybackReplay } from './playback-protocol-replay.mjs';
 import { properties } from '../../verification/playback-protocol/properties.mjs';
 
 export const playbackModelRoot = path.resolve('verification/playback-protocol');
@@ -55,7 +55,7 @@ export function expectedPlaybackCounterexample(replay) {
       trace.steps.at(-1).action !== 'late' || trace.steps.at(-1).actor !== 1 || trace.steps.at(-1).choice !== 'suspended' ||
       d.expected?.active !== 3 || d.actual?.active !== 3 || d.expected?.paused !== false || d.actual?.paused !== true ||
       d.expected?.epoch?.[1] !== 1 || d.expected?.epoch?.[3] !== 1 || replay.observations?.length !== 8) return false;
-  return replay.observations.every((observation, index) => observation.step === index - 1 &&
+  return auditPlaybackReplay(replay, trace.config).length === 0 && replay.observations.every((observation, index) => observation.step === index - 1 &&
     auditPlaybackObservation(observation.durable, observation.actual, trace.config).length === 0 &&
     (index === 7 ? isDeepStrictEqual(observation.actual, d.actual) : isDeepStrictEqual(observation.actual, index ? trace.steps[index - 1].expected : trace.initial)));
 }
@@ -148,7 +148,7 @@ export async function validatePlaybackEvidence(directory, options = {}) {
           const source = report.results.find(row => ['model-witness', 'simulation'].includes(row.kind) && row.traces?.includes(replay.sourceTrace));
           if (!source) throw new Error('Missing replay source');
           const trace = normalizePlaybackTrace(JSON.parse(await verified(replay.sourceTrace)), playbackTraceConfig(source.id));
-          if (!Array.isArray(replay.observations) || replay.observations.some(observation => auditPlaybackObservation(observation.durable, observation.actual, trace.config).length)) fail(result.id, 'invalid_raw_playback_observations');
+          if (auditPlaybackReplay(replay, trace.config).length) fail(result.id, 'invalid_raw_playback_observations');
           if (result.kind === 'implementation-negative' && !expectedPlaybackCounterexample(replay)) fail(result.id, 'invalid_actual_owner_counterexample');
         }
       } catch { fail(result.id, 'missing_raw_playback_observations'); }

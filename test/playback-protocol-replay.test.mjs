@@ -68,3 +68,20 @@ test('cross-record modulo-2 alias witness includes old-provider completion and n
   assert.ok(trace.steps.some(step => step.action === 'pcm' && step.actor === 1 && step.expected.active === 2));
   assert.equal((await replayPlaybackTrace(trace)).ok, true);
 });
+
+test('trace contract rejects out-of-domain actors and malformed action choices before implementation replay', async () => {
+  const { validPlaybackTrace } = await import('../scripts/lib/playback-protocol-replay.mjs');
+  const entry = traces.find(trace => trace.file.includes('fullTextSuccessTest-'));
+  for (const change of [trace => { trace.steps[0].actor = 999; }, trace => { trace.steps[0].choice = 'unknown-record-playing-999'; },
+    trace => { trace.steps[1].actor = 0; }, trace => { trace.steps[2].choice = 'unregistered'; }]) {
+    const trace = structuredClone(entry.trace); change(trace); assert.equal(validPlaybackTrace(trace), false);
+  }
+});
+test('successful-provider raw contract rejects contradictory error events and captures actual binary packet headers', async () => {
+  const entry = traces.find(trace => trace.file.includes('fullTextSuccessTest-')), result = await replayPlaybackTrace(entry.trace), last = result.observations.at(-1);
+  const raw = structuredClone(last.durable); raw.generations[0].incoming.push({ type: 'speech.error', epoch: 1, message: 'failed' });
+  assert.notDeepEqual(auditPlaybackObservation(raw, last.actual, entry.trace.config), []);
+  const packets = last.durable.generations[0].serverPackets;
+  assert.deepEqual(packets.map(packet => [packet.generation, packet.epoch, packet.unit, packet.frame, packet.declaredSamples, packet.byteLength, packet.samples]),
+    [[1, 1, 1, 0, 2, 20, [513, 1027]], [1, 1, 2, 0, 2, 20, [513, 1027]]]);
+});

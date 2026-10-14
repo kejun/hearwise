@@ -55,3 +55,23 @@ test('playback gate does not treat missing artifacts or a changed trace hash as 
 test('playback missing report returns incomplete rows rather than trusting an absent cached result', async () => {
   reject(await validatePlaybackEvidence('/tmp/no-such-playback-evidence-report'));
 });
+
+test('playback gate rejects a fully rehashed later record-identity rewrite and non-append-only owner histories', async t => {
+  const f = await gateFixture(t, traces), data = f.row('replay-witnesses').data, original = JSON.parse(f.files.get(data));
+  for (const mutate of [raw => {
+    const record = raw.records.A; record.runId = '11111111-1111-4111-8111-111111111111';
+    for (const row of record.rows) row.run_id = record.runId;
+    for (const generation of raw.generations) if (generation.record === 'A') for (const message of generation.outgoing) if (message.type === 'speech.transcript') message.runId = record.runId;
+  }, raw => { raw.generations[0].outgoing[0].config.rate = 2; }]) {
+    const replays = structuredClone(original), replay = replays.find(row => row.sourceTrace.includes('fullTextSuccessTest-'));
+    mutate(replay.observations.at(-1).durable); await f.put(data, replays); reject(await f.check());
+  }
+});
+test('playback gate rejects rehashed actual binary-header loss or corruption independently of sample counters', async t => {
+  const f = await gateFixture(t, traces), data = f.row('replay-witnesses').data, original = JSON.parse(f.files.get(data));
+  for (const mutate of [raw => { delete raw.generations[0].serverPackets; }, raw => { raw.generations[0].serverPackets[0].epoch = 999; },
+    raw => { raw.generations[0].serverPackets[0].samples[0] = 0; }]) {
+    const replays = structuredClone(original), replay = replays.find(row => row.sourceTrace.includes('fullTextSuccessTest-'));
+    mutate(replay.observations.at(-1).durable); await f.put(data, replays); reject(await f.check());
+  }
+});

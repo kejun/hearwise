@@ -198,7 +198,7 @@
       "test/playback-protocol-replay.test.mjs",
       "test/playback-protocol-evidence.test.mjs"
     ],
-    "expectedTests": 23
+    "expectedTests": 27
   },
   "exclusions": [
     "Unbounded starts, arbitrary records/text, arbitrary pause/resume repetition",

@@ -110,8 +110,14 @@ expected projection comes from Quint ITF, never a JavaScript model transition.
 Per step, raw attachments include real SQLite transcript rows and identities,
 provider request text/owner/emitted/completed fields, actual incoming/outgoing
 messages, native context and pending-resume state, player/worklet sample counters,
-and controller observations. The gate independently reconstructs the projection
-and validates the raw records/text/owners/frame counts. Cached `actual` and an
+actual server-emitted binary headers/payload, and controller observations. A
+read-only wrapper records each real server `client.send` Buffer and forwards the
+same bytes unchanged; direct malformed-frame injections remain separate trace
+inputs, not invented server packets. The gate checks header owner/epoch/unit/frame,
+2-sample/20-byte shape and the fixture PCM payload, freezes SQLite and owner
+identity across steps, requires append-only message histories, and rejects
+contradictory error events in this successful-provider domain. It independently
+reconstructs the projection and validates the raw records/text/owners/frame counts. Cached `actual` and an
 empty violation list cannot substitute for raw observations. This is evidence
 consistency checking, not a cryptographic proof that an arbitrary fabricated log
 came from a trusted machine.
