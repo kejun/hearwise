@@ -49,7 +49,8 @@ export async function readAtomicityReport(directory, { release = false, nodeOnly
   const tap = atomicityRegressionTap(artifacts.get('regressions.log')?.toString() || '');
   const nodeOk = executionPassed(node?.execution) && artifacts.has('node.log') && nodeValidation.ok && controlsValid && executionPassed(regressions?.execution) && tap.ok;
   const finished = value => [0, 1].includes(value?.code) && value.signal === null && value.timedOut === false && value.interrupted === false;
-  const nodeComplete = Boolean(finished(node?.execution) && finished(regressions?.execution) && raw && tap.testComplete);
+  const nodeComplete = Boolean(finished(node?.execution) && finished(regressions?.execution) && raw && tap.testComplete && tap.bodiesComplete);
+  if (!tap.bodiesComplete) nodeArtifactReasons.push('regression_body_incomplete');
   let browser, browserValidation = { ok: false, reasons: ['browser_not_run'] };
   if (!report.nodeOnly) {
     try {

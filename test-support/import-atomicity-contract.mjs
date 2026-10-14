@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { tapSummary } from '../scripts/lib/tap-summary.mjs';
+import { tapSummary, parseTapFooter } from '../scripts/lib/tap-summary.mjs';
 import { atomicityCases, caseId } from './import-atomicity-scenarios.mjs';
 import { dataCases } from './import-atomicity-data.mjs';
 export const atomicityRegressionFiles = ['test/import-atomicity-crash.test.mjs', 'test/import-atomicity-data.test.mjs',
@@ -21,11 +21,17 @@ export function atomicityRegressionTap(text) {
   const parsed = tapSummary(text);
   const lines = text.split(/\r?\n/);
   const headers = lines.filter(line => line.startsWith('# Subtest: ')).map(line => line.slice('# Subtest: '.length));
-  const bodies = [...text.matchAll(/^ok (\d+) - (.+)\r?\n  ---\r?\n  duration_ms: (\d+(?:\.\d+)?)\r?\n  type: 'test'\r?\n  \.\.\.\r?$/gm)];
+  const bodies = [...text.matchAll(/^(ok|not ok) (\d+) - (.+)\r?\n  ---\r?\n([\s\S]*?)^  \.\.\.\r?$/gm)];
   const namesOk = JSON.stringify(headers) === JSON.stringify(atomicityRegressionNames) && bodies.length === atomicityRegressionCount &&
-    bodies.every((match, index) => Number(match[1]) === index + 1 && match[2] === atomicityRegressionNames[index] && Number.isFinite(Number(match[3])));
-  const noExtraResults = lines.filter(line => /^(?:not )?ok \d+/.test(line)).length === atomicityRegressionCount;
-  return { ...parsed, bodiesComplete: namesOk && noExtraResults, ok: parsed.ok && parsed.testCount === atomicityRegressionCount && namesOk && noExtraResults };
+    bodies.every((match, index) => Number(match[2]) === index + 1 && match[3] === atomicityRegressionNames[index] &&
+      /^  duration_ms: \d+(?:\.\d+)?\r?$/m.test(match[4]) && /^  type: 'test'\r?$/m.test(match[4]));
+  const stream = lines.filter(line => /^\s*(?:(?:not )?ok\b|\d+\.\.|Bail out!)/.test(line));
+  const expectedStream = [...bodies.map(match => `${match[1]} ${match[2]} - ${match[3]}`), `1..${atomicityRegressionCount}`];
+  const footer = parseTapFooter(text), pass = bodies.filter(match => match[1] === 'ok').length;
+  const countsOk = footer?.plan === atomicityRegressionCount && footer.tests === atomicityRegressionCount && footer.pass === pass && footer.fail === bodies.length - pass;
+  const bodiesComplete = namesOk && countsOk && JSON.stringify(stream) === JSON.stringify(expectedStream);
+  return { ...parsed, bodiesComplete, ok: parsed.ok && bodiesComplete };
+
 }
 export function atomicityChecks(directory, nodeOnly) {
   directory = path.resolve(directory);

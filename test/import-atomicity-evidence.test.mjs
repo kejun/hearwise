@@ -39,6 +39,8 @@ test('atomicity TAP binds every expected test name number and body', async () =>
   const end = `1..${names.length}\n# tests ${names.length}\n# suites 0\n# pass ${names.length}\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1\n`;
   const whole = `TAP version 13\n${bodies.join('')}${end}`;
   assert.equal(validate(whole).ok, true);
+  const failed = whole.replace(/^ok 1 /m, 'not ok 1 ').replace(`# pass ${names.length}`, `# pass ${names.length - 1}`).replace('# fail 0', '# fail 1');
+  assert.equal(validate(failed).ok, false); assert.equal(validate(failed).bodiesComplete, true);
   assert.equal(validate(whole.replace(bodies[0], '')).ok, false);
   assert.equal(validate(whole.replace(/^ok 1 /m, 'ok 99 ')).ok, false);
   assert.equal(validate(whole.replaceAll(names[0], 'Different test')).ok, false);
