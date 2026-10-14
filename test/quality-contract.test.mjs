@@ -82,3 +82,16 @@ test('expired spending approval does not rewrite an already frozen historical as
   await assert.rejects(readFrozenQualityPlan(filename), /FREEZE_CHANGED_OR_EXPIRED/);
   const historical = await readFrozenQualityPlan(filename, { forCollection: false }); assert.equal(historical.digest, atFreeze.digest);
 });
+
+test('development and acceptance reject every whitespace-equivalent metric-normalized text', async t => {
+  for (const separator of ['  ', '\t', '\n', '\u00a0']) await t.test(JSON.stringify(separator), async child => {
+    const f = await fixture(child);
+    const accepted = f.corpus.samples.find(row => row.split === 'acceptance' && row.tasks.includes('mt'));
+    const development = f.corpus.samples.find(row => row.split === 'development');
+    accepted.text = 'Do not pay'; development.text = `DO${separator}NOT${separator}PAY`;
+    await writeFile(path.join(f.directory, 'corpus.json'), JSON.stringify(f.corpus));
+    const plan = await inspectQualityPlan(f.configFile);
+    assert.ok(plan.issues.includes(`sample:${development.id}:development_acceptance_overlap`));
+    assert.equal(plan.eligibleForFreeze, false);
+  });
+});

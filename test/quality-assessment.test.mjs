@@ -255,6 +255,15 @@ test('frozen repetition and acceptance counts cannot silently change at assessme
 });
 
 const invalidReviewCases = [
+  ...['asr', 'mt'].flatMap(kind => ['output', 'source', 'acceptedReferences', 'criticalFacts'].flatMap(field => [
+    [`${kind} review changes displayed ${field} but retains output hash`, bundle => mutateFixtureJson(bundle.reviewFile, review => {
+      const row = review.rows.find(row => row.trialId === `candidate:speech:${kind}:0`);
+      row[field] = ['acceptedReferences', 'criticalFacts'].includes(field) ? [] : 'Different displayed context';
+    })],
+    [`${kind} review omits displayed ${field} but retains output hash`, bundle => mutateFixtureJson(bundle.reviewFile, review => {
+      delete review.rows.find(row => row.trialId === `candidate:speech:${kind}:0`)[field];
+    })]
+  ])),
   ['missing review file', bundle => rm(bundle.reviewFile)],
   ['machine review relabeled as human output', bundle => mutateFixtureJson(bundle.reviewFile, review => { review.method = 'model-judge'; })],
   ['wrong review freeze digest', bundle => mutateFixtureJson(bundle.reviewFile, review => { review.frozenDigest = hashBytes('different freeze'); })],

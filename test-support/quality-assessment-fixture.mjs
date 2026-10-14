@@ -76,9 +76,9 @@ export async function writeSyntheticAssessmentFixture(directory) {
   config.budget.bounds.mt.providerRequestByteLimit = 12000;
   const corpus = { id: 'synthetic-contract-corpus', samples: [
     { id: 'speech', split: 'acceptance', language: 'en', target: 'Chinese', tasks: ['asr', 'mt'], text: 'Do not pay 15.',
-      asrMetric: 'wer', audio: { bytes: 640 }, gold: { transcripts: ['Do not pay 15.'] } },
+      asrMetric: 'wer', audio: { bytes: 640 }, gold: { transcripts: ['Do not pay 15.'], translations: ['不要支付15。'], criticalFacts: [{ type: 'number', meaning: 'The amount is 15.' }, { type: 'negation', meaning: 'The instruction forbids payment.' }] } },
     { id: 'silence', split: 'acceptance', language: 'en', target: 'Chinese', tasks: ['asr'], text: '', silence: true,
-      asrMetric: 'wer', audio: { bytes: 640 }, gold: { transcripts: [''] } },
+      asrMetric: 'wer', audio: { bytes: 640 }, gold: { transcripts: [''], criticalFacts: [] } },
     { id: 'development-only', split: 'development', language: 'en', target: 'Chinese', tasks: ['asr', 'mt'], text: 'Not an acceptance sample.' }
   ] };
   for (const [index, role] of ['baseline', 'candidate'].entries()) config.roles[role] = {
@@ -135,7 +135,8 @@ export async function writeSyntheticAssessmentFixture(directory) {
       await writeFile(path.join(trialDirectory, 'application.log'), log);
       await writeFixtureJson(path.join(trialDirectory, 'trial.json'), trial);
       report.trials.push({ path: `trial-${index}/trial.json`, sha256: hashBytes(await readFile(path.join(trialDirectory, 'trial.json'))) });
-      reviewRows.push({ trialId, outputSha256: trial.outputSha256, reviewer: 'synthetic-contract-reviewer', reviewedAt: date(-1000),
+      reviewRows.push({ trialId, outputSha256: trial.outputSha256, source: sample.text, output,
+        acceptedReferences: kind === 'asr' ? sample.gold.transcripts : sample.gold.translations, criticalFacts: sample.gold.criticalFacts, reviewer: 'synthetic-contract-reviewer', reviewedAt: date(-1000),
         serious: Object.fromEntries(seriousErrorTypes.map(type => [type, false])), ...(kind === 'mt' ? { meaningScore: 4 } : {}) });
     }
     runs.push({ role, source_sha: roleConfig.sourceSha, directory: path.resolve(roleDirectory), state: 'complete', started_at: report.startedAt, finished_at: report.finishedAt });
