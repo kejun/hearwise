@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
 import { runEditProtocolCommand } from './lib/edit-protocol-command.mjs';
+import { sourceSnapshot, sameSourceSnapshot, validBuildSource } from './lib/runner-evidence-contract.mjs';
 import { digest, writeJson } from './lib/verification-evidence.mjs';
 import { checkProtocolTools, quintCli, quintHome, toolchain } from './lib/relation-protocol-tools.mjs';
 import { editConfig, editModelRoot, editProtocolMetadata, editProtocolPlan, editProtocolCoverage, editConfiguration,
@@ -11,11 +12,12 @@ import { normalizeEditTrace, replayEditTrace, expectedEditMutationViolation } fr
 const args = process.argv.slice(2);
 if (args.some(arg => arg !== '--release')) throw new Error('Usage: node scripts/verify-edit-protocol.mjs [--release]');
 const repositoryRoot = process.cwd();
-const config = await editConfig(), context = await editProtocolMetadata();
+const config = await editConfig(), context = await editProtocolMetadata(), sourceStart = await sourceSnapshot();
+if (!validBuildSource(sourceStart)) throw new Error('Build source differs from checkout; run npm run build before testing');
 const root = path.resolve(process.env.EDIT_PROTOCOL_EVIDENCE_DIR || 'verification-evidence/edit-protocol');
 await mkdir(root, { recursive: true });
 const directory = await mkdtemp(path.join(root, 'run-'));
-const report = { ...context, startedAt: new Date().toISOString(), finishedAt: null, complete: false, ok: false, tools: null,
+const report = { ...context, sourceStart, executionContext: { repositoryRoot, evidenceDirectory: directory, quintCli, overallTimeoutMs: config.limits.overallMs, jvmArgs: '-Xmx2G' }, startedAt: new Date().toISOString(), finishedAt: null, complete: false, ok: false, tools: null,
   config, propertyCoverage: editProtocolCoverage(config), results: [], artifacts: [], execution: { complete: false, timedOut: false, interrupted: false } };
 const save = () => writeJson(path.join(directory, 'report.json'), report);
 await save(); console.log(`Edit protocol evidence: ${directory}`);
@@ -43,7 +45,7 @@ async function command(id, kind, argv, { timeoutMs = 60000, bound } = {}) {
   const { tail: _tail, ...processResult } = execution;
   const row = { id, kind, startedAt, finishedAt: new Date().toISOString(), complete: conclusion.complete,
     status: conclusion.ok ? 'passed' : conclusion.complete ? 'failed' : 'incomplete', execution: processResult,
-    log: relative(logFile), argv, timeoutMs, bound, metrics: conclusion.metrics || null };
+    log: relative(logFile), argv, timeoutMs, bound, cwd: kind === 'implementation-regression' ? repositoryRoot : directory, metrics: conclusion.metrics || null };
   report.results.push(row); artifacts.add(row.log); await save();
   if (execution.interrupted) interrupted = true;
   console.log(`${row.status.toUpperCase()} ${id} (${execution.durationMs}ms)`); return row;
@@ -131,7 +133,8 @@ finally {
     try { report.artifacts.push({ path: file, sha256: digest(await readFile(path.join(directory, file))) }); }
     catch { report.complete = false; }
   }
-  if (!isSame(await editProtocolMetadata(), context)) { report.complete = false; report.error = { message: 'Source or verification inputs changed during execution' }; }
+  report.sourceEnd = await sourceSnapshot();
+  if (!sameSourceSnapshot(sourceStart, report.sourceEnd) || !validBuildSource(report.sourceEnd) || !isSame(await editProtocolMetadata(), context)) { report.complete = false; report.error = { message: 'Source or verification inputs changed during execution' }; }
   report.execution = { complete: report.complete, timedOut, interrupted, code: !report.error && report.results.every(row => row.status === 'passed') ? 0 : 1, signal: null };
   await save();
 }

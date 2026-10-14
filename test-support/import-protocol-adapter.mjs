@@ -67,6 +67,6 @@ export async function createImportProtocolAdapter({ tokens = 1, mutation = 'none
       unchanged: isDeepStrictEqual(current, before), providerCallDelta: fixture.calls.length - callCount });
   }
   return { act, project: () => ({ lastHTTPStatus, lastHTTPCode, businessIds: observedIds(), ...structuredClone(clients) }),
-    observe: () => structuredClone({ snapshot: current, providerCalls: fixture.calls, lifecycle: fixture.lifecycle,
+    observe: () => structuredClone({ snapshot: current, backups: fixture.backupSnapshots, providerCalls: fixture.calls, lifecycle: fixture.lifecycle,
       clockEvents: fixture.clockEvents, events, mutation: fixture.mutationEvidence }), check, close: () => fixture.close() };
 }

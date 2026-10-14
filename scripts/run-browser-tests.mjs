@@ -1,30 +1,41 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { runProcess } from './lib/process.mjs';
 
-const checks = ['speech', 'speech-seek', 'graph', 'relation-progress', 'trace', 'transcript', 'knowledge-edit', 'data-transfer', 'knowledge-name', 'knowledge-revision', 'session', 'relation-result', 'edit-consistency', 'import-protocol', 'import-atomicity', 'trace-business', 'security', 'playback', 'name-protocol'];
+import { browserChecks as checks, rootScreenshots, sourceSnapshot, sameSourceSnapshot, validBuildSource, executionEnvironment, evidenceFiles, hashEvidenceFiles } from './lib/runner-evidence-contract.mjs';
 const selected = process.argv.slice(2);
 if (selected.some(name => !checks.includes(name))) throw new Error(`Unknown browser check; choose ${checks.join(', ')}`);
 const directory = process.env.BROWSER_EVIDENCE_DIR || 'browser-evidence';
 await mkdir(directory, { recursive: true });
 const evidenceDirectory = await mkdtemp(path.join(directory, 'run-'));
-const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-const dirty = Boolean(execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], { encoding: 'utf8' }).trim());
+const sourceStart = await sourceSnapshot(), { sha, dirty } = sourceStart.source;
+const metadata = executionEnvironment();
+if (!validBuildSource(sourceStart)) throw new Error('Build source differs from checkout; run npm run build before testing');
+const screenshotEnv = Object.fromEntries(Object.entries(rootScreenshots).map(([key, file]) => [key, process.env[key] || path.join(directory, file)]));
+const childEnv = { ...process.env }; delete childEnv.NODE_TEST_CONTEXT;
 const results = [];
-await writeFile(`${directory}/results.json`, JSON.stringify({ sha, dirty, evidenceDirectory, complete: false, ok: false, results }));
+await writeFile(`${directory}/results.json`, JSON.stringify({ schemaVersion: 2, sha, dirty, sourceStart, ...metadata, evidenceDirectory, complete: false, ok: false, artifacts: [], results }));
 for (const name of selected.length ? selected : checks) {
   console.log(`START browser:${name}`);
   const result = await runProcess(process.execPath, [`scripts/verify-${name}-browser.mjs`], {
     timeoutMs: 180000, logFile: `${evidenceDirectory}/${name}.log`, onOutput: text => process.stdout.write(text),
-    env: { ...process.env, SPEECH_SEEK_EVIDENCE_DIR: evidenceDirectory, KNOWLEDGE_EDIT_EVIDENCE_DIR: evidenceDirectory,
+    env: { ...childEnv, ...screenshotEnv, SPEECH_SEEK_EVIDENCE_DIR: evidenceDirectory, KNOWLEDGE_EDIT_EVIDENCE_DIR: evidenceDirectory,
       GRAPH_EVIDENCE_DIR: evidenceDirectory, DATA_TRANSFER_EVIDENCE_DIR: evidenceDirectory, TRACE_EVIDENCE_DIR: evidenceDirectory,
       TRANSCRIPT_EVIDENCE_DIR: evidenceDirectory, KNOWLEDGE_NAME_EVIDENCE_DIR: evidenceDirectory,
       KNOWLEDGE_REVISION_EVIDENCE_DIR: evidenceDirectory, SESSION_EVIDENCE_DIR: evidenceDirectory, RELATION_RESULT_EVIDENCE_DIR: evidenceDirectory,
       EDIT_CONSISTENCY_EVIDENCE_DIR: evidenceDirectory, IMPORT_PROTOCOL_BROWSER_EVIDENCE_DIR: evidenceDirectory, IMPORT_ATOMICITY_EVIDENCE_DIR: evidenceDirectory, TRACE_BUSINESS_EVIDENCE_DIR: evidenceDirectory, SECURITY_EVIDENCE_DIR: evidenceDirectory, PLAYBACK_EVIDENCE_DIR: evidenceDirectory, NAME_BROWSER_EVIDENCE_DIR: evidenceDirectory }
   });
-  results.push({ name, log: `${evidenceDirectory}/${name}.log`, ...result });
-  await writeFile(`${directory}/results.json`, JSON.stringify({ sha, dirty, evidenceDirectory,
-    complete: results.length === (selected.length || checks.length), ok: results.length === (selected.length || checks.length) && results.every(row => row.ok), results }, null, 2));
+  results.push({ name, argv: [`scripts/verify-${name}-browser.mjs`], log: `${evidenceDirectory}/${name}.log`, ...result });
+  await writeFile(`${directory}/results.json`, JSON.stringify({ schemaVersion: 2, sha, dirty, sourceStart, ...metadata, evidenceDirectory,
+    complete: false, ok: false, artifacts: [], results }, null, 2));
   if (!result.ok) { process.exitCode = 1; break; }
 }
+
+const sourceEnd = await sourceSnapshot();
+const runPrefix = path.basename(evidenceDirectory) + '/';
+const artifacts = await hashEvidenceFiles(directory, (await evidenceFiles(directory)).filter(file => file.startsWith(runPrefix) || Object.values(rootScreenshots).includes(file)));
+const complete = results.length === (selected.length || checks.length) && sameSourceSnapshot(sourceStart, sourceEnd) && validBuildSource(sourceEnd);
+const report = { schemaVersion: 2, sha, dirty, sourceStart, sourceEnd, ...metadata, evidenceDirectory, complete,
+  ok: complete && results.every(row => row.ok), artifacts, results };
+await writeFile(`${directory}/results.json`, JSON.stringify(report, null, 2) + '\n');
+process.exitCode = report.ok ? 0 : 1;

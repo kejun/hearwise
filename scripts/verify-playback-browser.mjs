@@ -37,13 +37,21 @@ const { checks, budgetExpired } = await runPlaybackChecks(specifications, async 
     const tap = playbackTap(execution.tail, name);
     Object.assign(execution, { ...tap, ok: execution.ok && tap.ok });
   }
-  return execution;
+  return { ...execution, effectiveTimeoutMs: timeoutMs };
 }, { cleanup: () => rm(temporary, { recursive: true, force: true }) });
+
+for (const [index, check] of checks.entries()) {
+  const spec = specifications[index];
+  check.configuredTimeoutMs = spec.timeoutMs;
+  check.executionContext = { cwd: process.cwd(), executable: process.execPath };
+  if (spec.files) check.files = spec.files;
+  check.command = [process.execPath, ...(spec.files ? ['--test', '--test-reporter=tap', '--test-timeout=30000', ...spec.files] : ['test-support/playback-browser.mjs', directory])];
+}
 
 let browser;
 try { browser = JSON.parse(await readFile(path.join(directory, 'browser.json'), 'utf8')); } catch { /* A failed launch has no completed browser observations. */ }
 const sourceEnd = await playbackSourceSnapshot();
-const observations = { sourceStart, sourceEnd, checks, browser: browser || { complete: false, status: nodeOnly ? 'not_run' : 'incomplete' },
+const observations = { executionContext: { repositoryRoot: process.cwd(), evidenceDirectory: path.resolve(directory), outputArgument: directory, executable: process.execPath }, sourceStart, sourceEnd, checks, browser: browser || { complete: false, status: nodeOnly ? 'not_run' : 'incomplete' },
   boundary: 'Playback protocol and independently normalized text with stub providers. Finite formal gate is separate; no audible/device/real-service quality acceptance.' };
 const artifacts = await writePlaybackEvidence(directory, observations);
 const finishedAt = new Date().toISOString();
