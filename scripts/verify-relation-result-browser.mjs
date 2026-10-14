@@ -1,8 +1,10 @@
-import { mkdir, mkdtemp, readFile, writeFile, rm, readdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { runProcess } from './lib/process.mjs';
-import { metadata, sourceVersion, writeJson, digest, summarize, checkArtifacts } from './lib/verification-evidence.mjs';
+import { metadata, sourceVersion, writeJson, summarize } from './lib/verification-evidence.mjs';
 import { relationResultProperties, relationResultProfile } from '../verification/relation-result-properties.mjs';
+
+import { writeRelationResultEvidence, checkRelationResultEvidence } from '../test-support/relation-result-evidence.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => !['--node-only', '--release'].includes(arg))) throw new Error('Usage: node scripts/verify-relation-result-browser.mjs [--node-only] [--release]');
@@ -40,11 +42,7 @@ let browser;
 try { browser = JSON.parse(await readFile(path.join(directory, 'browser.json'), 'utf8')); } catch { /* A failed launch has no completed browser observations. */ }
 const observations = { checks, browser: browser || { complete: false, status: nodeOnly ? 'not_run' : 'incomplete' },
   boundary: 'Only structural/source/result consistency with hand-authored provider outputs. Real relation quality and devices are not run.' };
-await writeJson(path.join(directory, 'observations.json'), observations);
-await writeFile(path.join(directory, 'worker.log'), (await Promise.all(checks.map(async ({ name }) =>
-  `CHECK ${name}\n${await readFile(path.join(directory, `${name}.log`), 'utf8')}`))).join('\n'));
-const artifactNames = ['observations.json', 'worker.log', ...(await readdir(directory)).filter(name => name.endsWith('.png') || name === 'browser.json')];
-const artifacts = await Promise.all(artifactNames.map(async name => ({ path: name, sha256: digest(await readFile(path.join(directory, name))) })));
+const artifacts = await writeRelationResultEvidence(directory, observations);
 const finishedAt = new Date().toISOString();
 const browserRequired = id => id !== 'HW-05-02';
 report.results = relationResultProperties.map(property => {
@@ -65,7 +63,7 @@ const execution = { code: checks.every(({ execution: e }) => e.ok) ? 0 : 1, sign
 const target = sourceVersion();
 if (target.sha !== context.source.sha || target.dirty !== context.source.dirty) execution.complete = false;
 const summary = summarize({ results: report.results, target, required: relationResultProfile, execution,
-  release: args.includes('--release') || process.env.CI === 'true', artifactsValid: await Promise.all(report.results.map(result => checkArtifacts(directory, result))) });
+  release: args.includes('--release') || process.env.CI === 'true', artifactsValid: await Promise.all(report.results.map(result => checkRelationResultEvidence(directory, result))) });
 Object.assign(report, { finishedAt, complete: execution.complete, ok: summary.ok, execution, summary });
 await writeJson(path.join(directory, 'report.json'), report);
 console.log(JSON.stringify({ directory, complete: report.complete, ok: report.ok, rows: summary.rows, fullProjectAcceptance: false }, null, 2));

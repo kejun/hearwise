@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runProcess } from '../scripts/lib/process.mjs';
 import { relationResultProfile } from '../verification/relation-result-properties.mjs';
-import { validateResult, checkArtifacts } from '../scripts/lib/verification-evidence.mjs';
+import { validateResult, checkArtifacts, metadata } from '../scripts/lib/verification-evidence.mjs';
 
 test('node-only relation result evidence cannot turn missing browser coverage into a pass', { timeout: 40000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relation-result-report-'));
@@ -32,4 +32,32 @@ test('node-only relation result evidence cannot turn missing browser coverage in
     assert.equal(await checkArtifacts(evidence, result), true);
   }
   assert.equal((await readdir(evidence)).some(name => name.startsWith('temporary-runtime-')), false);
+});
+
+// Synthetic bytes test evidence packaging only. They are not Chromium observations.
+test('complete browser asset packaging respects the two-artifact contract and verifies referenced files', async t => {
+  const { writeRelationResultEvidence, checkRelationResultEvidence } = await import('../test-support/relation-result-evidence.mjs');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relation-asset-contract-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const scenarios = ['shortage', 'empty', 'filtered', 'qualified', 'partial', 'error'];
+  const browser = { complete: true, widths: [1280, 390].map(width => ({ width, results: scenarios.map(scenario => ({ scenario })) })) };
+  await writeFile(path.join(directory, 'browser.json'), JSON.stringify(browser));
+  for (const { width, results } of browser.widths) for (const { scenario } of results)
+    await writeFile(path.join(directory, `relations-${width}-${scenario}.png`), 'synthetic image bytes, not a UI result');
+  await writeFile(path.join(directory, 'browser.log'), 'synthetic packaging check');
+  const artifacts = await writeRelationResultEvidence(directory, { checks: [{ name: 'browser' }], browser });
+  const result = { ...await metadata(), property: { id: 'HW-11-03', version: 1 },
+    startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), complete: true, status: 'passed',
+    scope: { description: 'Synthetic artifact contract only', scenario: 'unit-test', samples: 1, seed: null }, artifacts };
+  assert.equal(validateResult(result), true, 'Browser attachments must not expand the public two-artifact result contract');
+  assert.equal(artifacts.length, 2);
+  assert.equal(await checkRelationResultEvidence(directory, result), true);
+  const observations = JSON.parse(await readFile(path.join(directory, 'observations.json'), 'utf8'));
+  assert.equal(observations.attachments.length, 13);
+  const screenshot = path.join(directory, 'relations-390-empty.png');
+  await writeFile(screenshot, 'changed');
+  assert.equal(await checkRelationResultEvidence(directory, result), false, 'A changed referenced screenshot invalidates evidence');
+  await rm(screenshot);
+  assert.equal(await checkRelationResultEvidence(directory, result), false, 'A missing referenced screenshot invalidates evidence');
+  await assert.rejects(writeRelationResultEvidence(directory, { checks: [{ name: 'browser' }], browser }), /ENOENT/);
 });
