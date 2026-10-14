@@ -88,17 +88,29 @@ test('pre-final source correction stops audio explicitly; canonical final still 
   await waitFor(() => asr.events.some(e => e.type === 'translation-updated'));
   assert.equal(f.stats.commits.length, 1);
 });
-test('final overtakes delayed phrase MT: cancels own request, speaks full canonical once', async t => {
-  const { f, asr, speech } = await setup(t, { translationDelay: 180 });
-  f.final(first, false, 'long'); f.final(next, false, 'long');
-  await waitFor(() => f.stats.mtRequests.length === 1);
-  f.final(final, true, 'long');
-  await waitFor(() => asr.events.some(e => e.type === 'translation-updated'));
-  await waitFor(() => f.stats.commits.length === 1);
-  assert.equal(f.stats.mtAborted, 1); assert.deepEqual(f.stats.commits, [translate(final)]);
-  assert.equal(speech.events.some(e => e.type === 'speech.error'), false);
-  await until(() => traceEvents(f.logs()).some(e => e.step_key === 'translation.phrase' && e.state === 'cancelled'));
-  assert.ok(traceEvents(f.logs()).some(e => e.step_key === 'translation.http' && e.state === 'cancelled'));
+test('final overtakes delayed phrase MT: cancels own request, speaks full canonical once', { timeout: 15000 }, async t => {
+  const held = Promise.withResolvers();
+  let phrasePending = false;
+  const { f, asr, speech } = await setup(t, { modelResponse(body) {
+    if (body.model === 'qwen-mt-flash' && body.messages[0].content === 'The weather is warm,') {
+      phrasePending = true;
+      return held.promise; // Keep this response pending until actual cancellation, not a fixed delay.
+    }
+  } });
+  try {
+    f.final(first, false, 'long'); f.final(next, false, 'long');
+    await waitFor(() => phrasePending && f.stats.mtRequests.length === 1);
+    assert.equal(f.stats.mtAborted, 0); assert.deepEqual(f.stats.commits, []);
+    f.final(final, true, 'long');
+    await waitFor(() => f.stats.mtAborted === 1);
+    held.resolve();
+    await waitFor(() => asr.events.some(e => e.type === 'translation-updated'));
+    await waitFor(() => f.stats.commits.length === 1);
+    assert.equal(f.stats.mtAborted, 1); assert.deepEqual(f.stats.commits, [translate(final)]);
+    assert.equal(speech.events.some(e => e.type === 'speech.error'), false);
+    await until(() => traceEvents(f.logs()).some(e => e.step_key === 'translation.phrase' && e.state === 'cancelled'));
+    assert.ok(traceEvents(f.logs()).some(e => e.step_key === 'translation.http' && e.state === 'cancelled'));
+  } finally { held.resolve(); }
 });
 test('mute during phrase translation rejects late audio and cancels upstream', async t => {
   const { f, speech } = await setup(t, { translationDelay: 180 });
