@@ -1,3 +1,4 @@
+import { sourceSnapshot, sameSourceSnapshot, validBuildSource } from './lib/runner-evidence-contract.mjs';
 import { mkdir, mkdtemp, readdir, readFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -16,8 +17,10 @@ async function runFormalProtocol(definition) {
   const root = path.resolve(process.env[definition.environmentVariable] || definition.defaultDirectory);
   await mkdir(root, { recursive: true });
   const directory = await mkdtemp(path.join(root, 'run-'));
+  const sourceStart = await sourceSnapshot();
+  if (!validBuildSource(sourceStart)) throw new Error('Build source differs from checkout');
   const context = await definition.metadata(), startedAt = new Date().toISOString();
-  const report = { ...context, profile, startedAt, finishedAt: null, complete: false, ok: false, tools: null,
+  const report = { ...context, sourceStart, sourceEnd: null, executionContext: { repositoryRoot: sourceDirectory, evidenceDirectory: directory, executable: process.execPath, jvmArgs: '-Xmx2G' }, profile, startedAt, finishedAt: null, complete: false, ok: false, tools: null,
     domain: config, propertyCoverage: definition.coverage(config), results: [], artifacts: [], execution: { repositoryRoot: sourceDirectory, complete: false, timedOut: false, interrupted: false } };
   await writeJson(path.join(directory, 'report.json'), report);
   console.log(`${definition.label} evidence: ${directory}`);
@@ -48,7 +51,7 @@ async function runFormalProtocol(definition) {
     const log = await readFile(logFile, 'utf8'), conclusion = checkerConclusion(kind, execution, log, bound);
     const { tail: _tail, ...processResult } = execution;
     const result = { id, kind, startedAt, finishedAt: new Date().toISOString(), complete: conclusion.complete, status: conclusion.ok ? 'passed' : conclusion.complete ? 'failed' : 'incomplete',
-      execution: processResult, timeoutMs, log: relative(logFile), metrics: conclusion.metrics || null, expectedFailure, argv, bound };
+      execution: processResult, executionContext: { cwd: kind === 'implementation-regression' ? sourceDirectory : directory, executable: process.execPath, jvmArgs: '-Xmx2G' }, timeoutMs, log: relative(logFile), metrics: conclusion.metrics || null, expectedFailure, argv, bound };
     artifacts.add(result.log); report.results.push(result); await save();
     console.log(`${result.status.toUpperCase()} ${id} (${execution.durationMs}ms)`);
     if (execution.interrupted) interrupted = true;
@@ -137,6 +140,8 @@ async function runFormalProtocol(definition) {
       try { report.artifacts.push({ path: file, sha256: digest(await readFile(path.join(directory, file))) }); }
       catch { report.complete = false; report.execution.complete = false; }
     }
+    try { report.sourceEnd = await sourceSnapshot(); } catch (error) { report.error = { message: error.message }; }
+    if (!sameSourceSnapshot(sourceStart, report.sourceEnd) || !validBuildSource(report.sourceEnd)) { report.complete = false; report.execution.complete = false; report.error = { message: 'Source or actual build changed during execution' }; }
     const target = await definition.metadata();
     if (JSON.stringify(target) !== JSON.stringify(context)) { report.complete = false; report.execution.complete = false; report.error = { message: 'Source or verification inputs changed during execution' }; }
     await save();

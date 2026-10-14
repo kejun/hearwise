@@ -2,7 +2,7 @@
 export const policyVersion = 1;
 export const specificationVersion = 'hearwise-enhanced-verification-v1.0';
 export const groups = Array.from({ length: 15 }, (_, index) => `HW-${String(index + 1).padStart(2, '0')}`);
-export const technicalSuites = ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval', 'import-protocol', 'edit-protocol', 'process-crash', 'quality-offline'];
+export const technicalSuites = ['node', 'pilot', 'browser', 'relation-protocol', 'knowledge-protocol', 'revision', 'name-interval', 'import-protocol', 'edit-protocol', 'process-crash', 'quality-offline', 'playback-protocol'];
 export const purposes = Object.freeze({
   'foundation-demo': ['relation-protocol', 'revision'],
   pr: technicalSuites,
@@ -26,6 +26,7 @@ export const budgets = Object.freeze({
   'import-protocol': { fastMs: 720000, deepMs: 1200000, processMs: 60000, tlcMs: { single: 60000, two_tokens: 240000 }, boundedMs: 240000 },
   'edit-protocol': { overallMs: 480000, tlcMs: 60000, boundedMs: 120000, simulationMs: 30000, witnessMs: 30000, mutationMs: 120000 },
   'process-crash': { fastMs: 480000, deepMs: 1200000, processMs: 60000, boundedMs: 240000 },
+  'playback-protocol': { fastMs: 480000, deepMs: 1200000, processMs: 60000, boundedMs: 240000, deepPairAbaMs: 900000 },
   'quality-offline': { paidCalls: 0, syntheticTrials: 4 },
   revision: { overallMs: 360000 }, 'name-interval': { overallMs: 360000 }, pilot: { processMs: 15000 }
 });
@@ -33,7 +34,7 @@ export const domainSuites = {
   'HW-01': ['browser'], 'HW-02': ['browser'], 'HW-03': ['knowledge-protocol', 'relation-protocol'],
   'HW-04': ['pilot', 'knowledge-protocol', 'relation-protocol'], 'HW-05': ['browser', 'knowledge-protocol', 'relation-protocol'],
   'HW-06': ['revision', 'edit-protocol', 'browser'], 'HW-07': ['name-interval', 'revision', 'browser'],
-  'HW-08': ['browser'], 'HW-09': ['import-protocol', 'browser'], 'HW-10': ['knowledge-protocol', 'relation-protocol', 'process-crash', 'browser'],
+  'HW-08': ['playback-protocol', 'browser'], 'HW-09': ['import-protocol', 'browser'], 'HW-10': ['knowledge-protocol', 'relation-protocol', 'process-crash', 'browser'],
   'HW-11': ['edit-protocol', 'browser'], 'HW-12': ['browser'], 'HW-13': ['browser'], 'HW-14': technicalSuites, 'HW-15': technicalSuites
 };
 // First-match is deliberately not used. A shared file may affect several domains.

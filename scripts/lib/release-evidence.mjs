@@ -1,3 +1,4 @@
+import { validatePlaybackReleaseEvidence } from './playback-release-evidence.mjs';
 import { validateProcessReleaseEvidence } from './process-release-evidence.mjs';
 import { validateQualityInfrastructureEvidence } from './quality-release-evidence.mjs';
 import { readFile } from 'node:fs/promises';
@@ -15,6 +16,7 @@ export async function readTechnicalEvidence(suite, directory, { release = true, 
   if (!technicalSuites.includes(suite)) throw new Error('Unregistered technical evidence suite');
   if (suite === 'node') return validateNodeEvidence(directory, { release });
   if (suite === 'browser') return validateBrowserEvidence(directory, { release });
+  if (suite === 'playback-protocol') return validatePlaybackReleaseEvidence(directory, { release, requireProfile: profile });
   if (suite === 'process-crash') return validateProcessReleaseEvidence(directory, { release, requireProfile: profile });
   if (suite === 'quality-offline') return validateQualityInfrastructureEvidence(directory, { release });
   if (suite === 'pilot') return validatePilotEvidence(directory, { release });

@@ -1,3 +1,4 @@
+import { validatePlaybackBrowserReleaseEvidence, playbackNestedFiles } from './playback-release-evidence.mjs';
 import { validateTraceReleaseEvidence, traceNestedFiles } from './trace-release-evidence.mjs';
 import { validateNewNestedBrowserEvidence, newNestedChecks } from './new-browser-release-evidence.mjs';
 import { validateImportBrowserReleaseEvidence } from './import-browser-release-evidence.mjs';
@@ -98,6 +99,7 @@ function validBrowserObservations(kind, browser) {
   return true;
 }
 export async function validateNestedBrowserEvidence(kind, directory, { release = true } = {}) {
+  if (kind === 'playback') return validatePlaybackBrowserReleaseEvidence(directory, { release });
   if (kind === 'trace-business') return validateTraceReleaseEvidence(directory, { release });
   if (kind === 'import-protocol') return validateImportBrowserReleaseEvidence(directory, { release });
   if (Object.hasOwn(newNestedChecks, kind)) return validateNewNestedBrowserEvidence(kind, directory, { release });
@@ -157,11 +159,11 @@ export async function validateBrowserEvidence(directory, { release = true } = {}
       }
     }
     result.nested = [];
-    for (const kind of ['session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business']) {
+    for (const kind of ['session', 'relation-result', 'security', 'import-protocol', 'edit-consistency', 'trace-business', 'playback']) {
       const candidates = [...files.keys()].filter(file => new RegExp(`^${run}/${kind}-[A-Za-z0-9]+/report\\.json$`).test(file));
       if (candidates.length !== 1) throw new Error(`missing_or_duplicate_nested_report:${kind}`);
       const nestedDirectory = path.dirname(candidates[0]);
-      const mandatory = kind === 'trace-business' ? traceNestedFiles : kind === 'import-protocol' ? ['observations.json'] : ['observations.json', 'worker.log', 'browser.json', ...(newNestedChecks[kind]?.map(row => `${row.name}.log`) || [...Object.keys(nestedCounts[kind]).map(name => `${name}.log`), 'browser.log'])];
+      const mandatory = kind === 'playback' ? playbackNestedFiles : kind === 'trace-business' ? traceNestedFiles : kind === 'import-protocol' ? ['observations.json'] : ['observations.json', 'worker.log', 'browser.json', ...(newNestedChecks[kind]?.map(row => `${row.name}.log`) || [...Object.keys(nestedCounts[kind]).map(name => `${name}.log`), 'browser.log'])];
       for (const file of mandatory)
         if (!files.has(`${nestedDirectory}/${file}`)) throw new Error(`missing_bound_nested_file:${kind}:${file}`);
       for (const file of await evidenceFiles(path.join(directory, nestedDirectory))) if (!files.has(`${nestedDirectory}/${file}`)) throw new Error(`unbound_nested_file:${kind}:${file}`);
