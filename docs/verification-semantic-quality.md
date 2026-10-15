@@ -100,7 +100,10 @@ wire evidence and the unique durable attempt ID. The independent paired reader
 reopens all eight production SQLite captures and the shared budget, calls the
 existing request/source/result validator, checks frozen samples, role order,
 exact pairs, per-trial charges, request/response hashes and pre-send reservation
-timestamps, and refuses missing, edited, duplicated or incomplete evidence.
+timestamps. It also reparses the fixed responses through the production parsers
+and compares persisted entities, facts, mentions, assertion qualifiers and
+supports; changing SQLite plus its reported snapshot/hash cannot silently change
+those meanings. Missing, edited, duplicated or incomplete evidence is rejected.
 It only reads the original evidence. Replaying an existing output directory or
 completed ledger role is rejected. An interrupted role stays incomplete; this
 version does not resume interrupted collections or reset their spent budget.

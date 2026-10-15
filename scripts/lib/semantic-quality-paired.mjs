@@ -9,8 +9,8 @@ import { openSemanticQualityBudget } from './quality-budget.mjs';
 import { captureSemanticOffline } from './semantic-quality-capture.mjs';
 import { readSemanticCapture } from './semantic-quality-evidence.mjs';
 import { writeJson } from './verification-evidence.mjs';
-import { KNOWLEDGE_MODEL, CONTRACT_REVISION } from '../../knowledge.mjs';
-import { RELATION_MODEL, RELATION_CONTRACT_VERSION } from '../../relations.mjs';
+import { KNOWLEDGE_MODEL, CONTRACT_REVISION, parseKnowledgeV2 } from '../../knowledge.mjs';
+import { RELATION_MODEL, RELATION_CONTRACT_VERSION, buildRelationRequest } from '../../relations.mjs';
 import { semanticFixtureSample, semanticFixtureResponse } from '../../test-support/semantic-quality-fixture.mjs';
 const same = (a, b) => assert.equal(contractDigest(a), contractDigest(b));
 const boundary = { qualityStatus: 'not_run', qualityEvaluated: false, fullQualityAcceptance: false, releaseEligible: false, liveCalls: 0 };
@@ -35,6 +35,57 @@ function readLedger(filename) {
       attempts: db.prepare('SELECT * FROM attempts ORDER BY id').all().map(row => ({ ...row })),
       runs: db.prepare('SELECT * FROM runs ORDER BY role').all().map(row => ({ ...row })) };
   } finally { db.close(); }
+}
+// Recompute business meaning from the fixed original responses through the
+// production parsers. Matching database bytes to a self-reported snapshot alone
+// would allow a coordinated DB/snapshot/hash forgery to change polarity or facts.
+function verifySyntheticPersistence(capture) {
+  const t = capture.after.tables, ordered = rows => [...rows].sort((a,b) => contractDigest(a).localeCompare(contractDigest(b)));
+  const pick = (row, keys) => Object.fromEntries(keys.map(key => [key, row[key]]));
+  const itemKeys = ['type','display_label','canonical_name','short_description','certainty'];
+  const expectedItems = [], expectedFacts = [], expectedMentions = [], expectedAssertions = [], expectedRelations = [];
+  for (const call of capture.calls) {
+    if (call.kind === 'knowledge') {
+      const parsed = parseKnowledgeV2(JSON.stringify(call.response), JSON.parse(call.request.messages[1].content));
+      same(parsed.rejected, []);
+      for (const item of parsed.items) {
+        assert.equal(item.action, 'create'); same(item.aliases, []);
+        const rows = t.knowledge_items.filter(row => row.canonical_name === item.canonical_name); assert.equal(rows.length, 1);
+        const id = rows[0].id;
+        expectedItems.push({ ...pick(item, itemKeys), id, listening_id: capture.run.listeningId,
+          normalized_name: item.canonical_name.toLowerCase(), dialogue_summary: item.new_information,
+          background_note: null, policy_version: 2, content_version: 1, name_override: null, name_override_identity: null });
+        for (const evidence of item.evidence) {
+          expectedMentions.push({ item_id: id, segment_id: evidence.segment_id, surface_text: evidence.quote });
+          expectedFacts.push({ item_id: id, segment_id: evidence.segment_id, surface_text: evidence.quote, content: item.new_information, certainty: item.certainty });
+        }
+      }
+    } else {
+      assert.equal(call.kind, 'relation');
+      const parsed = buildRelationRequest(call.reservation.input).parse(JSON.stringify(call.response)); same(parsed.rejected, []);
+      for (const relation of parsed.relations) {
+        const relationKeys = ['subject_item_id','object_item_id','predicate'];
+        expectedRelations.push(pick(relation, relationKeys));
+        const assertionKeys = ['statement','polarity','modality','conditions','time_scope','attribution','status','correction_of'];
+        expectedAssertions.push({ ...pick(relation, relationKeys), ...pick(relation, assertionKeys), version: 1,
+          supports: ordered(relation.supports.map(row => ({ ...row, job_id: call.jobId, window_id: call.reservation.window_id,
+            window_revision: call.reservation.window_revision, state: 'active' }))) });
+      }
+    }
+  }
+  const omit = (row, keys) => Object.fromEntries(Object.entries(row).filter(([key]) => !keys.includes(key)));
+  same(ordered(t.knowledge_items.map(row => omit(row, ['created_at','updated_at']))), ordered(expectedItems));
+  same(t.knowledge_aliases, []); same(ordered(t.knowledge_mentions), ordered(expectedMentions));
+  same(ordered(t.knowledge_facts.map(row => omit(row, ['id','created_at']))), ordered(expectedFacts));
+  const relationKeys = ['subject_item_id','object_item_id','predicate'];
+  same(ordered(t.relations.map(row => pick(row, relationKeys))), ordered([...new Map(expectedRelations.map(row => [contractDigest(row), row])).values()]));
+  const actual = t.relation_assertions.map(row => {
+    const relation = t.relations.find(parent => parent.id === row.relation_id); assert.ok(relation);
+    return { ...pick(relation, relationKeys), ...pick(row, ['statement','polarity','modality','conditions','time_scope','attribution','status','correction_of','version']),
+      supports: ordered(t.relation_supports.filter(support => support.assertion_id === row.id).map(support => omit(support, ['id','assertion_id','group_id','created_at']))) };
+  });
+  assert.equal(t.relation_supports.length, actual.reduce((n, row) => n + row.supports.length, 0));
+  same(ordered(actual), ordered(expectedAssertions));
 }
 export async function runSemanticPairedOffline(directory, { signal } = {}) {
   directory = path.resolve(directory); await mkdir(directory, { recursive: false, mode: 0o700 });
@@ -104,6 +155,7 @@ export async function inspectSemanticPairedOffline(directory, targetSource, { re
       assert.ok(Date.parse(capture.startedAt) >= Date.parse(owner.started_at) && Date.parse(capture.finishedAt) <= Date.parse(owner.finished_at));
       const response = semanticFixtureResponse();
       for (const [index, call] of capture.calls.entries()) same(call.response, response({ kind: call.kind, input: JSON.parse(call.request.messages.at(-1).content), sample: capture.sample, calls: capture.calls.slice(0, index) }));
+      verifySyntheticPersistence(capture);
       const transport = capture.transport, trialId = trial(spec.role, spec);
       assert.equal(transport.trialId, trialId); assert.equal(transport.observations.length, capture.calls.length);
       assert.equal(transport.budgetBindings.length, capture.calls.length); assert.ok(capture.calls.length <= 24);

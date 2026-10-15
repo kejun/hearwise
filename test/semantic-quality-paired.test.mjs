@@ -8,6 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { runSemanticPairedOffline, inspectSemanticPairedOffline } from '../scripts/lib/semantic-quality-paired.mjs';
 import { qualitySources } from '../scripts/lib/quality-collector.mjs';
 import { openSemanticQualityBudget } from '../scripts/lib/quality-budget.mjs';
+import { semanticDatabase, semanticUnits } from '../scripts/lib/semantic-quality-capture.mjs';
+import { hashBytes } from '../scripts/lib/quality-contract.mjs';
 let root, directory, source;
 before(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), 'semantic-pair-')); directory = path.join(root, 'run');
@@ -74,4 +76,38 @@ test('CLI reopens complete paired evidence and refuses live even for the paired 
   assert.equal(check.status, 0, check.stderr); assert.equal(JSON.parse(check.stdout).infrastructurePassed, true);
   const live = spawnSync(process.execPath, ['scripts/evaluate-semantic-quality.mjs', 'paired-offline', '--live'], { encoding: 'utf8', timeout: 5000 });
   assert.equal(live.status, 1); assert.match(live.stderr, /LIVE_SEMANTIC_ADAPTER_NOT_IMPLEMENTED_OR_AUTHORIZED/);
+});
+
+for (const [table, field, value] of [['relation_assertions','conditions','FORGED unconditional purchase'],
+  ['relation_assertions','polarity','positive'], ['relation_assertions','modality','uncertain'],
+  ['knowledge_facts','content','FORGED acquisition completed'], ['knowledge_items','short_description','FORGED biography']])
+test(`paired reader rejects coordinated persisted ${table}.${field} forgery even with refreshed snapshots and hash`, async () => {
+  const dir = path.join(directory, 'baseline/qualified-0'), file = path.join(dir, 'store.sqlite'), reportFile = path.join(dir, 'capture.json');
+  const bytes = await readFile(file), reportBytes = await readFile(reportFile), capture = JSON.parse(reportBytes);
+  const db = new DatabaseSync(file);
+  const row = db.prepare(`SELECT * FROM ${table} ORDER BY id LIMIT 1`).get();
+  db.prepare(`UPDATE ${table} SET ${field}=? WHERE id=?`).run(value === row[field] ? 'negative' : value, row.id); db.close();
+  capture.after = semanticDatabase(file); capture.before.tables[table] = capture.after.tables[table];
+  capture.units = semanticUnits(capture.after); capture.artifacts[0].sha256 = hashBytes(await readFile(file));
+  await writeFile(reportFile, JSON.stringify(capture));
+  try { assert.equal((await inspectSemanticPairedOffline(directory, source)).infrastructurePassed, false); }
+  finally { await writeFile(file, bytes); await writeFile(reportFile, reportBytes); }
+});
+test('cancellation after an actual reservation preserves spent money across reopen and never completes the pair', { timeout: 10000 }, async () => {
+  const dir = path.join(root, 'cancel-after-spend'), controller = new AbortController(); let spent = 0;
+  const timer = setInterval(() => {
+    let db;
+    try { db = new DatabaseSync(path.join(dir, 'budget.sqlite'), { readOnly: true });
+      spent = db.prepare('SELECT count(*) AS n FROM attempts').get().n; if (spent) controller.abort();
+    } catch { /* Ledger has not been created yet. */ } finally { db?.close(); }
+  }, 2);
+  let run; try { run = await runSemanticPairedOffline(dir, { signal: controller.signal }); } finally { clearInterval(timer); }
+  assert.ok(spent > 0); assert.equal(run.complete, false); assert.equal(run.errorCode, 'SEMANTIC_PAIR_CANCELLED');
+  const plan = JSON.parse(await readFile(path.join(dir, 'freeze.json')));
+  for (let i = 0; i < 3; i++) {
+    const ledger = openSemanticQualityBudget(path.join(dir, 'budget.sqlite'), plan.budget, run.freezeDigest);
+    try { assert.ok(ledger.snapshot().reservedMicros >= spent); assert.equal(ledger.snapshot().runs[0].state, 'incomplete'); }
+    finally { ledger.close(); }
+  }
+  assert.equal((await inspectSemanticPairedOffline(dir, source)).infrastructurePassed, false);
 });
