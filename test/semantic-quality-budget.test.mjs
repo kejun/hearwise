@@ -106,3 +106,13 @@ for (const outcome of ['http-error', 'timeout']) test(`real gateway ${outcome} k
   assert.equal((await request()).status, outcome === 'timeout' ? 502 : 503); assert.equal((await request()).status, 502); assert.equal(received, 1);
   assert.equal(budget.snapshot().reservedMicros, 10); assert.equal(gateway.observations()[0].attemptId, '1');
 });
+
+test('semantic forced run claim has one binding regardless of omitted or explicit flag position', async t => {
+  const { filename, settings } = await setup(t);
+  const budget = openSemanticQualityBudget(filename, settings, freeze), snapshot = budget.snapshot(); budget.close();
+  const { id, ...rest } = settings;
+  for (const equivalent of [{ requireRunClaim: true, ...settings }, { id, requireRunClaim: true, ...rest }, { ...settings, requireRunClaim: true }]) {
+    const reopened = openSemanticQualityBudget(filename, equivalent, freeze);
+    try { assert.deepEqual(reopened.snapshot(), snapshot); } finally { reopened.close(); }
+  }
+});

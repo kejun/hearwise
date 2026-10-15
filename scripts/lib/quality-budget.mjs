@@ -17,6 +17,9 @@ export function openSemanticQualityBudget(filename, config, freezeDigest) {
   if (!config || !['knowledge', 'relation'].every(kind => positive(config.maxTrialAttempts?.[kind])) ||
       !Number.isFinite(Date.parse(config.expiresAt)) ||
       (config.requireRunClaim !== undefined && config.requireRunClaim !== true)) throw new Error('INVALID_BUDGET');
+  // The wrapper forces this flag: omission and any caller key position must
+  // produce the same semantic binding, without changing legacy digests.
+  delete config.requireRunClaim;
   return openBudget(filename, { ...config, requireRunClaim: true }, freezeDigest,
     { knowledge: config.maxTrialAttempts.knowledge, relation: config.maxTrialAttempts.relation }, 'semantic-v1');
 }
