@@ -87,7 +87,13 @@
     "verify:upgrade": "node scripts/verify-upgrade.mjs",
     "verify:upgrade:report": "node scripts/verify-upgrade-report.mjs",
     "preverify:realtime-baseline": "npm run build",
-    "verify:realtime-baseline": "node scripts/verify-realtime-baseline.mjs"
+    "verify:realtime-baseline": "node scripts/verify-realtime-baseline.mjs",
+    "preperformance:prepare": "npm run build",
+    "performance:prepare": "node scripts/prepare-performance.mjs",
+    "preperformance:collect": "npm run build",
+    "performance:collect": "node scripts/collect-performance.mjs",
+    "performance:report": "node scripts/verify-performance-report.mjs",
+    "performance:compare": "node scripts/compare-performance.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",

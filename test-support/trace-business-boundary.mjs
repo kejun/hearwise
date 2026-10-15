@@ -7,11 +7,18 @@ import { once } from 'node:events';
 import { speechFixture } from './speech-fixture.mjs';
 import { until } from './full-trace-fixture.mjs';
 import { deadline } from './lifecycle.mjs';
+import { buildRelationRequest } from '../relations.mjs';
 
 export async function runFullTraceComparison() {
   const actual = await fullTraceFixture({ observations: true });
   const report = traceReport(actual.logs), business = buildBusinessOverview(report, actual.listeningId);
-  return checkFullTraceComparison(actual, report, business);
+  try { return checkFullTraceComparison(actual, report, business); }
+  catch (error) {
+    // The fixture took these raw/SQLite snapshots before disposing its resources.
+    error.traceFailure = { stage: 'full business comparison', stack: error.stack, rawInput: actual.logs,
+      listeningId: actual.listeningId, durable: actual.durable, tasks: business.tasks, relationRequests: actual.relationRequests };
+    throw error;
+  }
 }
 export function checkFullTraceComparison(actual, report, business) {
   assert.equal(report.completeness, 'unknown', 'A stdout capture has no end manifest, even if all queried work settled');
@@ -31,10 +38,35 @@ export function checkFullTraceComparison(actual, report, business) {
   assert.equal(knowledge[0].job, jobs[0].id); assert.equal(jobs[0].state, 'complete'); assert.equal(jobs[0].outcome, 'empty');
   assert.equal(knowledge[0].state, 'succeeded'); assert.match(knowledge[0].activity, /结果为空/);
   const relations = byDomain('relation');
-  assert.ok(relations.length >= 1); assert.equal(relations.length, actual.durable.relation_jobs.length);
+  assert.equal(relations.length, 1); assert.equal(relations.length, actual.durable.relation_jobs.length);
   for (const task of relations) {
     const job = actual.durable.relation_jobs.find(row => row.id === task.job);
     assert.equal(job.state, 'complete'); assert.equal(task.state, 'succeeded'); assert.equal(task.calls, job.request_count);
+  }
+  const relationJob = actual.durable.relation_jobs[0], input = JSON.parse(relationJob.input_json);
+  assert.equal(relationJob.request_count, 1); assert.equal(input.input_fingerprint, relationJob.input_fingerprint);
+  assert.equal(input.listening_id, actual.listeningId); assert.equal(input.window_id, relationJob.window_id);
+  assert.equal(input.window_revision, relationJob.window_revision);
+  const sources = actual.durable.segments.filter(row => row.listening_id === actual.listeningId).sort((a, b) => a.sequence_no - b.sequence_no);
+  assert.equal(sources.length, 2); assert.deepEqual(input.focus_segments.map(row => row.id), sources.map(row => row.id));
+  for (const [index, source] of sources.entries()) {
+    assert.equal(source.translation_state, 'complete');
+    assert.equal(input.focus_segments[index].text, source.original_text);
+    assert.equal(input.focus_segments[index].translation, source.translation_text);
+  }
+  assert.ok(input.focus_segments.some(row => row.id === translated[0].id));
+  assert.deepEqual(actual.durable.relation_requests.map(row => [row.job_id, row.attempt, row.outcome]), [[relationJob.id, 1, 'complete']]);
+  assert.equal(actual.relationRequests.length, 1);
+  assert.deepEqual(actual.relationRequests[0], JSON.parse(buildRelationRequest(input).body.messages.at(-1).content));
+  const relationRoots = report.spans.filter(span => span.step === 'relation.execute');
+  assert.equal(relationRoots.length, 1); assert.ok(report.roots.includes(relationRoots[0].id));
+  assert.equal(relationRoots[0].job, relationJob.id); assert.equal(relationRoots[0].listening, actual.listeningId);
+  const relationCalls = report.spans.filter(span => span.step === 'relation.http');
+  assert.equal(relationCalls.length, 1); assert.equal(relationCalls[0].job, relationJob.id); assert.equal(relationCalls[0].attempt, 1);
+  const rootStart = relationRoots[0].events.find(event => event.state === 'running').sequence;
+  for (const step of ['translation.execute', 'knowledge.execute']) {
+    const root = report.spans.find(span => span.step === step && span.listening === actual.listeningId);
+    assert.ok(root.events.find(event => event.state === 'succeeded').sequence < rootStart);
   }
   assert.equal(actual.graph.status.state, 'empty'); assert.equal(actual.graph.relations.length, 0);
   const speech = byDomain('speech'), sessions = speech.filter(task => task.session), units = speech.filter(task => !task.session);
