@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       performance_baseline:
-        description: 'Collect the full history/graph baseline (does not freeze performance targets)'
+        description: 'Opt in to long full baseline (up to 80 min); routine performance smoke is capped at 10 min'
         type: boolean
         default: false
 
@@ -22,7 +22,8 @@ jobs:
   performance-smoke:
     name: History and graph measurement collector smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Includes setup, 1-minute fixture preparation, 5-minute collection and upload.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

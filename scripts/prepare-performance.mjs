@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { performanceRecipes, performanceProfiles, performanceTimeouts } from '../verification/performance/profile.mjs';
+import { performanceRecipes, performanceProfiles, defaultPerformanceProfile, performanceTimeoutsFor } from '../verification/performance/profile.mjs';
 import { runProcess } from './lib/process.mjs';
 import { performanceRoot, performanceSourceSnapshot, fileSha256 } from './lib/performance-files.mjs';
 import { writeJson } from './lib/verification-evidence.mjs';
-const [destination, profile = 'baseline'] = process.argv.slice(2);
-if (!destination || !performanceProfiles[profile]) throw new Error('Usage: node scripts/prepare-performance.mjs DIRECTORY [baseline|smoke]');
+const [destination, profile = defaultPerformanceProfile] = process.argv.slice(2);
+if (!destination || !Object.hasOwn(performanceProfiles, profile)) throw new Error('Usage: node scripts/prepare-performance.mjs DIRECTORY [smoke|baseline] (default: smoke)');
+const performanceTimeouts = performanceTimeoutsFor(profile);
 await mkdir(destination, { recursive: true }); const directory = await mkdtemp(path.join(path.resolve(destination), 'fixtures-'));
 const report = { schemaVersion: 1, profile, startedAt: new Date().toISOString(), finishedAt: null, complete: false, ...await performanceSourceSnapshot(), datasets: [], executions: [] };
 console.log(`Performance fixtures: ${directory}`);

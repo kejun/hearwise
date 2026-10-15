@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { copyFile, mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { performanceRecipes, performanceProfiles, performanceNetworks, performanceBrowser, performanceTimeouts } from '../verification/performance/profile.mjs';
+import { performanceRecipes, performanceProfiles, performanceNetworks, performanceBrowser, defaultPerformanceProfile, performanceTimeoutsFor } from '../verification/performance/profile.mjs';
 import { performanceProperties } from '../verification/performance/properties.mjs';
 import { performanceRoot, performanceSourceSnapshot, performanceEnvironment, performanceConditions, fileSha256 } from './lib/performance-files.mjs';
 import { validateBackendEvidence } from './lib/performance-backend-evidence.mjs';
@@ -12,10 +12,14 @@ import { performanceEnvironmentIdentity, performanceCaseProjection, performanceM
 import { runProcess } from './lib/process.mjs';
 import { writeJson } from './lib/verification-evidence.mjs';
 
-const args = process.argv.slice(2), fixtures = args[0], profileName = args[1] || 'baseline';
+const args = process.argv.slice(2), fixtures = args.shift();
+const profileName = args[0] && !args[0].startsWith('--') ? args.shift() : defaultPerformanceProfile;
 const skipBrowser = args.includes('--skip-browser'), policyIndex = args.indexOf('--policy');
-if (!fixtures || !performanceProfiles[profileName] || args.slice(2).some((arg, index, all) => !['--skip-browser', '--policy'].includes(arg) && all[index - 1] !== '--policy'))
-  throw new Error('Usage: node scripts/collect-performance.mjs PREPARED.json [baseline|smoke] [--skip-browser] [--policy FILE]');
+if (!fixtures || !Object.hasOwn(performanceProfiles, profileName) ||
+  (policyIndex >= 0 && (!args[policyIndex + 1] || args[policyIndex + 1].startsWith('--'))) ||
+  args.some((arg, index, all) => !['--skip-browser', '--policy'].includes(arg) && all[index - 1] !== '--policy'))
+  throw new Error('Usage: node scripts/collect-performance.mjs PREPARED.json [smoke|baseline] [--skip-browser] [--policy FILE] (default: smoke)');
+const performanceTimeouts = performanceTimeoutsFor(profileName);
 const profile = performanceProfiles[profileName], fixtureRoot = path.dirname(path.resolve(fixtures));
 const prepared = JSON.parse(await readFile(fixtures, 'utf8')); assert.equal(prepared.complete, true, 'Fixture preparation is incomplete');
 const outputRoot = path.resolve(process.env.PERFORMANCE_EVIDENCE_DIR || 'verification-evidence/performance');

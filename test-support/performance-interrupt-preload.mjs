@@ -1,7 +1,9 @@
 // Test-only: drive the collector's existing watchdog at an actual child boundary.
 // No deadline, report field, subprocess result or collected observation is replaced.
-import { performanceTimeouts } from '../verification/performance/profile.mjs';
+import { defaultPerformanceProfile, performanceTimeoutsFor } from '../verification/performance/profile.mjs';
 if (process.argv[1]?.endsWith('/scripts/collect-performance.mjs') || process.argv[1] === 'scripts/collect-performance.mjs') {
+  const profile = process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : defaultPerformanceProfile;
+  const performanceTimeouts = performanceTimeoutsFor(profile);
   const timeout = globalThis.setTimeout, write = process.stdout.write.bind(process.stdout);
   let watchdog, fired = false;
   globalThis.setTimeout = (callback, milliseconds, ...args) => {
