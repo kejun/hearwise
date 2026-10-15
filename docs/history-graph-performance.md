@@ -2,6 +2,14 @@
 
 对应 HW-13-02..04、用户故事 26/37。这个入口采集真实 SQLite、HTTP 和 Chromium 页面原始数据，另由冻结 policy 产生比较结论。**采集完成不等于性能通过**。当前数值目标和支持设备/规模尚未冻结，`performanceEvaluated=false`、`thresholds_not_frozen` 是准确结论。smoke 用于验证采集器，不能替代 baseline 或 M4 验收。
 
+## 日常只做必要检查
+
+**普通提交不跑完整基线。** PR 和 main push 只运行 `performance-smoke`：small 数据、正常网络、无预热、2 次采样。保留现有历史读取、详情、图谱交互、导入后读取和受控负例；small 没有下一页时仍明确标记 `not_applicable`。这能验证采集通路和基本交互，不能凭两个样本宣称 p95 性能达标。
+
+性能 smoke 的 CI job **总上限为 10 分钟**，包括依赖/浏览器准备、构建、采集、报告检查及上传。内部夹具准备最多 1 分钟、采集最多 5 分钟；单个后端最多 1 分钟、浏览器最多 4 分钟。其余时间留给环境准备和清理。超时保留失败，不自动延长或重试完整基线。该上限针对性能 job，不代表整个 CI 的其他验证也已压到 10 分钟。
+
+`performance:prepare` 和 `performance:collect` 省略 profile 时均默认 `smoke`。不需要为了日常改动补齐三档/慢网基线。只有排查性能问题、调整数据库/图谱实现或明确要求冻结性能目标时，才考虑手动运行完整 baseline；它仍须显式选 `baseline` 或勾选 CI 的 `performance_baseline`，不受日常 10 分钟承诺覆盖。
+
 ## 负载与可复现性
 
 `verification/performance/profile.mjs` 的暂定采集规模如下。这些是探测域，不是已承诺的产品上限。
@@ -20,7 +28,7 @@ UUID 和布局顺序有关系。`semanticDigest` 只检查规范化业务内容�
 
 最初开发探针中 small/medium 准备约 1.1/11.4 秒，包含 large 的总 180 秒探针未完成，记录保留。独立 large 准备探针在明确的 600 秒准备预算内耗时约 347 秒，生成约 139 MiB SQLite。它们是未冻结开发源的准备成本，**不是页面性能基线**。正式准备单库 600 秒、整体 1800 秒；超时会保留失败及原始文件，不能继续当作有效输入。
 
-## 运行
+## 日常运行（默认 smoke）
 
 使用仓库 Node 24、锁文件、真实构建与已预检的 Playwright Chromium。浏览器不可启动时会写 `not_run`、零样本、原始错误并退出 3，不使用其他数据代填。
 
@@ -29,13 +37,23 @@ npm ci --ignore-scripts
 npm run preflight
 npm run setup:browser
 npm run preflight:browser
-npm run performance:prepare -- verification-evidence/performance baseline
+npm run performance:prepare -- verification-evidence/performance
 # 上一步打印唯一 fixtures-*/prepared.json；保留整个目录。
+npm run performance:collect -- verification-evidence/performance/fixtures-XXXX/prepared.json
+npm run performance:report -- verification-evidence/performance/run-XXXX --clean
+```
+
+常规 smoke 的准备/采集预算分别为 60/300 秒，均有子进程/资源清理。浏览器自己的预算比外层少 10 秒以留清理空间。超时记录未完成，不视作性能通过；这些是执行看门狗，不是用户体验目标。`--skip-browser` 允许收集后端开发证据，但整体 `collectionComplete=false`，退出 3。
+
+## 手动完整基线（长任务，日常不运行）
+
+完整 baseline 是每阶段 2 次预热 + 20 次计入分位数的重复、三个档位和两个网络组合。每个 browser 组合最多 600 秒、后端 180 秒，采集整体 2400 秒；另有最多 1800 秒的数据库准备。手动 CI job 上限 80 分钟。40 分钟采集看门狗只属于这个显式完整模式，不能因没采齐而在日常验证中继续补跑。
+
+```sh
+npm run performance:prepare -- verification-evidence/performance baseline
 npm run performance:collect -- verification-evidence/performance/fixtures-XXXX/prepared.json baseline
 npm run performance:report -- verification-evidence/performance/run-XXXX --release-collection
 ```
-
-每个 browser 组合最多 600 秒、后端 180 秒，采集整体 2400 秒，均有子进程/资源清理。浏览器自己的预算比外层少 10 秒以留清理空间。超时记录未完成，不视作性能通过；这些是执行看门狗，不是用户体验目标。正式 baseline 是每阶段 2 次预热 + 20 次计入分位数的重复，三个档位和两个网络组合。`smoke` 为 small、loopback、0 次预热/2 次重复，只验证通路。`--skip-browser` 允许收集后端开发证据，但整体 `collectionComplete=false`，退出 3。
 
 ## 测量范围
 

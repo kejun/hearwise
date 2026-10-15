@@ -15,6 +15,13 @@ export const performanceProfiles = Object.freeze({
   baseline: { sampling: { warmups: 2, repetitions: 20 }, tiers: ['small', 'medium', 'large'], networks: ['loopback', 'constrained'], releaseCollection: true },
   smoke: { sampling: { warmups: 0, repetitions: 2 }, tiers: ['small'], networks: ['loopback'], releaseCollection: false }
 });
+// Routine checks must not silently opt into the expensive full baseline.
+export const defaultPerformanceProfile = 'smoke';
 export const backendPhases = Object.freeze(['history-first-page', 'history-second-page', 'record-primary', 'record-secondary', 'graph-primary', 'post-import-history', 'post-import-graph']);
 export const backendMetrics = Object.freeze(['wallMs', 'serverCpuMs', 'serverRssAfterBytes', 'serverHeapUsedAfterBytes', 'serverLifetimeMaxRssAfterKiB']);
 export const performanceTimeouts = Object.freeze({ preparationMs: 600000, preparationRunMs: 1800000, backendMs: 180000, browserMs: 600000, actionMs: 15000, runMs: 2400000 });
+const smokeTimeouts = Object.freeze({ preparationMs: 30000, preparationRunMs: 60000, backendMs: 60000, browserMs: 240000, actionMs: 15000, runMs: 300000 });
+export function performanceTimeoutsFor(profile) {
+  if (!Object.hasOwn(performanceProfiles, profile)) throw new Error(`Unknown performance profile: ${profile}`);
+  return profile === 'smoke' ? smokeTimeouts : performanceTimeouts;
+}

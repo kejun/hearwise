@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { performanceRecipes, performanceProfiles, performanceNetworks, performanceBrowser, performanceTimeouts } from '../../verification/performance/profile.mjs';
+import { performanceRecipes, performanceProfiles, performanceNetworks, performanceBrowser, performanceTimeoutsFor } from '../../verification/performance/profile.mjs';
 import { performanceProperties } from '../../verification/performance/properties.mjs';
 import { inspectPerformanceDataset, graphTopology, performanceRecipeDigest } from '../../test-support/performance-dataset.mjs';
 import { validateBrowserEvidence } from '../../test-support/performance-browser.mjs';
@@ -83,7 +83,8 @@ export async function validatePerformanceEvidence(directory, { release = false, 
   requireComplete ||= release; // A release request can never be downgraded to partial inspection.
   const issues = [], check = async (label, work) => { try { await work(); } catch (error) { issues.push(`${label}: ${error.message}`); } };
   let report; try { report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8')); } catch (error) { return { valid: false, collectionComplete: false, performanceEvaluated: false, issues: [error.message] }; }
-  const profile = performanceProfiles[report.profile];
+  const profile = Object.hasOwn(performanceProfiles, report.profile) ? performanceProfiles[report.profile] : null;
+  const performanceTimeouts = profile ? performanceTimeoutsFor(report.profile) : null;
   const stopped = !requireComplete && report.execution?.complete === false &&
     (report.execution?.timedOut === true || report.execution?.interrupted === true);
   await check('header', async () => {

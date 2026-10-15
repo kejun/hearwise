@@ -7,16 +7,26 @@ import os from 'node:os';
 import { validatePerformanceEvidence, performanceMeasurementDigest } from '../scripts/lib/performance-evidence.mjs';
 import { fileSha256, performanceRoot } from '../scripts/lib/performance-files.mjs';
 
-test('actual incomplete collection stays incomplete and rehashed report corruptions fail closed', async t => {
+test('omitted profile uses bounded smoke; incomplete collection and rehashed corruptions fail closed', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'performance-report-test-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const env = { ...process.env, PERFORMANCE_EVIDENCE_DIR: directory }; delete env.NODE_TEST_CONTEXT;
-  const prepare = spawnSync(process.execPath, ['scripts/prepare-performance.mjs', directory, 'smoke'], { cwd: performanceRoot, env, encoding: 'utf8', timeout: 20000 });
+  const prepare = spawnSync(process.execPath, ['scripts/prepare-performance.mjs', directory], { cwd: performanceRoot, env, encoding: 'utf8', timeout: 20000 });
   assert.equal(prepare.status, 0, prepare.stdout + prepare.stderr);
   const fixture = JSON.parse(prepare.stdout.trim().split('\n').at(-1)).path;
-  const collect = spawnSync(process.execPath, ['scripts/collect-performance.mjs', fixture, 'smoke', '--skip-browser'], { cwd: performanceRoot, env, encoding: 'utf8', timeout: 20000 });
+  const prepared = JSON.parse(await readFile(fixture, 'utf8'));
+  assert.equal(prepared.profile, 'smoke');
+  assert.deepEqual(prepared.datasets.map(row => row.tier), ['small']);
+  assert.equal(prepared.execution.timeoutMs, 60000);
+  const collect = spawnSync(process.execPath, ['scripts/collect-performance.mjs', fixture, '--skip-browser'], { cwd: performanceRoot, env, encoding: 'utf8', timeout: 20000 });
   assert.equal(collect.status, 3, collect.stdout + collect.stderr);
   const reportFile = JSON.parse(collect.stdout.trim().split('\n').at(-1)).path, source = path.dirname(reportFile);
+  const collected = JSON.parse(await readFile(reportFile, 'utf8'));
+  assert.equal(collected.profile, 'smoke');
+  assert.deepEqual(collected.sampling, { warmups: 0, repetitions: 2 });
+  assert.deepEqual(collected.results.map(row => row.id), ['small-backend', 'small-loopback-browser']);
+  assert.equal(collected.configuration.timeouts.runMs, 300000);
+  assert.equal(collected.results[0].timeoutMs, 60000);
   const inspected = await validatePerformanceEvidence(source, { requireComplete: false });
   assert.equal(inspected.valid, true, JSON.stringify(inspected)); assert.equal(inspected.collectionComplete, false); assert.equal(inspected.performanceEvaluated, false);
   assert.equal((await validatePerformanceEvidence(source)).valid, false, 'Missing real browser measurements cannot be accepted');
@@ -30,6 +40,8 @@ test('actual incomplete collection stays incomplete and rehashed report corrupti
     ['changed executed build', report => { report.runtimeBuild.git_sha = 'a'.repeat(40); }],
     ['wrong profile', report => { report.profile = 'baseline'; }],
     ['wrong sampling', report => { report.sampling.repetitions++; }],
+    ['inflated smoke watchdog', report => { report.configuration.timeouts.runMs = 2400000; }],
+    ['inflated child watchdog', report => { report.results[0].timeoutMs = 180000; }],
     ['missing load', report => { delete report.conditions; }],
     ['wrong measurement version', report => { report.measurementDigest = '0'.repeat(64); }],
     ['wrong command source', report => { report.results[0].argv[0] = 'scripts/fake.mjs'; }],
