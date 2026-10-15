@@ -17,11 +17,11 @@ export function openSemanticQualityBudget(filename, config, freezeDigest) {
   if (!config || !['knowledge', 'relation'].every(kind => positive(config.maxTrialAttempts?.[kind])) ||
       !Number.isFinite(Date.parse(config.expiresAt)) ||
       (config.requireRunClaim !== undefined && config.requireRunClaim !== true)) throw new Error('INVALID_BUDGET');
-  return openBudget(filename, { ...config, requireRunClaim: true, budgetDomain: 'semantic-v1' }, freezeDigest,
-    { knowledge: config.maxTrialAttempts.knowledge, relation: config.maxTrialAttempts.relation });
+  return openBudget(filename, { ...config, requireRunClaim: true }, freezeDigest,
+    { knowledge: config.maxTrialAttempts.knowledge, relation: config.maxTrialAttempts.relation }, 'semantic-v1');
 }
 
-function openBudget(filename, config, freezeDigest, trialLimits) {
+function openBudget(filename, config, freezeDigest, trialLimits, domain) {
   config = structuredClone(config);
   const kinds = Object.keys(trialLimits);
   if (!config || !config.id || !['CNY', 'USD'].includes(config.currency) || !positive(config.ceilingMicros) ||
@@ -29,7 +29,7 @@ function openBudget(filename, config, freezeDigest, trialLimits) {
       (config.expiresAt !== undefined && !Number.isFinite(Date.parse(config.expiresAt))) ||
       (config.requireRunClaim !== undefined && typeof config.requireRunClaim !== 'boolean') ||
       !/^[a-f0-9]{64}$/.test(freezeDigest)) throw new Error('INVALID_BUDGET');
-  const binding = digest({ config, freezeDigest }), db = new DatabaseSync(filename);
+  const binding = digest(domain ? { config, freezeDigest, domain } : { config, freezeDigest }), db = new DatabaseSync(filename);
   try {
     db.exec('PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     db.exec('CREATE TABLE IF NOT EXISTS binding (id INTEGER PRIMARY KEY CHECK(id=1), digest TEXT NOT NULL); CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, trial_id TEXT NOT NULL, reserved_micros INTEGER NOT NULL, reserved_at TEXT NOT NULL, observation_json TEXT)');

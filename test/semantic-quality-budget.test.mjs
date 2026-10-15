@@ -50,7 +50,7 @@ test('semantic ledger refuses missing bounds, expiry, run-claim bypass and mixed
     assert.throws(() => openSemanticQualityBudget(filename, { ...settings, ...changed }, freeze), /INVALID_BUDGET/);
   const expired = openSemanticQualityBudget(filename, { ...settings, expiresAt: '2000-01-01T00:00:00Z' }, freeze);
   try { assert.throws(() => claim(expired, path.dirname(filename)), /BUDGET_APPROVAL_EXPIRED/); assert.equal(expired.snapshot().attempts.length, 0); } finally { expired.close(); }
-  const mixed = { ...settings, maxAttempts: { ...settings.maxAttempts, asr: 1, mt: 1 }, attemptMicros: { ...settings.attemptMicros, asr: 1, mt: 1 } };
+  const mixed = { ...settings, requireRunClaim: true, budgetDomain: 'semantic-v1', maxAttempts: { ...settings.maxAttempts, asr: 1, mt: 1 }, attemptMicros: { ...settings.attemptMicros, asr: 1, mt: 1 } };
   const other = filename + '.other', legacy = openQualityBudget(other, mixed, freeze); legacy.close();
   assert.throws(() => openSemanticQualityBudget(other, mixed, freeze), /BUDGET_BINDING_CHANGED/);
 });
