@@ -5,8 +5,11 @@ Status: the collector and strict raw reader are integrated in main
 upgrade checks. The implementation started on `f826319cf2b0cac0326a83c60caa2f656024b4fc`;
 that historical source is not evidence for a later candidate. Real Chromium CI and
 independent review must be checked for the exact candidate SHA. Node fixture checks
-alone do not establish browser acceptance. This work does not include the unpublished
-performance or Trace changes from GitHub PR #85 (a different issue from KEJ-85).
+alone do not establish browser acceptance. The original journey implementation did not include GitHub PR #85 (a different
+issue from KEJ-85). Its performance collection and Trace changes are now merged
+in main `3d3f4aff783d7cda46564a16f24d481c8354405a`; final combined-source CI must be
+verified separately. Collection tooling does not establish a collected formal
+performance baseline or evaluated performance acceptance.
 
 ## Requirement and reuse boundary
 

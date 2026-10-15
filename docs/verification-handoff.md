@@ -2,6 +2,8 @@
 
 本文是交接准备，不是最终验收结论。核对基线：`4631de0100d554ad9715cfdff2a1159156516e57`；需求为 [增强验证规格 v1.0](https://linear.app/kejunz/document/hearwise-增强验证需求规格-v10-5e0275a3dac3)，对应 [KEJ-87](https://linear.app/kejunz/issue/KEJ-87)。基线已有 KEJ-66、KEJ-83、KEJ-85 的实现；合并、性质登记和一次技术检查均不等于全业务验收。
 
+后续并集基线：main `3d3f4aff783d7cda46564a16f24d481c8354405a` 已合入 PR #85 的历史/图谱性能采集与 Trace 收尾。HW-13-02–04 的工具现已存在，见 [性能采集](history-graph-performance.md)；正式 baseline 尚未采集、阈值/支持范围未冻结、性能未评价，`performanceEvaluated=false` / `thresholds_not_frozen` 仍不能算验收通过。技术 suite / browser profile 数量仍为 18 / 20；新增性能采集 job 不等于新增全业务放行。历史执行保留原 SHA，最终并集必须核对新候选 CI。
+
 ## 判定与责任
 
 - 本文矩阵是入口索引，不是第二份可执行注册表。性质定义以 `verification/`、AC 映射以 `scripts/lib/m1-evidence.mjs`、技术/外部义务以 `verification/release/policy.mjs` 为准。修改契约时同时检查本索引；不能以本文缩小原要求。
@@ -31,7 +33,7 @@
 | HW-10 / `HW-10-01` | KEJ-65, KEJ-66 | `relation-workflow.mjs`<br>`knowledge-workflow.mjs`<br>`storage.mjs` | [generation-verification.md](generation-verification.md) | 实际进程边界、取消/删除/重启范围 |
 | HW-11 / `HW-11-01` | KEJ-69, KEJ-71, KEJ-85 | `public/index.html`<br>`public/knowledge-editor.js` | [user-journey-verification-plan.md](user-journey-verification-plan.md) | 同一库完整旅程；真实设备和人工视觉审查 |
 | HW-12 / `HW-12-01` | KEJ-82 | `server.mjs`<br>`data-transfer.mjs`<br>`src/server/diagnostics/report.ts` | [verification-security.md](verification-security.md) | 当前部署契约；哨兵不证明所有秘密安全 |
-| HW-13 / `HW-13-01` | KEJ-80, KEJ-81 | `server.mjs`<br>`storage.mjs`<br>`public/knowledge-graph-renderer.js` | [realtime-baseline.md](realtime-baseline.md) | 冻结设备/规模/时长/分位数/资源门槛实测 |
+| HW-13 / `HW-13-01` | KEJ-80, KEJ-81 | `server.mjs`<br>`storage.mjs`<br>`public/knowledge-graph-renderer.js` | [性能采集](history-graph-performance.md)、[实时基线](realtime-baseline.md) | 正式 baseline 未采集、阈值/支持范围未冻结；性能未评价 |
 | HW-14 / `HW-14-01` | KEJ-79, KEJ-83 | `scripts/build.mjs`<br>`scripts/preflight.mjs`<br>`storage.mjs` | [install-upgrade-verification.md](install-upgrade-verification.md) | 实际平台支持矩阵及升级恢复外部义务 |
 | HW-15 / `HW-15-01` | KEJ-62, KEJ-84, KEJ-86, KEJ-87 | `src/server/diagnostics/business.ts`<br>`scripts/lib/verification-evidence.mjs` | [release-evidence-gate.md](release-evidence-gate.md) | 同候选完整 CI、历史适用理由及最终签收 |
 
@@ -66,7 +68,7 @@
 | 23 | 导入冲突/写失败整体回滚 | HW-09-03,07–09 | KEJ-72, KEJ-73 | import-protocol/properties.mjs; import-atomicity |
 | 24 | 过期预览拒绝提交 | HW-09-02–03,05 | KEJ-72 | import-protocol/properties.mjs |
 | 25 | 迁移/恢复不自动付费 | HW-09-04,09; HW-10-01 | KEJ-65, KEJ-72, KEJ-73, KEJ-83 | import-protocol/properties.mjs; import-atomicity/properties.mjs; process-crash/properties.mjs; upgrade-properties.mjs |
-| 26 | 历史图谱持续聆听可用 | HW-13-01 | KEJ-80, KEJ-81 | realtime-baseline.json；性能配置与真实报告另验 |
+| 26 | 历史图谱持续聆听可用 | HW-13-01–04 | KEJ-80, KEJ-81 | performance/properties.mjs; realtime-baseline.json；采集工具已合，正式 baseline/性能评价仍未完成 |
 | 27 | 凭据不进日志报告导出 | HW-12-02,05 | KEJ-82 | security-properties.mjs |
 | 28 | 外部文本不能执行脚本 | HW-12-03–04 | KEJ-82 | security-properties.mjs |
 | 29 | 性质编号/负责人可追踪 | HW-15-01 | KEJ-62, KEJ-87 | properties.mjs；本交接责任未认领项 |
@@ -77,7 +79,7 @@
 | 34 | 破坏防护确实被检出 | HW-04-17; HW-06-05; HW-07-06; HW-15-05 | KEJ-66, KEJ-68, KEJ-70, KEJ-84 | 各域实际 production-copy negative；AC-P12 |
 | 35 | 默认规则输入输出完成条件 | HW-01–15 | KEJ-62, KEJ-87 | properties.mjs + 各域 profile/config；规格 v1.0 |
 | 36 | 模拟/有界/完整/证明分清 | HW-15-11 | KEJ-86, KEJ-87 | release/properties.mjs；方法与范围清单 |
-| 37 | 源码工具模型语料版本齐备 | HW-15-11 | KEJ-62, KEJ-86, KEJ-87 | release/properties.mjs；原始 report 和绑定附件 |
+| 37 | 源码工具模型语料版本齐备 | HW-15-11; HW-13-02 | KEJ-62, KEJ-80, KEJ-86, KEJ-87 | release/properties.mjs; performance/properties.mjs；原始 report 和绑定附件 |
 | 38 | 变更影响选择验证 | HW-15-10 | KEJ-86 | release/policy.mjs |
 | 39 | 未运行超时缺失过期不通过 | HW-15-11–12 | KEJ-86, KEJ-87 | release/properties.mjs；三态复现 |
 | 40 | 模型提示词供应商触发质量回归 | HW-15-10,12; HW-01; HW-02; HW-04; HW-05; HW-08 | KEJ-77, KEJ-78, KEJ-79, KEJ-86 | release/policy.mjs prompts-models/provider 规则；真实质量另验 |
