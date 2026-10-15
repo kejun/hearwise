@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { collectTraceBusinessEvidence } from '../test-support/trace-business-worker.mjs';
+import { collectTraceBusinessEvidence, saveTraceRegressionFailure } from '../test-support/trace-business-worker.mjs';
 import { expectedTraceMutations } from '../test-support/trace-business-negative.mjs';
 import { validateTraceBusinessObservations, tracePropertyState, validTraceBrowser, sameTraceSources, checkTraceArtifacts,
   traceSourceSnapshot, traceBrowserChecks, traceStateLabels, traceRegressionFiles, traceEvidenceScope } from '../test-support/trace-business-evidence.mjs';
@@ -12,10 +12,13 @@ import { traceBusinessProperties } from '../verification/trace-business-properti
 
 let baseline, target;
 before(async () => {
-  baseline = await collectTraceBusinessEvidence(); assert.equal(baseline.ok, true, JSON.stringify(baseline.failure));
+  baseline = await collectTraceBusinessEvidence();
+  if (!baseline.ok) await saveTraceRegressionFailure(process.env.TRACE_REGRESSION_FAILURE_FILE ||
+    path.join(process.env.TEST_EVIDENCE_DIR || 'test-evidence', 'trace-regression-failure.json'), baseline);
+  assert.equal(baseline.ok, true, JSON.stringify(baseline.failure));
   target = { source: baseline.source, mutations: await expectedTraceMutations() };
 }, { timeout: 40000 });
-const execution = { code: 0, signal: null, timedOut: false, interrupted: false, ok: true, testComplete: true, testCount: 48 };
+const execution = { code: 0, signal: null, timedOut: false, interrupted: false, ok: true, testComplete: true, testCount: 51 };
 const options = () => ({ checks: ['workflows', 'regressions'].map(name => ({ name, ...(name === 'regressions' ? { files: traceRegressionFiles } : {}), execution: { ...execution } })),
   observationsValid: true, artifactsValid: true, browserValid: false, sourceStable: true, cleanupOk: true, nodeOnly: true });
 const reject = change => { const value = structuredClone(baseline); change(value); assert.equal(validateTraceBusinessObservations(value, target).ok, false); };
@@ -32,6 +35,15 @@ test('actual workflow, boundary, build and mutation evidence validates its compl
 test('missing business snapshots, cases and wrong durable terminal state fail closed', () => {
   reject(value => delete value.workflows[0].captures[0].query);
   reject(value => value.workflows.pop()); reject(value => value.boundaries.pop());
+  const full = value => value.boundaries.find(row => row.name === 'full-public-boundary').actual;
+  reject(value => full(value).relationRequests.push(full(value).relationRequests[0]));
+  reject(value => full(value).durable.relation_requests[0].attempt = 2);
+  reject(value => {
+    const job = full(value).durable.relation_jobs[0], input = JSON.parse(job.input_json);
+    input.focus_segments.pop(); job.input_json = JSON.stringify(input);
+  });
+  reject(value => full(value).relationRequests[0].focus_segments[1].translation = 'stale translation');
+
   reject(value => value.workflows[0].captures[0].query.checkpoint.job.state = 'failed');
   reject(value => value.workflows[0].captures[0].calls.length = 0);
   reject(value => value.workflows.find(row => row.name === 'knowledge-retry').captures[0].query.checkpoint.job.state = 'complete');

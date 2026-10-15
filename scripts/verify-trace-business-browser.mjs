@@ -16,7 +16,8 @@ const directory = await mkdtemp(path.join(root, 'trace-business-')), temporary =
 const context = await metadata(), sourceStart = await traceSourceSnapshot(), mutations = await expectedTraceMutations(), startedAt = new Date().toISOString();
 const report = { ...context, profile: 'trace-business', profileVersion: 1, nodeOnly, sourceStart, startedAt, finishedAt: null, complete: false, ok: false, results: [] };
 await writeJson(path.join(directory, 'report.json'), report); console.log(`Trace business evidence: ${directory}`);
-const env = { ...process.env, TMPDIR: path.resolve(temporary), TMP: path.resolve(temporary), TEMP: path.resolve(temporary) }; delete env.NODE_TEST_CONTEXT;
+const regressionFailureFile = path.join(directory, 'regression-failure.json');
+const env = { ...process.env, TRACE_REGRESSION_FAILURE_FILE: path.resolve(regressionFailureFile), TMPDIR: path.resolve(temporary), TMP: path.resolve(temporary), TEMP: path.resolve(temporary) }; delete env.NODE_TEST_CONTEXT;
 const specifications = [
   { name: 'workflows', command: ['test-support/trace-business-worker.mjs', directory], timeoutMs: 40000 },
   { name: 'regressions', command: ['--test', '--test-reporter=tap', '--test-timeout=25000', ...traceRegressionFiles], timeoutMs: 45000 },
@@ -46,13 +47,17 @@ let browserValid = validTraceBrowser(browser, business) && JSON.stringify(browse
   await checkTraceArtifacts(directory, browser.reports, traceBrowserReportNames);
 if (browserValid) browserValid = traceBrowserDocuments(business).every(expected => browser.reports.some(row => row.path === expected.name && row.sha256 === expected.sha256));
 if (browser?.cleanup === false) cleanupOk = false;
-const observations = { sourceStart, sourceEnd, sourceStable, checks, cleanupOk, budgetExpired, failure, validation,
+let regressionFailureArtifact = null;
+try { regressionFailureArtifact = { path: 'regression-failure.json', sha256: digest(await readFile(regressionFailureFile)) }; }
+catch (error) { if (error.code !== 'ENOENT') throw error; }
+const observations = { regressionFailureArtifact, sourceStart, sourceEnd, sourceStable, checks, cleanupOk, budgetExpired, failure, validation,
   businessArtifact: business ? { path: 'business-observations.json', sha256: digest(await readFile(path.join(directory, 'business-observations.json'))) } : null,
   browser: browser || { status: nodeOnly ? 'not_run' : 'incomplete', complete: false, ok: false }, browserValid, mutations,
   boundary: 'Fixed real workflow/SQLite/HTTP/WS cases and offline report UI. JSONL completeness remains unknown. Speech completion is client feedback. No arbitrary replay, paid service or real-device claim.' };
 await writeJson(path.join(directory, 'observations.json'), observations);
 await writeFile(path.join(directory, 'worker.log'), (await Promise.all(checks.map(async row => `CHECK ${row.name}\n${await readFile(path.join(directory, `${row.name}.log`), 'utf8')}`))).join('\n'));
 const artifacts = await Promise.all(['observations.json', 'worker.log'].map(async name => ({ path: name, sha256: digest(await readFile(path.join(directory, name))) })));
+report.failureArtifacts = regressionFailureArtifact ? [regressionFailureArtifact] : [];
 const rawValid = observations.businessArtifact && await checkTraceArtifacts(directory, [observations.businessArtifact], ['business-observations.json']);
 const finishedAt = new Date().toISOString();
 report.results = traceBusinessProperties.map(property => ({ ...context, property: { id: property.id, version: property.version }, startedAt, finishedAt,

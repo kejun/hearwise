@@ -6,6 +6,11 @@ import { runFullTraceComparison, runSpeechTraceComparison, runTranslationTraceRe
 import { runTraceNegativeControls } from './trace-business-negative.mjs';
 import { sourceVersion, writeJson } from '../scripts/lib/verification-evidence.mjs';
 
+export async function saveTraceRegressionFailure(filename, baseline) {
+  await mkdir(path.dirname(filename), { recursive: true });
+  await writeJson(filename, baseline);
+}
+
 export async function collectTraceBusinessEvidence(save = async () => {}) {
   const result = { profileVersion: 1, source: sourceVersion(), startedAt: new Date().toISOString(), finishedAt: null,
     complete: false, ok: false, workflows: [], boundaries: [], negative: null };
@@ -20,7 +25,7 @@ export async function collectTraceBusinessEvidence(save = async () => {}) {
     }
     result.negative = await runTraceNegativeControls(); result.complete = true; result.ok = true;
   } catch (error) {
-    result.failure = { name: error.name, code: error.code || null, message: error.message.replaceAll('TRACE_SECRET_KEY', '[redacted]').slice(0, 4000) };
+    result.failure = { name: error.name, code: error.code || null, stack: error.stack, trace: error.traceFailure || null, message: error.message.replaceAll('TRACE_SECRET_KEY', '[redacted]').slice(0, 4000) };
   } finally { result.finishedAt = new Date().toISOString(); await save(result); }
   return result;
 }

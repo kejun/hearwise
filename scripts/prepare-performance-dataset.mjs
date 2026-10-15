@@ -1,0 +1,10 @@
+import { readFile } from 'node:fs/promises';
+import { seedPerformanceDatabase } from '../test-support/performance-dataset.mjs';
+import { fileSha256 } from './lib/performance-files.mjs';
+import { writeJson } from './lib/verification-evidence.mjs';
+const [recipeFile, databaseFile, manifestFile] = process.argv.slice(2);
+if (!recipeFile || !databaseFile || !manifestFile) throw new Error('Expected RECIPE.json DATABASE.sqlite MANIFEST.json');
+const manifest = await seedPerformanceDatabase(databaseFile, JSON.parse(await readFile(recipeFile, 'utf8')));
+manifest.databaseSha256 = await fileSha256(databaseFile);
+await writeJson(manifestFile, manifest);
+console.log(JSON.stringify({ tier: manifest.recipe.tier, counts: manifest.counts, preparation: manifest.preparation, databaseSha256: manifest.databaseSha256 }));
