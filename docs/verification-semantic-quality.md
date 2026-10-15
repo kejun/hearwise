@@ -11,7 +11,8 @@ The evaluation transport boundary is implemented in
 `scripts/lib/semantic-quality-gateway.mjs`, but the complete live collector is
 still not wired. `collect` and any `--live` request continue to reject before
 reading credentials or making requests. The ASR/MT toolkit's fixed attempt
-counts and budget must not be reused for this domain. No production behavior or
+counts must not be reused for this domain; its transactional ledger is shared
+through an explicit semantic-domain policy. No production behavior or
 database schema changes.
 
 ### Domain transport boundary
@@ -30,7 +31,7 @@ must bind that request to the frozen corpus/model/prompt and actual production
 SQLite request reservation. Knowledge split parts, shared extra attempts and
 repair counts, and relation window counts remain production-domain obligations;
 this transport's total-request cap is not a replacement for them. It neither
-borrows ASR/MT counts nor claims to implement the missing semantic budget ledger.
+borrows ASR/MT counts nor computes or approves semantic billing bounds.
 
 No automatic retry, redirect, refund or arbitrary extra provider option is
 allowed. The boundary enforces request/response bytes, overall attempt time,
@@ -55,8 +56,32 @@ real knowledge/relation workflows and SQLite, confirming that durable request
 reservations precede network access and the resulting entities/assertions are
 persisted. They also cover denial, expiry, duplicate reservations, byte limits,
 redirects, stalls and cancellation. No real provider has been called. A frozen
-semantic plan, persistent domain budget, complete paired collection/reader and
+semantic plan, verified domain billing bounds, complete paired collection/reader and
 human review are still required before enabling the CLI or claiming acceptance.
+
+### Persistent semantic budget
+
+`openSemanticQualityBudget` in `scripts/lib/quality-budget.mjs` reuses the
+ASR/MT SQLite transaction and run-claim implementation. It binds a separate
+`semantic-v1` policy, frozen-plan digest, explicit knowledge/relation per-trial
+and total-attempt limits, per-attempt worst-case costs, currency, total ceiling
+and expiry. Baseline must be claimed before reservations; candidate may be
+claimed once, only after the baseline is complete. A failed or cancelled
+reservation still spends its full bound, including after process restart.
+No domain inherits the ASR2/MT1 constants. Existing ASR/MT bindings and defaults
+are unchanged, and cross-domain reuse of an existing ledger is rejected.
+
+The transport's reserve callback can return
+`String(budget.reserve({ kind: context.kind, trialId }))` after the collector
+has authorized the exact request and mapped it to its frozen trial. Tests use
+that path with actual loopback HTTP and an independent SQLite connection at
+upstream arrival; two independent child processes also race for one budget.
+Only one can reserve the final affordable attempt, and a reopened ledger cannot
+recover that cost. This adapter does not establish provenance, human approval,
+correct trial mapping, production part/window counts, or official provider
+billing limits. Those must be verified by the future frozen-plan collector;
+passing synthetic numeric bounds to this library does not authorize spending.
+The CLI remains disabled and no real model quality is evaluated.
 
 ## Reproduce
 

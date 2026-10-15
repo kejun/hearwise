@@ -6,9 +6,26 @@ const positive = value => Number.isSafeInteger(value) && value > 0;
 // Evaluation-only ledger. Reservation is committed before the caller opens an
 // upstream connection. An ambiguous, failed or cancelled attempt is never refunded.
 export function openQualityBudget(filename, config, freezeDigest) {
+  return openBudget(filename, config, freezeDigest, { asr: 2, mt: 1 });
+}
+
+// Evaluation-only semantic policy. These explicit bounds must come from the
+// future frozen semantic plan; accepting them is not approval or billing proof.
+// Reuse the same transactional ledger without inheriting ASR2/MT1 semantics.
+export function openSemanticQualityBudget(filename, config, freezeDigest) {
   config = structuredClone(config);
+  if (!config || !['knowledge', 'relation'].every(kind => positive(config.maxTrialAttempts?.[kind])) ||
+      !Number.isFinite(Date.parse(config.expiresAt)) ||
+      (config.requireRunClaim !== undefined && config.requireRunClaim !== true)) throw new Error('INVALID_BUDGET');
+  return openBudget(filename, { ...config, requireRunClaim: true, budgetDomain: 'semantic-v1' }, freezeDigest,
+    { knowledge: config.maxTrialAttempts.knowledge, relation: config.maxTrialAttempts.relation });
+}
+
+function openBudget(filename, config, freezeDigest, trialLimits) {
+  config = structuredClone(config);
+  const kinds = Object.keys(trialLimits);
   if (!config || !config.id || !['CNY', 'USD'].includes(config.currency) || !positive(config.ceilingMicros) ||
-      !['asr', 'mt'].every(kind => positive(config.maxAttempts?.[kind]) && positive(config.attemptMicros?.[kind])) ||
+      !kinds.every(kind => positive(config.maxAttempts?.[kind]) && positive(config.attemptMicros?.[kind])) ||
       (config.expiresAt !== undefined && !Number.isFinite(Date.parse(config.expiresAt))) ||
       (config.requireRunClaim !== undefined && typeof config.requireRunClaim !== 'boolean') ||
       !/^[a-f0-9]{64}$/.test(freezeDigest)) throw new Error('INVALID_BUDGET');
@@ -50,7 +67,7 @@ export function openQualityBudget(filename, config, freezeDigest) {
       if (result.changes !== 1) throw new Error('RUN_CLAIM_MISSING');
     },
     reserve({ kind, trialId }) {
-      if (!['asr', 'mt'].includes(kind) || typeof trialId !== 'string' || !trialId) throw new Error('INVALID_ATTEMPT');
+      if (!kinds.includes(kind) || typeof trialId !== 'string' || !trialId) throw new Error('INVALID_ATTEMPT');
       unexpired();
       db.exec('BEGIN IMMEDIATE');
       try {
@@ -59,7 +76,7 @@ export function openQualityBudget(filename, config, freezeDigest) {
         const total = db.prepare('SELECT COALESCE(SUM(reserved_micros),0) AS amount FROM attempts').get().amount;
         const count = db.prepare('SELECT COUNT(*) AS n FROM attempts WHERE kind=?').get(kind).n;
         const trialCount = db.prepare('SELECT COUNT(*) AS n FROM attempts WHERE kind=? AND trial_id=?').get(kind, trialId).n;
-        if (trialCount >= (kind === 'asr' ? 2 : 1)) throw new Error('TRIAL_ATTEMPT_LIMIT');
+        if (trialCount >= trialLimits[kind]) throw new Error('TRIAL_ATTEMPT_LIMIT');
         const amount = config.attemptMicros[kind];
         if (count >= config.maxAttempts[kind] || amount > config.ceilingMicros - total) throw new Error('BUDGET_EXHAUSTED');
         unexpired();
