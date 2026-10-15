@@ -15,7 +15,7 @@ before(async () => {
   baseline = await collectTraceBusinessEvidence(); assert.equal(baseline.ok, true, JSON.stringify(baseline.failure));
   target = { source: baseline.source, mutations: await expectedTraceMutations() };
 }, { timeout: 40000 });
-const execution = { code: 0, signal: null, timedOut: false, interrupted: false, ok: true, testComplete: true, testCount: 48 };
+const execution = { code: 0, signal: null, timedOut: false, interrupted: false, ok: true, testComplete: true, testCount: 50 };
 const options = () => ({ checks: ['workflows', 'regressions'].map(name => ({ name, ...(name === 'regressions' ? { files: traceRegressionFiles } : {}), execution: { ...execution } })),
   observationsValid: true, artifactsValid: true, browserValid: false, sourceStable: true, cleanupOk: true, nodeOnly: true });
 const reject = change => { const value = structuredClone(baseline); change(value); assert.equal(validateTraceBusinessObservations(value, target).ok, false); };

@@ -11,7 +11,13 @@ import { deadline } from './lifecycle.mjs';
 export async function runFullTraceComparison() {
   const actual = await fullTraceFixture({ observations: true });
   const report = traceReport(actual.logs), business = buildBusinessOverview(report, actual.listeningId);
-  return checkFullTraceComparison(actual, report, business);
+  try { return checkFullTraceComparison(actual, report, business); }
+  catch (error) {
+    // The fixture took these raw/SQLite snapshots before disposing its resources.
+    error.traceFailure = { stage: 'full business comparison', stack: error.stack, rawInput: actual.logs,
+      listeningId: actual.listeningId, durable: actual.durable, tasks: business.tasks };
+    throw error;
+  }
 }
 export function checkFullTraceComparison(actual, report, business) {
   assert.equal(report.completeness, 'unknown', 'A stdout capture has no end manifest, even if all queried work settled');

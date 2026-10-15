@@ -20,7 +20,7 @@ export async function collectTraceBusinessEvidence(save = async () => {}) {
     }
     result.negative = await runTraceNegativeControls(); result.complete = true; result.ok = true;
   } catch (error) {
-    result.failure = { name: error.name, code: error.code || null, message: error.message.replaceAll('TRACE_SECRET_KEY', '[redacted]').slice(0, 4000) };
+    result.failure = { name: error.name, code: error.code || null, stack: error.stack, trace: error.traceFailure || null, message: error.message.replaceAll('TRACE_SECRET_KEY', '[redacted]').slice(0, 4000) };
   } finally { result.finishedAt = new Date().toISOString(); await save(result); }
   return result;
 }

@@ -4,6 +4,9 @@ import { speechFixture } from './speech-fixture.mjs';
 import { relationWireEnvelope } from './relation-wire-fixture.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { deadline } from './lifecycle.mjs';
+import { waitForTraceTasks } from './trace-completion.mjs';
+import { traceReport } from './trace-business-fixture.mjs';
+import { buildBusinessOverview } from '../dist/server/index.js';
 
 export const traceEvents = logs => logs.split('\n').filter(line => line.startsWith('execution_trace ')).map(line => JSON.parse(line.slice(16)));
 export async function until(check, timeout = 12000) {
@@ -39,12 +42,22 @@ export async function fullTraceFixture({ observations = false } = {}) {
     const input = JSON.parse(body.messages.at(-1).content);
     return input.candidates ? relationWireEnvelope(input) : { items: [] };
   } });
-  const sockets = []; let observed;
+  const sockets = []; let observed, capturedLogs, failure, stage = 'relation admission';
+  const durableSnapshot = () => {
+    const db = new DatabaseSync(f.seeded.filename, { readOnly: true });
+    try { return Object.fromEntries(['listening_runs', 'segments', 'extraction_jobs', 'relation_jobs', 'relation_requests'].map(table =>
+      [table, db.prepare(`SELECT * FROM ${table} ORDER BY ${table === 'relation_requests' ? 'job_id,attempt' : 'id'}`).all()])); }
+    finally { db.close(); }
+  };
+  const jobs = table => durableSnapshot()[table].filter(job => job.listening_id === f.seeded.listeningId && job.id !== f.seeded.seededJobId);
+  const waitTasks = (table, step) => waitForTraceTasks(() => traceEvents(f.logs()), () => jobs(table), step);
   try {
     const relation = await fetch(`${f.base}/api/listenings/${f.seeded.listeningId}/graph`, { method: 'POST',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'TRACE_SECRET_KEY' }) });
     if (relation.status !== 202) throw new Error('Relation fixture admission failed');
-    await until(() => traceEvents(f.logs()).some(e => e.step_key === 'relation.commit' && e.state === 'succeeded'));
+    stage = 'initial relation root';
+    await waitTasks('relation_jobs', 'relation.execute');
+    stage = 'ASR and live speech';
     const asr = await socket(f.base, '/ws'); sockets.push(asr.ws);
     asr.send({ type: 'start', key: 'TRACE_SECRET_KEY', listeningId: f.seeded.listeningId, source: 'en', targetLang: 'Chinese', audioSource: 'tab' });
     await until(() => asr.events.some(e => e.type === 'listening-ready'));
@@ -60,6 +73,7 @@ export async function fullTraceFixture({ observations = false } = {}) {
     if (observations) speech.send({ type: 'speech.progress', epoch: 7, playedUnit: end.unit, consumedSamples: end.samples });
     // A speech unit is not a terminal signal for the queued final translation.
     // Stop only after this run's persisted final and its terminal Trace agree.
+    stage = 'final translation root';
     await until(() => asr.events.some(e => e.type === 'segment-final' && e.runId === run.runId && e.segment.asr_sentence_id === 'trace-final'));
     const finalSegment = asr.events.find(e => e.type === 'segment-final' && e.runId === run.runId && e.segment.asr_sentence_id === 'trace-final').segment;
     await until(() => asr.events.some(e => e.type === 'translation-updated' && e.runId === run.runId &&
@@ -68,7 +82,9 @@ export async function fullTraceFixture({ observations = false } = {}) {
         e.attributes?.job_id === finalSegment.id && e.attributes?.run_id === run.runId));
     const asrClosed = once(asr.ws, 'close'); asr.send({ type: 'stop' }); await deadline(() => asrClosed, 3000, 'Full Trace ASR stop');
     await until(() => speech.events.some(e => e.type === 'speech.finished'));
-    await until(() => traceEvents(f.logs()).some(e => e.step_key === 'knowledge.execute' && e.state === 'succeeded'));
+    stage = 'knowledge roots';
+    await waitTasks('extraction_jobs', 'knowledge.execute');
+    stage = 'preview and transcript speech';
     // Cover the second TTS provider and HTTP preview translation independently.
     const preview = await fetch(`${f.base}/api/translate`, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ key: 'TRACE_SECRET_KEY', text: 'PRIVATE_PREVIEW_TEXT', source: 'en', target: 'Chinese' }) });
@@ -84,7 +100,8 @@ export async function fullTraceFixture({ observations = false } = {}) {
     });
     await until(() => fish.events.some(e => e.type === 'speech.finished'));
     await until(() => traceEvents(f.logs()).filter(e => e.step_key === 'speech.session' && e.state === 'succeeded').length === 2);
-    if (observations) {
+    stage = 'business queries and all task roots';
+    {
       const get = async route => { const response = await fetch(f.base + route); if (response.status !== 200) throw new Error('Trace query failed'); return response.json(); };
       let detail, graph;
       const end = Date.now() + 12000;
@@ -94,16 +111,32 @@ export async function fullTraceFixture({ observations = false } = {}) {
         if (Date.now() > end) throw new Error('Trace business queries did not settle');
         await new Promise(resolve => setTimeout(resolve, 10));
       } while (true);
-      const db = new DatabaseSync(f.seeded.filename, { readOnly: true });
-      let durable;
-      try { durable = Object.fromEntries(['listening_runs', 'segments', 'extraction_jobs', 'relation_jobs', 'relation_requests'].map(table =>
-        [table, db.prepare(`SELECT * FROM ${table} ORDER BY ${table === 'relation_requests' ? 'job_id,attempt' : 'id'}`).all()])); }
-      finally { db.close(); }
-      observed = { listeningId: run.listeningId, runId: run.runId, seededJobId: f.seeded.seededJobId,
+      await waitTasks('extraction_jobs', 'knowledge.execute');
+      await waitTasks('relation_jobs', 'relation.execute');
+      const durable = durableSnapshot();
+      if (observations) observed = { listeningId: run.listeningId, runId: run.runId, seededJobId: f.seeded.seededJobId,
         detail, graph, durable, asrEvents: asr.events, speechEvents: speech.events, fishEvents: fish.events,
         frames: [...speech.frames, ...fish.frames], provider: { mt: f.stats.mtRequests.length, knowledge: f.stats.providerRequests.filter(row => row.model !== 'qwen-mt-flash').length,
           qwen: f.stats.commits.length, fish: f.stats.fishRequests.length } };
     }
-  } finally { for (const ws of sockets) ws.terminate(); await f.close(); }
-  return observations ? { logs: f.logs(), ...observed, cleanup: true } : f.logs();
+    capturedLogs = f.logs();
+  } catch (error) {
+    failure = error;
+    // Snapshot live evidence before shutdown can cancel roots or remove SQLite.
+    const rawInput = f.logs();
+    error.traceFailure = { stage, stack: error.stack, rawInput, listeningId: f.seeded.listeningId };
+    try {
+      error.traceFailure.durable = durableSnapshot();
+      error.traceFailure.tasks = buildBusinessOverview(traceReport(rawInput), f.seeded.listeningId).tasks;
+    } catch (captureError) { error.traceFailure.captureError = captureError.stack; }
+    throw error;
+  } finally {
+    for (const ws of sockets) ws.terminate();
+    try { await f.close(); }
+    catch (error) {
+      if (!failure) throw error;
+      failure.traceFailure.cleanupError = error.stack;
+    }
+  }
+  return observations ? { logs: capturedLogs, ...observed, cleanup: true } : capturedLogs;
 }
