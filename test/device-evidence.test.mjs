@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { ListeningStore } from '../storage.mjs';
 import { deviceProfile, deviceChecks, deviceTexts } from '../verification/device/profile.mjs';
 import { devicePlanTemplate, validateDevicePlan, deviceObservationTemplate, evaluateDeviceObservations,
   prepareDeviceEvidence, readDeviceEvidence } from '../scripts/lib/device-evidence.mjs';
@@ -76,6 +77,16 @@ test('missing observations, source/config changes and over-budget sessions canno
   }
 });
 
+test('an explicit failed criterion remains failed when that observation has incomplete metadata', () => {
+  for (const change of [row => { row.notes = ''; }, row => { row.observedAt = null; }, row => { row.observedAt = 'invalid'; }]) {
+    const { context, observations, source } = syntheticEvidence();
+    const row = observations.checks.find(row => row.id === 'tts-quality'); row.criteria.heardAudio = false; change(row);
+    const report = evaluateDeviceObservations(context, observations, source);
+    assert.equal(report.manualStatus, 'failed'); assert.equal(report.complete, false); assert.equal(report.reportedPassed, false);
+    assert.equal(report.rows.find(row => row.id === 'tts-quality').status, 'failed'); assert.ok(report.issues.length > 0);
+  }
+});
+
 test('a plan needs actual client and service facts; credentials and extra fields are not plan fields', () => {
   assert.throws(() => validateDevicePlan(devicePlanTemplate()));
   assert.equal(validateDevicePlan(plan()), true);
@@ -115,4 +126,48 @@ test('prepare creates isolated real SQLite and blank reports; CLI never overwrit
   await writeFile(path.join(run.directory, 'seed.sqlite'), 'corrupted');
   const corrupted = await readDeviceEvidence(run.directory);
   assert.equal(corrupted.reportedPassed, false); assert.ok(corrupted.issues.some(value => value.startsWith('fixture:')));
+});
+
+test('a reported pass requires the retained device database and permits legitimate additional recordings', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hearwise-device-retention-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const run = await prepareDeviceEvidence(plan(), root);
+  const context = JSON.parse(await readFile(path.join(run.directory, 'context.json'), 'utf8'));
+  const store = new ListeningStore(run.database);
+  try {
+    const recording = store.createRun(null, { source: 'zh', targetLang: 'Chinese', audioSource: 'microphone' }, 'Synthetic additional recording');
+    const { segment } = store.addSegment(recording.listeningId, recording.runId, { id: 'additional', text: 'Synthetic microphone test' });
+    store.setTranslation(segment.id, 'Synthetic microphone test'); store.finishRun(recording.runId);
+  } finally { store.close(); }
+  const observations = deviceObservationTemplate(context);
+  observations.startedAt = context.preparedAt; observations.finishedAt = new Date().toISOString();
+  observations.operatorAttested = true; observations.applicationVersionConfirmed = true;
+  for (const row of observations.checks) {
+    row.observedAt = observations.finishedAt; row.notes = 'Synthetic regression, no hardware observation.';
+    for (const key of Object.keys(row.criteria)) row.criteria[key] = true;
+  }
+  const file = path.join(run.directory, 'observations.json'); await writeFile(file, JSON.stringify(observations));
+  assert.equal((await readDeviceEvidence(run.directory)).reportedPassed, true);
+  const retained = await readFile(run.database);
+  const mutateSql = sql => async () => { const db = new DatabaseSync(run.database); try { db.exec(sql); } finally { db.close(); } };
+  for (const mutate of [
+    async () => rm(run.database),
+    async () => writeFile(run.database, 'corrupted database'),
+    async () => { await rm(run.database); const db = new DatabaseSync(run.database); db.close(); },
+    mutateSql("UPDATE segments SET original_text='changed fixed speech' WHERE asr_sentence_id='device-0'"),
+    mutateSql("UPDATE segments SET translation_text='changed translation' WHERE asr_sentence_id='device-0'"),
+    mutateSql(`UPDATE listenings SET title='replaced seed identity' WHERE id='${context.fixture.recordings[0].listeningId}'`),
+    mutateSql(`DELETE FROM segments WHERE run_id='${context.fixture.recordings[0].runId}'`)
+  ]) {
+    try {
+      await mutate(); const report = await readDeviceEvidence(run.directory);
+      assert.equal(report.reportedPassed, false, mutate.toString()); assert.equal(report.complete, false);
+      assert.equal(report.manualStatus, 'incomplete'); assert.ok(report.issues.some(value => value.startsWith('device-database:')));
+    } finally { await writeFile(run.database, retained); }
+  }
+  const failed = observations.checks.find(row => row.id === 'tts-quality'); failed.criteria.heardAudio = false; failed.notes = '';
+  await writeFile(file, JSON.stringify(observations));
+  const { NODE_TEST_CONTEXT, ...env } = process.env;
+  const cli = spawnSync(process.execPath, ['scripts/verify-device.mjs', 'report', '--run', run.directory], { env, encoding: 'utf8', timeout: 15000 });
+  assert.equal(cli.status, 1, cli.stderr); assert.equal(JSON.parse(cli.stdout).complete, false);
 });
