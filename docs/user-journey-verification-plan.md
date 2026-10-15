@@ -1,10 +1,11 @@
 # KEJ-85 continuous user journey verification
 
-Status: implemented collector and strict raw reader, awaiting real Chromium CI and
-independent review. No KEJ-85 browser acceptance is claimed by the Node fixture
-checks. Current implementation is based on main
-`f826319cf2b0cac0326a83c60caa2f656024b4fc` (including KEJ-83 upgrade checks); final candidate must also integrate the
-KEJ-66 cancellation/generation evidence. This work does not include the unpublished
+Status: the collector and strict raw reader are integrated in main
+`4631de0100d554ad9715cfdff2a1159156516e57`, including KEJ-66 generation and KEJ-83
+upgrade checks. The implementation started on `f826319cf2b0cac0326a83c60caa2f656024b4fc`;
+that historical source is not evidence for a later candidate. Real Chromium CI and
+independent review must be checked for the exact candidate SHA. Node fixture checks
+alone do not establish browser acceptance. This work does not include the unpublished
 performance or Trace changes from GitHub PR #85 (a different issue from KEJ-85).
 
 ## Requirement and reuse boundary
@@ -13,14 +14,13 @@ The existing KEJ-85 ticket requires one repeatable user journey on a real server
 and temporary SQLite: listening, source/translation, knowledge/graph, correction,
 playback, history, export and import. It also requires conflict/uncertain-save,
 cancelled late delivery, stale import review, seek, keyboard/focus and narrow-screen
-recovery. Its dependencies are KEJ-66, 71, 73, 74, 75 and 76. Only KEJ-66 is not yet
-merged at this baseline.
+recovery. Its dependencies are KEJ-66, 71, 73, 74, 75 and 76. All are integrated at the baseline above; integration does not replace current-source evidence.
 
 Existing per-feature browser programs create separate fixtures. Calling them in
 sequence is useful regression coverage but does not establish this journey.
 Use the existing `speechFixture`, `relationWireEnvelope`/`relationWireRow`, native
 read-only `databaseSnapshot`, import `Response.clone` observer and lifecycle
-helpers. Use existing browser runner and, once merged, KEJ-86's strict thin release
+helpers. Use the existing browser runner and KEJ-86's integrated strict thin release
 reader. Do not introduce a second application, production debug API or a large
 cross-product model.
 
@@ -79,8 +79,7 @@ competing edits so the competing mutation is also user reachable.
   named held supplier operation. Separate physical provider completion from
   delivery actually observed by the application. New legitimate work must finish
   while the obsolete operation remains held. Late data must not alter current
-  identity, content or budget. Attach same-target KEJ-66 generation evidence after
-  it merges; do not claim a disconnected HTTP response traversed a callback.
+  identity, content or budget. Attach same-target KEJ-66 generation evidence; do not claim a disconnected HTTP response traversed a callback.
 - **Stale import review:** upload the actual journey export, then perform a real
   UI edit in the other page before confirm. The stale attempt must not write;
   refresh/review and a second explicit confirmation are recorded independently.
@@ -89,8 +88,9 @@ competing edits so the competing mutation is also user reachable.
   and worklet. Refer to KEJ-75's same-target generation/late-frame evidence rather
   than describing an injected duplicate Promise resolve as another callback.
 
-The exact public cancellation scenario and owner projection will be frozen after
-KEJ-66 merge. No unmerged adapter code is copied into this branch now.
+The implemented public cancellation scenario and owner projection are described
+below. Same-target KEJ-66 evidence remains independently required; the HTTP
+journey does not establish delivery of an obsolete runtime callback.
 
 ## Evidence and negative controls
 
