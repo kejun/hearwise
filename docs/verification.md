@@ -3,6 +3,8 @@
 本入口交付 KEJ-62（父工单 KEJ-61）的首条证据闭环。需求基线为《Hearwise 增强验证需求规格 v1.0》：
 https://linear.app/kejunz/document/hearwise-增强验证需求规格-v10-5e0275a3dac3
 
+> 本文保留 KEJ-62 初始试点的历史范围；下文“后续”不代表最新主分支尚未实现。当前全业务索引、责任缺口与三态复现见 [KEJ-87 维护交接](verification-handoff.md)，18 类技术门禁及真实验收缺口见 [发布证据门禁](release-evidence-gate.md)。
+
 ## 运行与判断
 
 按 `docs/development-workflow.md` 准备 Node 24 和锁定依赖后运行：

@@ -50,6 +50,8 @@ Cache keys bind fixed toolchain/lock/environment for compiled tools. Evidence id
 
 Run the existing build/tests and actual proof/model profiles first. Build once before parallel readers; evidence checks never download or execute proof tools.
 
+Before invoking `verify:m1:report`, replace `RELATION_RUN`, `KNOWLEDGE_RUN`, `PROCESS_RUN` and `GENERATION_RUN` with the actual unique run directories printed by the corresponding preceding profile commands for this same candidate. These tokens are placeholders, not directory names; missing directories remain `not_run` and exit nonzero.
+
 ```
 npm test
 npm run verify -- --release
@@ -58,6 +60,10 @@ npm run verify:knowledge-protocol -- --release
 npm run verify:import-protocol -- --release
 npm run verify:edit-protocol -- --release
 npm run verify:process-crash -- --release
+npm run verify:generation-protocol -- --release
+npm run verify:upgrade -- --release
+mkdir -p verification-evidence
+npm run verify:m1:report -- --relation RELATION_RUN --knowledge KNOWLEDGE_RUN --process PROCESS_RUN --generation GENERATION_RUN --release --output verification-evidence/m1-summary.json
 npm run verify:playback-protocol -- --release
 npm run verify:scheduler -- --release
 npm run verify:name-protocol -- --release
@@ -78,7 +84,7 @@ Manifest schema 1 contains `evidence: [{suite, directory}]`; paths resolve relat
 
 Real Chromium must run in CI. This task's local environment did not run Chromium. Current-source final evidence and independent review must be recorded separately from synthetic contract tests or reports belonging to earlier SHAs.
 
-This integration normally merges main 2cf27f70, including the merged KEJ-71 name protocol and its final receipt-recovery diagnostic collector. Sixteen technical suites and nineteen browser profiles describe that combined source. The isolated preparation checkout was not published; final acceptance requires fresh evidence on the exact combined commit. The complete nineteen-profile contract test measured 48.7 seconds (54.1 seconds including the whole test file), within its unchanged 80-second test and 90-second file limits. Name release evidence uses exclusive scheduling, with its original nested deadline retained. No full-domain or external acceptance obligation is removed.
+The earlier integration at main `2cf27f70` had sixteen technical suites and nineteen browser profiles. Those counts are historical: baseline `4631de0100d554ad9715cfdff2a1159156516e57` has eighteen suites and twenty profiles, including generation and install-upgrade. Final acceptance always requires evidence on the actual candidate, not an earlier integration snapshot. See [maintenance handoff](verification-handoff.md) for story coverage, actual three-state reproduction and remaining acceptance blockers.
 
 Generation evidence reuses its complete 52-stage domain reader, including exact
 native ITF identity, all 57 real replays, four negative boundaries and full TAP
