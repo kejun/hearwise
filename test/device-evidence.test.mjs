@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, chmod, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { ListeningStore } from '../storage.mjs';
@@ -157,7 +157,16 @@ test('a reported pass requires the retained device database and permits legitima
     mutateSql("UPDATE segments SET original_text='changed fixed speech' WHERE asr_sentence_id='device-0'"),
     mutateSql("UPDATE segments SET translation_text='changed translation' WHERE asr_sentence_id='device-0'"),
     mutateSql(`UPDATE listenings SET title='replaced seed identity' WHERE id='${context.fixture.recordings[0].listeningId}'`),
-    mutateSql(`DELETE FROM segments WHERE run_id='${context.fixture.recordings[0].runId}'`)
+    mutateSql(`DELETE FROM segments WHERE run_id='${context.fixture.recordings[0].runId}'`),
+    async () => {
+      const store = new ListeningStore(run.database);
+      try {
+        const appended = store.createRun(context.fixture.recordings[0].listeningId,
+          { source: 'zh', targetLang: 'Chinese', audioSource: 'microphone' });
+        store.addSegment(appended.listeningId, appended.runId, { id: 'append', text: 'Unexpected extra playback content' });
+        store.finishRun(appended.runId);
+      } finally { store.close(); }
+    }
   ]) {
     try {
       await mutate(); const report = await readDeviceEvidence(run.directory);
@@ -170,4 +179,35 @@ test('a reported pass requires the retained device database and permits legitima
   const { NODE_TEST_CONTEXT, ...env } = process.env;
   const cli = spawnSync(process.execPath, ['scripts/verify-device.mjs', 'report', '--run', run.directory], { env, encoding: 'utf8', timeout: 15000 });
   assert.equal(cli.status, 1, cli.stderr); assert.equal(JSON.parse(cli.stdout).complete, false);
+});
+
+test('device validation includes committed WAL content and leaves submitted files unchanged', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hearwise-device-wal-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const run = await prepareDeviceEvidence(plan(), root), original = await readFile(run.database);
+  const store = new ListeningStore(run.database);
+  try {
+    store.db.exec("UPDATE segments SET original_text='Changed only in committed WAL' WHERE asr_sentence_id='device-0'");
+    assert.deepEqual(await readFile(run.database), original, 'The mutation must reside in WAL, not the main file');
+    const paths = [run.database, run.database + '-wal', run.database + '-shm'];
+    const before = await Promise.all(paths.map(file => readFile(file))); assert.ok(before[1].length > 0);
+    const report = await readDeviceEvidence(run.directory);
+    assert.ok(report.issues.some(value => value.startsWith('device-database:')));
+    assert.deepEqual(await Promise.all(paths.map(file => readFile(file))), before);
+  } finally { store.close(); }
+});
+
+test('closed WAL evidence can be revalidated from a read-only directory', async t => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('POSIX non-root permission enforcement required; covered by the Ubuntu CI runner'); return;
+  }
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hearwise-device-readonly-'));
+  const run = await prepareDeviceEvidence(plan(), root);
+  t.after(async () => { await chmod(run.directory, 0o700); await rm(root, { recursive: true, force: true }); });
+  const names = await readdir(run.directory);
+  for (const name of names) await chmod(path.join(run.directory, name), 0o444);
+  await chmod(run.directory, 0o555);
+  const report = await readDeviceEvidence(run.directory);
+  assert.deepEqual(report.issues, []); assert.equal(report.manualStatus, 'not_run');
+  assert.deepEqual(await readdir(run.directory), names, 'Readback must not create WAL sidecars in the submitted evidence');
 });
