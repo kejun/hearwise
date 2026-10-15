@@ -13,19 +13,19 @@ import { KNOWLEDGE_MODEL, CONTRACT_REVISION, parseKnowledgeV2 } from '../../know
 import { RELATION_MODEL, RELATION_CONTRACT_VERSION, buildRelationRequest } from '../../relations.mjs';
 import { semanticFixtureSample, semanticFixtureResponse } from '../../test-support/semantic-quality-fixture.mjs';
 const same = (a, b) => assert.equal(contractDigest(a), contractDigest(b));
-const boundary = { qualityStatus: 'not_run', qualityEvaluated: false, fullQualityAcceptance: false, releaseEligible: false, liveCalls: 0 };
-const specs = ['qualified', 'empty'].flatMap(sample => [0, 1].map(repetition => ({ sample, repetition })));
+export const semanticPairBoundary = { qualityStatus: 'not_run', qualityEvaluated: false, fullQualityAcceptance: false, releaseEligible: false, liveCalls: 0 };
+export const semanticPairSpecs = ['qualified', 'empty'].flatMap(sample => [0, 1].map(repetition => ({ sample, repetition })));
 const trial = (role, spec) => `${role}:${spec.sample}:${spec.repetition}`;
 const relative = (role, spec) => `${role}/${spec.sample}-${spec.repetition}`;
 const json = async filename => JSON.parse(await readFile(filename, 'utf8'));
-function frozenPlan(directory, source, frozenAt) {
+export function frozenSemanticPairPlan(directory, source, frozenAt) {
   const expiresAt = new Date(Date.parse(frozenAt) + 300000).toISOString();
   return { schemaVersion: 1, kind: 'synthetic-semantic-pair-freeze', mode: 'offline', comparison: 'same-source-rehearsal',
-    directory: path.resolve(directory), frozenAt, source, samples: ['qualified', 'empty'].map(semanticFixtureSample), specs,
+    directory: path.resolve(directory), frozenAt, source, samples: ['qualified', 'empty'].map(semanticFixtureSample), specs: semanticPairSpecs,
     models: { knowledge: KNOWLEDGE_MODEL, relation: RELATION_MODEL, knowledgeContract: CONTRACT_REVISION, relationContract: RELATION_CONTRACT_VERSION },
     budget: { id: 'synthetic-pair-ledger', currency: 'USD', ceilingMicros: 384, maxAttempts: { knowledge: 192, relation: 192 },
       attemptMicros: { knowledge: 1, relation: 1 }, maxTrialAttempts: { knowledge: 24, relation: 24 }, expiresAt },
-    billingMeaning: 'Synthetic accounting units only; no price, approval or provider billing claim.', ...boundary };
+    billingMeaning: 'Synthetic accounting units only; no price, approval or provider billing claim.', ...semanticPairBoundary };
 }
 function readLedger(filename) {
   const db = new DatabaseSync(filename, { readOnly: true });
@@ -39,7 +39,7 @@ function readLedger(filename) {
 // Recompute business meaning from the fixed original responses through the
 // production parsers. Matching database bytes to a self-reported snapshot alone
 // would allow a coordinated DB/snapshot/hash forgery to change polarity or facts.
-function verifySyntheticPersistence(capture) {
+export function verifySyntheticPersistence(capture) {
   const t = capture.after.tables, ordered = rows => [...rows].sort((a,b) => contractDigest(a).localeCompare(contractDigest(b)));
   const pick = (row, keys) => Object.fromEntries(keys.map(key => [key, row[key]]));
   const itemKeys = ['type','display_label','canonical_name','short_description','certainty'];
@@ -90,7 +90,7 @@ function verifySyntheticPersistence(capture) {
 export async function runSemanticPairedOffline(directory, { signal } = {}) {
   directory = path.resolve(directory); await mkdir(directory, { recursive: false, mode: 0o700 });
   const sourceStart = await qualitySources(), startedAt = new Date().toISOString();
-  const plan = frozenPlan(directory, sourceStart, startedAt), freezeDigest = contractDigest(plan);
+  const plan = frozenSemanticPairPlan(directory, sourceStart, startedAt), freezeDigest = contractDigest(plan);
   await writeFile(path.join(directory, 'freeze.json'), JSON.stringify(plan, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   const timer = new AbortController(), timeout = setTimeout(() => timer.abort(), 150000);
   const combined = signal ? AbortSignal.any([signal, timer.signal]) : timer.signal;
@@ -101,7 +101,7 @@ export async function runSemanticPairedOffline(directory, { signal } = {}) {
       ledger = openSemanticQualityBudget(path.join(directory, 'budget.sqlite'), plan.budget, freezeDigest);
       await mkdir(path.join(directory, role));
       ledger.claimRun({ role, sourceSha: sourceStart.sha, directory: path.join(directory, role), expectedSnapshot: ledger.snapshot() }); activeRole = role;
-      for (const spec of specs) {
+      for (const spec of semanticPairSpecs) {
         combined.throwIfAborted();
         const capture = await captureSemanticOffline({ directory: path.join(directory, relative(role, spec)),
           sample: semanticFixtureSample(spec.sample), response: semanticFixtureResponse(), signal: combined,
@@ -123,40 +123,48 @@ export async function runSemanticPairedOffline(directory, { signal } = {}) {
   let sourceEnd = null;
   try { sourceEnd = await qualitySources(); } catch { errorCode = 'SEMANTIC_SOURCE_UNREADABLE'; }
   if (sourceEnd && contractDigest(sourceStart) !== contractDigest(sourceEnd)) errorCode = 'SEMANTIC_SOURCE_CHANGED';
-  const report = { schemaVersion: 1, kind: 'synthetic-semantic-pair', mode: 'offline', comparison: 'same-source-rehearsal', ...boundary,
+  const report = { schemaVersion: 1, kind: 'synthetic-semantic-pair', mode: 'offline', comparison: 'same-source-rehearsal', ...semanticPairBoundary,
     sourceStart, sourceEnd, startedAt, finishedAt: new Date().toISOString(), freezeDigest, complete: !errorCode, errorCode, captures, roleSnapshots };
   await writeJson(path.join(directory, 'paired.json'), report); return report;
 }
 export async function inspectSemanticPairedOffline(directory, targetSource, { release = false } = {}) {
+  return inspectSemanticPairEvidence(directory, targetSource, { release });
+}
+// Shared evidence checks. Distinct-source callers supply a plan reconstructed
+// from explicit trusted checkouts, never executable paths taken from artifacts.
+export async function inspectSemanticPairEvidence(directory, targetSource, { release = false, expectedPlan,
+  roleSources = { baseline: targetSource, candidate: targetSource },
+  readCapture = (directory, source) => readSemanticCapture(directory, source, { release }),
+  verifyPersistence = verifySyntheticPersistence } = {}) {
   directory = path.resolve(directory); const artifacts = [];
   try {
     const plan = await json(path.join(directory, 'freeze.json')), run = await json(path.join(directory, 'paired.json'));
-    same(plan, frozenPlan(directory, targetSource, plan.frozenAt));
+    same(plan, expectedPlan || frozenSemanticPairPlan(directory, targetSource, plan.frozenAt));
     assert.ok(Number.isFinite(Date.parse(plan.frozenAt)) && Date.parse(plan.frozenAt) <= Date.now());
     same(run.sourceStart, targetSource); same(run.sourceEnd, targetSource); if (release) assert.equal(targetSource.dirty, false);
-    for (const [name, value] of Object.entries(boundary)) same(run[name], value);
+    for (const [name, value] of Object.entries(semanticPairBoundary)) same(run[name], value);
     assert.equal(run.schemaVersion, 1); assert.equal(run.kind, 'synthetic-semantic-pair'); assert.equal(run.mode, 'offline');
-    assert.equal(run.comparison, 'same-source-rehearsal'); assert.equal(run.complete, true); assert.equal(run.errorCode, undefined);
+    assert.equal(run.comparison, plan.comparison); assert.equal(run.complete, true); assert.equal(run.errorCode, undefined);
     assert.equal(run.startedAt, plan.frozenAt); assert.ok(Date.parse(run.finishedAt) >= Date.parse(run.startedAt) && Date.parse(run.finishedAt) <= Date.now());
     const freezeDigest = contractDigest(plan); assert.equal(run.freezeDigest, freezeDigest);
-    const expectedCaptures = ['baseline', 'candidate'].flatMap(role => specs.map(spec => ({ role, ...spec, directory: relative(role, spec), complete: true })));
+    const expectedCaptures = ['baseline', 'candidate'].flatMap(role => semanticPairSpecs.map(spec => ({ role, ...spec, directory: relative(role, spec), complete: true })));
     same(run.captures, expectedCaptures);
     const ledger = readLedger(path.join(directory, 'budget.sqlite'));
     assert.equal(ledger.binding, hashBytes(JSON.stringify({ config: { ...plan.budget, requireRunClaim: true }, freezeDigest, domain: 'semantic-v1' })));
-    same(ledger.runs.map(row => [row.role, row.source_sha, row.directory, row.state]), ['baseline','candidate'].map(role => [role, targetSource.sha, path.join(directory, role), 'complete']));
+    same(ledger.runs.map(row => [row.role, row.source_sha, row.directory, row.state]), ['baseline','candidate'].map(role => [role, roleSources[role].sha, path.join(directory, role), 'complete']));
     const [baseline, candidate] = ledger.runs;
     assert.ok(Date.parse(baseline.started_at) >= Date.parse(plan.frozenAt) && Date.parse(candidate.started_at) >= Date.parse(baseline.finished_at));
     const reserved = ledger.attempts.reduce((total, row) => total + row.reserved_micros, 0);
     assert.ok(Number.isSafeInteger(reserved) && reserved <= plan.budget.ceilingMicros);
     const seen = new Set();
     for (const spec of expectedCaptures) {
-      const { report: capture, artifacts: captureArtifacts } = await readSemanticCapture(path.join(directory, spec.directory), targetSource, { release });
+      const { report: capture, artifacts: captureArtifacts } = await readCapture(path.join(directory, spec.directory), roleSources[spec.role], spec.role);
       same(capture.sample, semanticFixtureSample(spec.sample));
       const owner = ledger.runs.find(row => row.role === spec.role);
       assert.ok(Date.parse(capture.startedAt) >= Date.parse(owner.started_at) && Date.parse(capture.finishedAt) <= Date.parse(owner.finished_at));
       const response = semanticFixtureResponse();
       for (const [index, call] of capture.calls.entries()) same(call.response, response({ kind: call.kind, input: JSON.parse(call.request.messages.at(-1).content), sample: capture.sample, calls: capture.calls.slice(0, index) }));
-      verifySyntheticPersistence(capture);
+      await verifyPersistence(capture, spec.role);
       const transport = capture.transport, trialId = trial(spec.role, spec);
       assert.equal(transport.trialId, trialId); assert.equal(transport.observations.length, capture.calls.length);
       assert.equal(transport.budgetBindings.length, capture.calls.length); assert.ok(capture.calls.length <= 24);
@@ -194,8 +202,8 @@ export async function inspectSemanticPairedOffline(directory, targetSource, { re
     }
     assert.ok(Date.parse(candidate.finished_at) <= Date.parse(run.finishedAt));
     for (const filename of ['freeze.json','budget.sqlite','paired.json']) artifacts.push({ path: filename, sha256: hashBytes(await readFile(path.join(directory, filename))) });
-    return { schemaVersion: 1, kind: 'semantic-paired-offline-summary', ...boundary, complete: true, infrastructurePassed: true,
-      comparison: 'same-source-rehearsal', source: targetSource, scope: { pairs: specs.length, captures: expectedCaptures.length, attempts: seen.size, reservedMicros: reserved }, artifacts };
-  } catch { return { schemaVersion: 1, kind: 'semantic-paired-offline-summary', ...boundary, complete: false, infrastructurePassed: false,
+    return { schemaVersion: 1, kind: 'semantic-paired-offline-summary', ...semanticPairBoundary, complete: true, infrastructurePassed: true,
+      comparison: plan.comparison, source: targetSource, scope: { pairs: semanticPairSpecs.length, captures: expectedCaptures.length, attempts: seen.size, reservedMicros: reserved }, artifacts };
+  } catch { return { schemaVersion: 1, kind: 'semantic-paired-offline-summary', ...semanticPairBoundary, complete: false, infrastructurePassed: false,
     source: targetSource, errorCode: 'SEMANTIC_PAIR_EVIDENCE_REJECTED', artifacts }; }
 }

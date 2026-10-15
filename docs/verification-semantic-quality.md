@@ -273,3 +273,68 @@ budget. The remaining steps are explicit:
 
 None of those approvals or live evaluations is implied by the present CI.
 KEJ-78 remains In Progress after this preparation is merged.
+
+## Distinct-source offline execution and annotation comparison
+
+`distinct-offline` executes two explicitly selected, trusted local checkouts in
+separate processes. This is an offline synthetic comparison with the existing
+knowledge-v2.1 / relations-v3 capture schema, not real model quality acceptance.
+The baseline must already contain the bounded capture/ledger interfaces (PR99
+or newer). Both checkouts need their own locked dependencies and exact clean
+build; the command does not clone, install, rebuild or alter either checkout.
+In each checkout run `npm ci --ignore-scripts` and `npm run build` beforehand.
+The two roots, Git commits and trees must differ. A changed Git label alone is
+insufficient: actual target-local production workflows make the requests.
+
+From the clean coordinator checkout, with a JSON array of declared reviewer
+labels in reviewers.json and a new output path outside both target checkouts:
+
+```bash
+npm run quality:semantic -- distinct-offline --baseline /path/base --candidate /path/candidate --reviewers /path/reviewers.json --out /path/new-run --release
+npm run quality:semantic -- check-distinct-offline --baseline /path/base --candidate /path/candidate --reviewers /path/reviewers.json --out /path/new-run --release
+npm run quality:semantic -- assess-distinct-offline --baseline /path/base --candidate /path/candidate --reviewers /path/reviewers.json --out /path/new-run --release
+```
+
+Before capturing, freeze the coordinator source, both target source/build
+manifests, all installed dependency file bytes and link targets, model/prompt
+profiles, identical synthetic samples, repetitions, declared reviewers and
+shared finite accounting plan. Each role claims that same persistent SQLite
+ledger; each HTTP forward needs a committed reservation. Targets are checked
+before and after their work and after the pair. Failure/cancellation leaves an
+incomplete role, preserves charges and prevents candidate admission. Existing
+output cannot be replaced or replayed. Per-role processes have bounded lifetime
+and process-group cleanup; the overall collection retains its 150-second bound.
+No inherited provider credentials, NODE_OPTIONS or Git environment overrides
+are passed to children.
+
+A fresh check requires the two explicit checkout arguments again. Executable
+paths are never selected from an artifact. Target-local readers validate their
+version's requests; the coordinator's trusted reader independently reopens each
+SQLite and validates structural evidence, fixed response meaning, ledger,
+ordering and exact sample coverage. Protocol changes outside the supported
+contract fail closed. Model changes must be internally consistent with the
+selected source's storage/workflow version checks. These are trusted-code
+executions, not a sandbox for hostile repositories. The coordinator must run
+from its own checkout. Escaping source/build/dependency symlinks are rejected.
+The workflow directly exercises root production knowledge/relation modules;
+freezing the compiled server build does not claim an HTTP server was exercised.
+
+Each capture gets an unfilled review.json using the existing annotation
+contract. Fill those files explicitly; the collector never creates review
+decisions. Reinspection validates displayed evidence, reviewer roster, full
+output and missing-gold coverage. Paired completed reviews must choose the same
+gold variant. Reports expose per-role metrics and candidate-minus-baseline
+deltas; undefined precision/recall stays null. `check-distinct-offline` exits
+success for valid infrastructure even with reviews pending.
+`assess-distinct-offline` also requires every offline review to be complete and
+pass its existing severe-error/missing-output checks. Declared names are not
+authenticated human approval, and synthetic annotations do not calibrate a
+real-world threshold. Every result keeps qualityStatus=not_run,
+fullQualityAcceptance=false, releaseEligible=false and liveCalls=0.
+
+Still unimplemented: a general real-corpus plan/part/window mapper, official
+worst-case billing integration and authorized live collection/readback (including
+repair/retry accounting and real-domain review comparison). Those are code
+work, not merely human sign-off. Separately required are lawful development and
+held-out data, human gold/adjudication, frozen thresholds/repetitions/rules and
+explicit finite paid-provider authorization. `collect` and `--live` still reject.
