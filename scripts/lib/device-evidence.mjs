@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { copyFile, lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ListeningStore } from '../../storage.mjs';
@@ -144,13 +144,28 @@ export function evaluateDeviceObservations(context, observations, currentSource)
     claim: 'Operator-reported short checks for the declared device and settings only; no authenticated physical observation, full support matrix or release acceptance.' };
 }
 
-function validateRetainedDatabase(seedFile, deviceFile, recordings) {
-  const seed = new DatabaseSync(seedFile, { readOnly: true });
-  let device;
+async function validateRetainedDatabase(seedBytes, deviceFile, recordings) {
+  // SQLite may need writable WAL/SHM bookkeeping even on a read-only connection.
+  // Snapshot the main file and durable journals; SHM is a rebuildable lock/index
+  // cache and must not carry another process's locks into validation.
+  const readSnapshot = () => Promise.all(['', '-wal', '-journal'].map(async suffix => {
+    try {
+      assert.ok((await lstat(deviceFile + suffix)).isFile());
+      return { suffix, bytes: await readFile(deviceFile + suffix) };
+    } catch (error) { if (suffix && error.code === 'ENOENT') return { suffix, bytes: null }; throw error; }
+  }));
+  const snapshot = await readSnapshot(), confirmed = await readSnapshot();
+  assert.deepEqual(snapshot.map(row => row.bytes && digest(row.bytes)), confirmed.map(row => row.bytes && digest(row.bytes)),
+    'Database changed during validation snapshot; stop the service before reporting');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'hearwise-device-validation-'));
+  let seed, device;
   try {
-    device = new DatabaseSync(deviceFile, { readOnly: true });
-    // Read a consistent snapshot, including committed WAL changes. Do not open
-    // ListeningStore here: reporting must not migrate or recover the test DB.
+    await writeFile(path.join(directory, 'seed.sqlite'), seedBytes, { mode: 0o600 });
+    for (const { suffix, bytes } of snapshot) if (bytes !== null)
+      await writeFile(path.join(directory, 'device.sqlite' + suffix), bytes, { mode: 0o600 });
+    seed = new DatabaseSync(path.join(directory, 'seed.sqlite'), { readOnly: true });
+    device = new DatabaseSync(path.join(directory, 'device.sqlite'), { readOnly: true });
+    // Never open ListeningStore: reporting must not migrate/recover evidence.
     device.exec('PRAGMA busy_timeout = 3000; BEGIN');
     assert.deepEqual(device.prepare('PRAGMA integrity_check').all().map(row => row.integrity_check), ['ok']);
     assert.deepEqual(device.prepare('PRAGMA foreign_key_check').all(), []);
@@ -161,14 +176,17 @@ function validateRetainedDatabase(seedFile, deviceFile, recordings) {
     for (const [index, recording] of recordings.entries()) {
       assert.equal(recording.title, deviceTexts[index].title);
       const identity = db => ({ listening: db.prepare('SELECT id,title FROM listenings WHERE id=?').get(recording.listeningId),
-        run: db.prepare('SELECT id,listening_id,run_no,source_lang,target_lang,state FROM listening_runs WHERE id=?').get(recording.runId),
-        segments: db.prepare('SELECT id,listening_id,run_id,sequence_no,original_text,translation_text FROM segments WHERE run_id=? ORDER BY sequence_no').all(recording.runId) });
+        runs: db.prepare('SELECT id,listening_id,run_no,source_lang,target_lang,state FROM listening_runs WHERE listening_id=? ORDER BY run_no').all(recording.listeningId),
+        segments: db.prepare('SELECT id,listening_id,run_id,sequence_no,original_text,translation_text FROM segments WHERE listening_id=? ORDER BY sequence_no').all(recording.listeningId) });
       const expected = identity(seed);
-      assert.equal(expected.listening?.title, recording.title); assert.equal(expected.run?.listening_id, recording.listeningId);
+      assert.equal(expected.listening?.title, recording.title); assert.equal(expected.runs.length, 1);
+      assert.equal(expected.runs[0].id, recording.runId);
       assert.deepEqual(expected.segments.map(row => row.original_text), deviceTexts[index].segments);
       assert.deepEqual(identity(device), expected, 'Retain seeded recording identities and speech content');
     }
-  } finally { try { device?.close(); } finally { seed.close(); } }
+  } finally {
+    try { device?.close(); } finally { try { seed?.close(); } finally { await rm(directory, { recursive: true, force: true }); } }
+  }
 }
 
 export async function readDeviceEvidence(directory) {
@@ -180,14 +198,16 @@ export async function readDeviceEvidence(directory) {
     if (report.manualStatus !== 'failed') report.manualStatus = 'incomplete';
   };
   const seed = path.join(directory, 'seed.sqlite');
+  let seedBytes;
   try {
     assert.equal(context.fixture.file, 'seed.sqlite');
     assert.ok((await lstat(seed)).isFile());
-    assert.equal(digest(await readFile(seed)), context.fixture.sha256, 'Fixed speech fixture changed');
-  } catch (error) { invalidate('fixture', error); }
+    seedBytes = await readFile(seed);
+    assert.equal(digest(seedBytes), context.fixture.sha256, 'Fixed speech fixture changed');
+  } catch (error) { seedBytes = null; invalidate('fixture', error); }
   try {
     const device = path.join(directory, 'device.sqlite'); assert.ok((await lstat(device)).isFile());
-    validateRetainedDatabase(seed, device, context.fixture.recordings);
+    if (seedBytes) await validateRetainedDatabase(seedBytes, device, context.fixture.recordings);
   } catch (error) { invalidate('device-database', error); }
   return report;
 }
