@@ -6,11 +6,13 @@ import { writeJson } from './lib/verification-evidence.mjs';
 import { readSemanticCapture } from './lib/semantic-quality-evidence.mjs';
 import { runSemanticOffline, inspectSemanticOffline } from './lib/semantic-quality-offline.mjs';
 import { runSemanticPairedOffline, inspectSemanticPairedOffline } from './lib/semantic-quality-paired.mjs';
+import { runSemanticDistinctOffline, inspectSemanticDistinctOffline } from './lib/semantic-quality-distinct.mjs';
 import { createSemanticReviewTemplate, assessSemanticReview } from './lib/semantic-quality-review.mjs';
 import { createSemanticFailureCases } from './lib/semantic-quality-failures.mjs';
 const help = `Knowledge / relation semantic evaluation preparation, OFFLINE ONLY.
-Commands: plan | offline | check-offline | paired-offline | check-paired-offline | prepare-review | assess | failure-cases
+Commands: plan | offline | check-offline | paired-offline | check-paired-offline | distinct-offline | check-distinct-offline | assess-distinct-offline | prepare-review | assess | failure-cases
 --out PATH       output root for offline; existing run for check-offline; fresh JSON for review/assessment
+--baseline DIR / --candidate DIR  explicit trusted independent clean checkouts (distinct commands)
 --capture DIR    exact-source offline capture with store.sqlite and capture.json
 --reviewers FILE JSON array of declared reviewer labels; no identity authentication is claimed
 --review FILE    completed offline review (assess / failure-cases)
@@ -20,7 +22,7 @@ A successful offline exit verifies plumbing only; HW-05-04 and all real quality 
 `;
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: { help: { type: 'boolean' }, out: { type: 'string' },
-    capture: { type: 'string' }, reviewers: { type: 'string' }, review: { type: 'string' }, release: { type: 'boolean' }, live: { type: 'boolean' } } });
+    capture: { type: 'string' }, reviewers: { type: 'string' }, review: { type: 'string' }, release: { type: 'boolean' }, baseline: { type: 'string' }, candidate: { type: 'string' }, live: { type: 'boolean' } } });
   if (values.help) { console.log(help); return; }
   if (values.live || positionals[0] === 'collect') throw new Error('LIVE_SEMANTIC_ADAPTER_NOT_IMPLEMENTED_OR_AUTHORIZED');
   if (positionals.length > 1) throw new Error('ONE_COMMAND_REQUIRED');
@@ -29,6 +31,19 @@ async function main() {
     const plan = JSON.parse(await readFile('verification/semantic-quality/plan.template.json', 'utf8'));
     console.log(JSON.stringify({ complete: true, mode: 'offline-preparation', qualityStatus: 'not_run', qualityEvaluated: false,
       fullQualityAcceptance: false, liveImplemented: false, liveCalls: 0, plan }, null, 2)); return;
+  }
+  if (['distinct-offline','check-distinct-offline','assess-distinct-offline'].includes(command)) {
+    if (!values.baseline || !values.candidate || !values.reviewers || !values.out) throw new Error('CHECKOUTS_REVIEWERS_OUTPUT_REQUIRED');
+    const options = { checkouts: { baseline: values.baseline, candidate: values.candidate },
+      reviewers: JSON.parse(await readFile(values.reviewers, 'utf8')), release: values.release };
+    const abort = new AbortController(), stop = () => abort.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
+    options.signal = abort.signal;
+    try {
+      if (command === 'distinct-offline') await runSemanticDistinctOffline(values.out, options);
+      const summary = await inspectSemanticDistinctOffline(values.out, options);
+      console.log(JSON.stringify(summary, null, 2)); process.exitCode = summary.infrastructurePassed && (command !== 'assess-distinct-offline' || summary.reviewComplete && summary.offlineReviewPassed) ? 0 : 1;
+    } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+    return;
   }
   if (['offline','paired-offline'].includes(command)) {
     const paired = command === 'paired-offline', run = paired ? runSemanticPairedOffline : runSemanticOffline, inspect = paired ? inspectSemanticPairedOffline : inspectSemanticOffline;

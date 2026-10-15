@@ -5,11 +5,13 @@ import path from 'node:path';
 import { hashBytes, contractDigest } from './quality-contract.mjs';
 import { semanticDatabase, semanticUnits } from './semantic-quality-capture.mjs';
 import { KNOWLEDGE_MODEL, CONTRACT_REVISION, SYSTEM_PROMPT_V2 } from '../../knowledge.mjs';
-import { RELATION_MODEL, RELATION_CONTRACT_VERSION, buildRelationRequest } from '../../relations.mjs';
+import { RELATION_MODEL, RELATION_CONTRACT_VERSION, RELATION_SYSTEM_PROMPT, buildRelationRequest } from '../../relations.mjs';
 import { knowledgeResultSummary } from '../../knowledge-workflow.mjs';
 const decodePart = part => ({ ...part, ...Object.fromEntries(['focus_refs','unresolved','results','stats','input_snapshot'].map(key => [key, part[key] ? JSON.parse(part[key]) : null])) });
 const same = (a, b) => assert.equal(contractDigest(a), contractDigest(b));
-export async function readSemanticCapture(directory, targetSource, { release = false } = {}) {
+export async function readSemanticCapture(directory, targetSource, { release = false, profile = {
+  knowledgeModel: KNOWLEDGE_MODEL, relationModel: RELATION_MODEL, knowledgePrompt: SYSTEM_PROMPT_V2, relationPrompt: RELATION_SYSTEM_PROMPT
+} } = {}) {
   const bytes = await readFile(path.join(directory, 'capture.json'));
   const report = JSON.parse(bytes);
   assert.equal(report.schemaVersion, 1); assert.equal(report.kind, 'offline-semantic-capture');
@@ -20,7 +22,7 @@ export async function readSemanticCapture(directory, targetSource, { release = f
   assert.equal(report.complete, true); assert.equal(report.cleanup, true); assert.equal(report.errorCode, undefined);
   assert.equal(report.qualityEvaluated, false); assert.equal(report.fullQualityAcceptance, false);
   assert.equal(report.qualityStatus, 'not_run'); assert.equal(report.liveCalls, 0); same(report.errors, []);
-  same(report.models, { knowledge: KNOWLEDGE_MODEL, relation: RELATION_MODEL, knowledgeContract: CONTRACT_REVISION, relationContract: RELATION_CONTRACT_VERSION });
+  same(report.models, { knowledge: profile.knowledgeModel, relation: profile.relationModel, knowledgeContract: CONTRACT_REVISION, relationContract: RELATION_CONTRACT_VERSION });
   same(report.sourceStart, report.sourceEnd); same(report.sourceStart, targetSource);
   if (release) assert.equal(targetSource.dirty, false);
   assert.ok(Number.isFinite(Date.parse(report.startedAt)) && Date.parse(report.finishedAt) >= Date.parse(report.startedAt));
@@ -55,7 +57,9 @@ export async function readSemanticCapture(directory, targetSource, { release = f
       const job = persisted.tables.relation_jobs.find(job => job.id === row.jobId); assert.ok(job);
       assert.equal(job.listening_id, report.run.listeningId);
       const input = JSON.parse(job.input_json); same(row.reservation.input, input);
-      same(row.request, buildRelationRequest(input).body);
+      const body = buildRelationRequest(input).body;
+      body.model = profile.relationModel; body.messages[0].content = profile.relationPrompt;
+      same(row.request, body);
       for (const segment of [...input.focus_segments, ...input.context_segments]) {
         const stored = segmentById.get(segment.id); assert.ok(stored);
         assert.equal(segment.text, stored.original_text); assert.equal(segment.translation, stored.translation_text);
@@ -106,8 +110,8 @@ export async function readSemanticCapture(directory, targetSource, { release = f
         for (const key of ['canonical_name','type','display_label']) assert.equal(candidate[key], item[key]);
         for (const fact of candidate.recent_facts || []) assert.ok(persisted.tables.knowledge_facts.some(row => row.item_id === item.id && row.content === fact));
       }
-      if (row.kind === 'knowledge') same(row.request, { model: KNOWLEDGE_MODEL, enable_thinking: false,
-        messages: [{ role: 'system', content: SYSTEM_PROMPT_V2 }, { role: 'user', content: JSON.stringify(input) }] });
+      if (row.kind === 'knowledge') same(row.request, { model: profile.knowledgeModel, enable_thinking: false,
+        messages: [{ role: 'system', content: profile.knowledgePrompt }, { role: 'user', content: JSON.stringify(input) }] });
     }
   }
   for (const job of persisted.tables.extraction_jobs) {
