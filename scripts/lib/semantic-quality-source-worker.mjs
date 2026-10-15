@@ -19,18 +19,29 @@ const send = value => new Promise((resolve, reject) => process.send(value, error
 const abort = new AbortController();
 process.on('SIGTERM', () => abort.abort()); process.on('SIGINT', () => abort.abort());
 async function dependencyDigest(directory = path.join(root, 'node_modules')) {
-  const rows = [];
+  const files = [];
   async function visit(dir) {
-    for (const name of (await readdir(dir)).sort()) {
-      const full = path.join(dir, name), stat = await lstat(full), relative = path.relative(root, full);
-      if (stat.isSymbolicLink()) {
-        assert.ok((await realpath(full)).startsWith(path.join(root, 'node_modules') + path.sep), 'BORROWED_DEPENDENCY');
-        rows.push([relative, 'link', await readlink(full)]);
-      } else if (stat.isDirectory()) await visit(full);
-      else { assert.ok(stat.isFile()); rows.push([relative, stat.mode & 0o777, hashBytes(await readFile(full))]); }
+    const entries = (await readdir(dir, { withFileTypes: true })).sort((a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await visit(full);
+      else files.push(full);
     }
   }
-  await visit(directory); return contractDigest(rows);
+  await visit(directory);
+  // Bound filesystem concurrency without caching bytes across either manifest.
+  // Each role still hashes every installed file before and after execution.
+  const rows = new Array(files.length); let next = 0;
+  await Promise.all(Array.from({ length: Math.min(16, files.length) }, async () => {
+    while (next < files.length) {
+      const index = next++, full = files[index], stat = await lstat(full), relative = path.relative(root, full);
+      if (stat.isSymbolicLink()) {
+        assert.ok((await realpath(full)).startsWith(path.join(root, 'node_modules') + path.sep), 'BORROWED_DEPENDENCY');
+        rows[index] = [relative, 'link', await readlink(full)];
+      } else { assert.ok(stat.isFile()); rows[index] = [relative, stat.mode & 0o777, hashBytes(await readFile(full))]; }
+    }
+  }));
+  return contractDigest(rows);
 }
 async function manifest() {
   assert.equal(await realpath(execFileSync('git', ['rev-parse','--show-toplevel'], { encoding: 'utf8', timeout: 10000 }).trim()), root, 'CHECKOUT_ROOT_REQUIRED');
