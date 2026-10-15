@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { traceBusinessFixture, deferred } from '../test-support/trace-business-fixture.mjs';
-import { waitForTraceTasks } from '../test-support/trace-completion.mjs';
+import { waitForTraceTasks, cleanupTraceFixture } from '../test-support/trace-completion.mjs';
 import { deadline } from '../test-support/lifecycle.mjs';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 30));
@@ -37,12 +37,11 @@ test('full Trace waits for the actual relation root after its real SQLite COMMIT
     assert.equal(after.calls.length, 1); assert.equal(after.query.job.state, 'complete');
   } catch (error) {
     // Keep the original stack and live business state before cleanup can cancel the root.
-    failure = { stack: error.stack, stage: 'post-COMMIT root barrier', ...f.capture('failure before cleanup') };
-    error.traceFailure = failure; console.error(JSON.stringify({ traceFailure: failure })); throw error;
+    failure = error;
+    error.traceFailure = { stack: error.stack, stage: 'post-COMMIT root barrier', ...f.capture('failure before cleanup') };
+    console.error(JSON.stringify({ traceFailure: error.traceFailure })); throw error;
   } finally {
-    release.resolve();
-    try { if (task) await deadline(() => task.promise, 3000, 'Held relation cleanup'); }
-    finally { await f.close(); }
+    await cleanupTraceFixture([() => release.resolve(), () => task && deadline(() => task.promise, 3000, 'Held relation cleanup'), () => f.close()], failure);
   }
 });
 
@@ -68,4 +67,50 @@ test('Trace completion requires every current job and exact listening, root, pro
     events.push(event('c', 'failed', { span_id: 'c-retry' }));
     await waiting; assert.equal(settled, true, 'Terminal failure is evidence for the unchanged business assertions, not a hang');
   } finally { events.push(event('b', 'succeeded'), event('c', 'running'), event('c', 'succeeded'), event('c', 'failed', { span_id: 'c-retry' })); await waiting; }
+});
+
+
+test('Trace failure evidence survives cleanup errors and is persisted before the held root is released', { timeout: 8000 }, async () => {
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { saveTraceRegressionFailure } = await import('../test-support/trace-business-worker.mjs');
+  const directory = await mkdtemp(path.join(tmpdir(), 'trace-failure-'));
+  const f = await traceBusinessFixture({ domain: 'relation' }), committed = deferred(), release = deferred();
+  let task;
+  try {
+    task = f.start({ context: context => ({ ...context, async step(name, operation, attributes) {
+      const result = await context.step(name, operation, attributes);
+      if (name === 'relation.commit') { committed.resolve(); await release.promise; }
+      return result;
+    } }) });
+    await deadline(() => committed.promise, 3000, 'Failure witness COMMIT');
+    const primary = new Error('Synthetic before-hook comparison failure');
+    const capture = f.capture('failure before cleanup');
+    primary.traceFailure = { stage: 'post-COMMIT root barrier', stack: primary.stack,
+      rawInput: JSON.stringify(capture.snapshot), durable: capture.query, tasks: capture.business.tasks };
+    const filename = path.join(directory, 'regression-failure.json');
+    await saveTraceRegressionFailure(filename, { complete: false, ok: false, failure: {
+      name: primary.name, message: primary.message, stack: primary.stack, trace: primary.traceFailure } });
+    const saved = JSON.parse(await readFile(filename, 'utf8'));
+    assert.equal(saved.failure.trace.durable.job.state, 'complete');
+    assert.equal(saved.failure.trace.tasks[0].state, 'unknown'); assert.equal(saved.failure.trace.tasks[0].calls, 1);
+    assert.match(saved.failure.stack, /Synthetic before-hook/); assert.match(saved.failure.trace.rawInput, /relation.commit/);
+    const cleanup = [];
+    await assert.rejects(cleanupTraceFixture([
+      () => { cleanup.push('socket'); throw new Error('Synthetic socket cleanup failure'); },
+      async () => { cleanup.push('held task'); release.resolve(); await task.promise; },
+      async () => { cleanup.push('fixture'); await f.close(); throw new Error('Synthetic fixture cleanup failure'); }
+    ], primary), error => {
+      assert.ok(error instanceof AggregateError); assert.equal(error.cause, primary);
+      assert.equal(error.errors[0], primary); assert.equal(error.errors.length, 3);
+      assert.equal(error.traceFailure, primary.traceFailure); return true;
+    });
+    assert.deepEqual(cleanup, ['socket', 'held task', 'fixture']);
+    assert.equal(f.runtime.activeCount, 0);
+    assert.deepEqual(JSON.parse(await readFile(filename, 'utf8')), saved, 'Cleanup cannot replace the pre-cleanup evidence');
+  } finally {
+    await cleanupTraceFixture([() => release.resolve(), () => task && deadline(() => task.promise, 3000, 'Failure witness cleanup'),
+      () => f.close(), () => rm(directory, { recursive: true, force: true })]);
+  }
 });

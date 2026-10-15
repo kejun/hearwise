@@ -4,7 +4,7 @@ import { speechFixture } from './speech-fixture.mjs';
 import { relationWireEnvelope } from './relation-wire-fixture.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { deadline } from './lifecycle.mjs';
-import { waitForTraceTasks } from './trace-completion.mjs';
+import { waitForTraceTasks, cleanupTraceFixture } from './trace-completion.mjs';
 import { traceReport } from './trace-business-fixture.mjs';
 import { buildBusinessOverview } from '../dist/server/index.js';
 
@@ -130,13 +130,6 @@ export async function fullTraceFixture({ observations = false } = {}) {
       error.traceFailure.tasks = buildBusinessOverview(traceReport(rawInput), f.seeded.listeningId).tasks;
     } catch (captureError) { error.traceFailure.captureError = captureError.stack; }
     throw error;
-  } finally {
-    for (const ws of sockets) ws.terminate();
-    try { await f.close(); }
-    catch (error) {
-      if (!failure) throw error;
-      failure.traceFailure.cleanupError = error.stack;
-    }
-  }
+  } finally { await cleanupTraceFixture([...sockets.map(ws => () => ws.terminate()), () => f.close()], failure); }
   return observations ? { logs: capturedLogs, ...observed, cleanup: true } : capturedLogs;
 }

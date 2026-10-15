@@ -6,6 +6,11 @@ import { runFullTraceComparison, runSpeechTraceComparison, runTranslationTraceRe
 import { runTraceNegativeControls } from './trace-business-negative.mjs';
 import { sourceVersion, writeJson } from '../scripts/lib/verification-evidence.mjs';
 
+export async function saveTraceRegressionFailure(filename, baseline) {
+  await mkdir(path.dirname(filename), { recursive: true });
+  await writeJson(filename, baseline);
+}
+
 export async function collectTraceBusinessEvidence(save = async () => {}) {
   const result = { profileVersion: 1, source: sourceVersion(), startedAt: new Date().toISOString(), finishedAt: null,
     complete: false, ok: false, workflows: [], boundaries: [], negative: null };

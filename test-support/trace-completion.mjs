@@ -17,3 +17,17 @@ export async function waitForTraceTasks(readEvents, readJobs, step, timeout = 12
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
+
+// Cleanup failures must not hide the live failure or skip later resources.
+export async function cleanupTraceFixture(operations, primary) {
+  const errors = [];
+  for (const operation of operations) {
+    try { await operation(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length) {
+    const error = new AggregateError([...(primary ? [primary] : []), ...errors], 'Trace fixture cleanup failed',
+      { cause: primary || errors[0] });
+    if (primary?.traceFailure) error.traceFailure = primary.traceFailure;
+    throw error;
+  }
+}
