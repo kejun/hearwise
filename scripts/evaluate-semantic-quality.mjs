@@ -5,10 +5,11 @@ import { qualitySources } from './lib/quality-collector.mjs';
 import { writeJson } from './lib/verification-evidence.mjs';
 import { readSemanticCapture } from './lib/semantic-quality-evidence.mjs';
 import { runSemanticOffline, inspectSemanticOffline } from './lib/semantic-quality-offline.mjs';
+import { runSemanticPairedOffline, inspectSemanticPairedOffline } from './lib/semantic-quality-paired.mjs';
 import { createSemanticReviewTemplate, assessSemanticReview } from './lib/semantic-quality-review.mjs';
 import { createSemanticFailureCases } from './lib/semantic-quality-failures.mjs';
 const help = `Knowledge / relation semantic evaluation preparation, OFFLINE ONLY.
-Commands: plan | offline | check-offline | prepare-review | assess | failure-cases
+Commands: plan | offline | check-offline | paired-offline | check-paired-offline | prepare-review | assess | failure-cases
 --out PATH       output root for offline; existing run for check-offline; fresh JSON for review/assessment
 --capture DIR    exact-source offline capture with store.sqlite and capture.json
 --reviewers FILE JSON array of declared reviewer labels; no identity authentication is claimed
@@ -29,13 +30,14 @@ async function main() {
     console.log(JSON.stringify({ complete: true, mode: 'offline-preparation', qualityStatus: 'not_run', qualityEvaluated: false,
       fullQualityAcceptance: false, liveImplemented: false, liveCalls: 0, plan }, null, 2)); return;
   }
-  if (command === 'offline') {
+  if (['offline','paired-offline'].includes(command)) {
+    const paired = command === 'paired-offline', run = paired ? runSemanticPairedOffline : runSemanticOffline, inspect = paired ? inspectSemanticPairedOffline : inspectSemanticOffline;
     const root = values.out || 'verification-evidence/semantic-quality'; await mkdir(root, { recursive: true });
     const outer = await mkdtemp(path.join(root, 'offline-')), directory = path.join(outer, 'run');
     const abort = new AbortController(), stop = () => abort.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
     try {
-      await runSemanticOffline(directory, { signal: abort.signal });
-      const summary = await inspectSemanticOffline(directory, await qualitySources(), { release: values.release });
+      await run(directory, { signal: abort.signal });
+      const summary = await inspect(directory, await qualitySources(), { release: values.release });
       await writeJson(path.join(outer, 'summary.json'), summary);
       console.log(JSON.stringify({ directory, complete: summary.complete, infrastructurePassed: summary.infrastructurePassed,
         qualityStatus: summary.qualityStatus, qualityEvaluated: false, fullQualityAcceptance: false, liveCalls: 0, scope: summary.scope }, null, 2));
@@ -43,9 +45,10 @@ async function main() {
     } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
     return;
   }
-  if (command === 'check-offline') {
+  if (['check-offline','check-paired-offline'].includes(command)) {
+    const inspect = command === 'check-paired-offline' ? inspectSemanticPairedOffline : inspectSemanticOffline;
     if (!values.out) throw new Error('EXISTING_RUN_REQUIRED');
-    const summary = await inspectSemanticOffline(values.out, await qualitySources(), { release: values.release });
+    const summary = await inspect(values.out, await qualitySources(), { release: values.release });
     console.log(JSON.stringify(summary, null, 2)); process.exitCode = summary.infrastructurePassed ? 0 : 1; return;
   }
   if (!['prepare-review','assess','failure-cases'].includes(command)) throw new Error('UNKNOWN_COMMAND');
