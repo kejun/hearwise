@@ -109,6 +109,38 @@ inputs exercise the reader; they do not claim that an AI graded its own output
 or that a human approved the corpus. Every report still says quality `not_run`.
 The run has 56 required raw attachments (five per case plus the run manifest).
 
+## Failure samples for review and regression work
+
+After completing an offline review, export its failure-focused excerpt:
+
+```sh
+node scripts/evaluate-semantic-quality.mjs failure-cases \
+  --capture <run/qualified> --reviewers <labels.json> \
+  --review <completed-review.json> --out <fresh-failures.json> --release
+```
+
+This reopens and validates the original SQLite/capture against the current
+source, then reassesses the completed annotation. Incomplete, changed or forged
+display context is rejected. Exit 0 means the export succeeded, including when
+the review contains failures; use `assess` for the review's pass/fail exit code.
+Passing and valid-empty reviews export no cases. Output must be a new file.
+
+Each case points to the actual failed output or missing gold unit, with separate
+severe-error reasons. Duplicate targets, fact owners, relation endpoints and
+correction targets stay present. All original input segments and the complete
+selected gold variant remain available, so removing context cannot hide a
+condition or remove a missing downstream relation from recall. This is a compact
+diagnostic excerpt, not an automatically minimized input or an executable replay.
+Reproduce it with the original capture, reviewer roster and completed review;
+the export binds their digests, source, model contracts and assessment. Original
+artifacts remain authoritative and are required for revalidation.
+
+Operational database IDs become local references. The export omits request
+payloads, provider endpoints, local paths and reviewer names/notes. Semantic
+prose and gold meanings are retained: it does not automatically redact personal
+content and is not an approved public fixture. Current support remains synthetic
+offline captures only; no live adapter, paid call or quality approval is added.
+
 ## Work still required for actual quality acceptance
 
 `verification/semantic-quality/plan.template.json` is an **unapproved proposal**.
