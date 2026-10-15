@@ -31,6 +31,7 @@ async function dependencyDigest(directory = path.join(root, 'node_modules')) {
   await visit(directory); return contractDigest(rows);
 }
 async function manifest() {
+  assert.equal(await realpath(execFileSync('git', ['rev-parse','--show-toplevel'], { encoding: 'utf8', timeout: 10000 }).trim()), root, 'CHECKOUT_ROOT_REQUIRED');
   const files = execFileSync('git', ['ls-files','--cached','--others','--exclude-standard','-z'], { encoding: 'utf8', timeout: 10000 }).split('\0').filter(Boolean);
   for (const file of [...files, 'dist/server/index.js']) assert.ok((await realpath(file)).startsWith(root + path.sep), 'ESCAPING_SOURCE');
   assert.equal(await realpath('node_modules'), path.join(root, 'node_modules'), 'INDEPENDENT_DEPENDENCIES_REQUIRED');
