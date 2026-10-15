@@ -1,7 +1,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, cp, readFile, writeFile, rm } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { symlink } from 'node:fs/promises';
@@ -30,6 +30,7 @@ before(async () => {
     execFileSync(process.execPath, ['scripts/build.mjs'], { cwd: dir, timeout: 20000, stdio: 'pipe' });
   }
   options = { checkouts, reviewers: ['fixture-reviewer (not a human)'] };
+  await writeFile(path.join(root, 'reviewers.json'), JSON.stringify(options.reviewers));
   const run = await runSemanticDistinctOffline(directory, options); assert.equal(run.complete, true, run.errorCode);
 }, { timeout: 80000 });
 after(() => rm(root, { recursive: true, force: true }));
@@ -39,7 +40,10 @@ test('two real Git revisions execute their own production prompt and reopen shar
   assert.notEqual(a.calls[0].request.messages[0].content, b.calls[0].request.messages[0].content); assert.match(b.calls[0].request.messages[0].content, /Synthetic candidate prompt marker/); assert.doesNotMatch(a.calls[0].request.messages[0].content, /Synthetic candidate prompt marker/);
   const db = new DatabaseSync(path.join(directory, 'budget.sqlite'), { readOnly: true });
   try { assert.deepEqual(db.prepare('SELECT source_sha FROM runs ORDER BY role').all().map(r=>r.source_sha), [a.sourceStart.sha,b.sourceStart.sha]); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM attempts').get().n,12); } finally { db.close(); }
-  const r = await inspectSemanticDistinctOffline(directory, options);
+  const cli = spawnSync(process.execPath, ['scripts/evaluate-semantic-quality.mjs','check-distinct-offline',
+    '--baseline',checkouts.baseline,'--candidate',checkouts.candidate,'--reviewers',path.join(root,'reviewers.json'),'--out',directory],
+    { encoding:'utf8', timeout:25000, maxBuffer:8*1024*1024 });
+  assert.equal(cli.status,0,cli.stderr); const r=JSON.parse(cli.stdout);
   assert.equal(r.infrastructurePassed,true,JSON.stringify(r)); assert.equal(r.reviewComplete,false); assert.equal(r.qualityStatus,'not_run');
   assert.equal(r.fullQualityAcceptance,false); assert.equal(r.liveCalls,0); assert.equal(r.pairs.length,4);
   assert.ok(r.pairs.every(p=>p.metricDeltas===null));
@@ -69,7 +73,10 @@ test('declared review contracts chain into paired deltas without human or qualit
     review.missingGoldIds=review.sample.gold.variants.find(v=>v.id==='expected').units.map(u=>u.id);
     await writeFile(file,JSON.stringify(review));
   }
-  const r=await inspectSemanticDistinctOffline(directory,options);
+  const cli=spawnSync(process.execPath,['scripts/evaluate-semantic-quality.mjs','assess-distinct-offline',
+    '--baseline',checkouts.baseline,'--candidate',checkouts.candidate,'--reviewers',path.join(root,'reviewers.json'),'--out',directory],
+    {encoding:'utf8',timeout:25000,maxBuffer:8*1024*1024});
+  assert.equal(cli.status,1,cli.stderr); const r=JSON.parse(cli.stdout);
   assert.equal(r.infrastructurePassed,true); assert.equal(r.reviewComplete,true); assert.equal(r.offlineReviewPassed,false);
   assert.equal(r.qualityStatus,'not_run'); assert.ok(r.pairs.every(pair=>pair.metricDeltas));
   assert.ok(r.pairs.every(pair=>pair.metricDeltas.entity.falseNegatives===0));

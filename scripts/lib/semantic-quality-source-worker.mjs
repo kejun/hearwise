@@ -5,6 +5,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { realpath, readFile, readdir, lstat, readlink } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { qualitySources } from './quality-collector.mjs';
+import { sourceSnapshot, validBuildSource } from './runner-evidence-contract.mjs';
 import { contractDigest, hashBytes } from './quality-contract.mjs';
 import { openSemanticQualityBudget } from './quality-budget.mjs';
 import { readSemanticCapture as trustedRead } from './semantic-quality-evidence.mjs';
@@ -43,8 +45,6 @@ async function manifest() {
     const version = JSON.parse(await readFile(path.join(directory, 'package.json'))).version;
     assert.equal(version, lock.packages[`node_modules/${name}`].version); dependencies[name] = version;
   }
-  const { qualitySources } = await local('scripts/lib/quality-collector.mjs');
-  const { sourceSnapshot, validBuildSource } = await local('scripts/lib/runner-evidence-contract.mjs');
   const source = await qualitySources(), build = await sourceSnapshot();
   assert.equal(source.dirty, false, 'CLEAN_SOURCE_REQUIRED'); assert.ok(validBuildSource(build), 'EXACT_BUILD_REQUIRED');
   const k = await local('knowledge.mjs'), r = await local('relations.mjs');
