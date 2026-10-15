@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "kind": "unapproved-semantic-evaluation-proposal",
+  "approved": false,
+  "pipeline": "knowledge-then-relation-cascade",
+  "corpus": {
+    "rightsReviewedBy": null,
+    "developmentAndAcceptanceSplitFrozen": false,
+    "proposedCoverage": ["numbers", "negation", "plans", "conditions", "uncertain attribution", "proper names", "multiple domains", "valid empty", "independent items", "upstream omission"],
+    "sourceFilesAndHashes": [],
+    "goldVariantsReviewedBy": null
+  },
+  "comparison": {
+    "baselineSource": null,
+    "candidateSource": null,
+    "modelsPromptsTemperaturesFrozen": false,
+    "pairedRepetitions": null,
+    "reviewerRoster": [],
+    "blindReviewOrderFrozen": false,
+    "perKindPrecisionRecallThresholds": null,
+    "severeErrorsVeto": ["number", "negation", "condition", "attribution", "merge", "duplicate", "unsupported"],
+    "normalizationAndMatchingPolicyApproved": false
+  },
+  "live": {
+    "implemented": false,
+    "authorized": false,
+    "budget": null,
+    "officialBillingUpperBounds": null,
+    "requiredDomainAttempts": "Knowledge: all actual splitFocusSegments parts, shared extra requests <=2 and at most one repair per part; relation: <=3 requests per window and at most two consecutive protocol errors. Recompute from frozen source, never substitute ASR/MT counts."
+  }
+}
