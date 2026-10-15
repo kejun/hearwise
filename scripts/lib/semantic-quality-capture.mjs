@@ -8,12 +8,13 @@ import path from 'node:path';
 import { ListeningStore } from '../../storage.mjs';
 import { createKnowledgeWorkflow } from '../../knowledge-workflow.mjs';
 import { createRelationWorkflow } from '../../relation-workflow.mjs';
-import { KNOWLEDGE_MODEL, CONTRACT_REVISION } from '../../knowledge.mjs';
-import { RELATION_MODEL, RELATION_CONTRACT_VERSION } from '../../relations.mjs';
+import { KNOWLEDGE_MODEL, CONTRACT_REVISION, SYSTEM_PROMPT_V2 } from '../../knowledge.mjs';
+import { RELATION_MODEL, RELATION_CONTRACT_VERSION, buildRelationRequest } from '../../relations.mjs';
 import { closeServer, deadline } from '../../test-support/lifecycle.mjs';
 import { hashBytes, contractDigest } from './quality-contract.mjs';
 import { qualitySources } from './quality-collector.mjs';
 import { writeJson } from './verification-evidence.mjs';
+import { createSemanticGateway } from './semantic-quality-gateway.mjs';
 
 export function semanticDatabase(filename) {
   const db = new DatabaseSync(filename, { readOnly: true });
@@ -42,14 +43,15 @@ export function semanticUnits(snapshot) {
   ];
 }
 
-export async function captureSemanticOffline({ directory, sample, response, signal }) {
+export async function captureSemanticOffline({ directory, sample, response, signal, pairedBudget }) {
   const sourceStart = await qualitySources();
   await mkdir(directory, { recursive: false, mode: 0o700 });
   const filename = path.join(directory, 'store.sqlite'), startedAt = new Date().toISOString();
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000);
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-  let store, server, active, run, clock = Date.now(), before, after, visible, errorCode, cleanup = false;
-  const calls = [], results = [], errors = [];
+  let store, server, gateway, active, run, clock = Date.now(), before, after, visible, errorCode, cleanup = false;
+  const calls = [], results = [], errors = [], budgetBindings = [];
+  const reservationFor = domain => domain === 'relation' ? store.getRelationJob(active.id) : store.knowledgeCheckpoint(active.id);
   try {
     assert.equal(sample.kind, 'synthetic-contract-fixture'); assert.ok(sample.segments.length > 0 && sample.segments.length <= 6);
     assert.ok(sample.segments.every(text => typeof text === 'string' && text.length > 0 && text.length <= 6000));
@@ -64,7 +66,13 @@ export async function captureSemanticOffline({ directory, sample, response, sign
         const wire = Buffer.concat(chunks).toString(), body = JSON.parse(wire), input = JSON.parse(body.messages.at(-1).content);
         const kind = input.candidates ? 'relation' : input.rejected ? 'repair' : 'knowledge';
         assert.equal(kind === 'relation' ? 'relation' : 'knowledge', active.domain);
-        const reservation = kind === 'relation' ? store.getRelationJob(active.id) : store.knowledgeCheckpoint(active.id);
+        const reservation = reservationFor(active.domain);
+        if (pairedBudget) {
+          const binding = budgetBindings.at(-1);
+          assert.equal(binding.requestSha256, hashBytes(wire)); assert.equal(binding.jobId, active.id);
+          assert.equal(binding.reservationDigest, contractDigest(reservation));
+          assert.ok(pairedBudget.ledger.snapshot().attempts.some(row => String(row.id) === binding.attemptId));
+        }
         if (kind === 'relation') assert.ok(reservation.state === 'running' && reservation.request_count >= 1);
         else assert.ok(reservation.parts.some(part => part.phase === (kind === 'repair' ? 'repair_inflight' : 'extract_inflight')));
         const output = response({ kind, input, sample, calls });
@@ -77,7 +85,41 @@ export async function captureSemanticOffline({ directory, sample, response, sign
     });
     server.listen(0, '127.0.0.1'); await deadline(() => once(server, 'listening'), 3000, 'Semantic stub startup');
     const endpoint = `http://127.0.0.1:${server.address().port}`;
-    const knowledge = createKnowledgeWorkflow({ store, endpoint, now: () => clock, onError: () => errors.push('KNOWLEDGE_ERROR') });
+    if (pairedBudget) {
+      let authorized;
+      gateway = await createSemanticGateway({ mode: 'offline', upstream: { endpoint, key: 'synthetic-semantic-fixture' },
+        expected: { knowledgeModel: KNOWLEDGE_MODEL, relationModel: RELATION_MODEL, maxRequests: 24,
+          maxRequestBytes: 128000, maxResponseBytes: 128000, timeoutMs: 5000, expiresAt: pairedBudget.expiresAt }, signal: combined,
+        authorize: context => {
+          assert.equal(context.kind, active.domain);
+          const reservation = reservationFor(active.domain);
+          if (active.domain === 'relation') {
+            assert.ok(reservation.state === 'running' && reservation.request_count >= 1);
+            assert.equal(contractDigest(context.request), contractDigest(buildRelationRequest(reservation.input).body));
+          } else {
+            // This bounded same-source rehearsal uses valid synthetic outputs;
+            // repair is deliberately outside its frozen case set.
+            const parts = reservation.parts.filter(part => part.phase === 'extract_inflight'); assert.equal(parts.length, 1);
+            const base = store.jobInput(reservation.job), byId = new Map(base.focus_segments.map(row => [row.id, row.text]));
+            const focus = parts[0].focus_refs.map(ref => {
+              const text = byId.get(ref.segment_id); assert.ok(typeof text === 'string' && ref.start >= 0 && ref.end <= text.length && ref.end > ref.start);
+              return { id: ref.segment_id, text: text.slice(ref.start, ref.end) };
+            });
+            assert.equal(contractDigest(context.request), contractDigest({ model: KNOWLEDGE_MODEL, enable_thinking: false,
+              messages: [{ role: 'system', content: SYSTEM_PROMPT_V2 }, { role: 'user', content: JSON.stringify(store.jobInput(reservation.job, focus)) }] }));
+          }
+          authorized = { requestSha256: context.requestSha256, jobId: active.id, reservationDigest: contractDigest(reservation) };
+          return true;
+        },
+        reserve: context => {
+          assert.equal(context.requestSha256, authorized.requestSha256); assert.equal(active.id, authorized.jobId);
+          assert.equal(contractDigest(reservationFor(active.domain)), authorized.reservationDigest);
+          const attemptId = String(pairedBudget.ledger.reserve({ kind: context.kind, trialId: pairedBudget.trialId }));
+          budgetBindings.push({ ...authorized, attemptId, kind: context.kind, trialId: pairedBudget.trialId }); return attemptId;
+        } });
+    }
+    const credential = gateway?.token || 'synthetic-semantic-fixture';
+    const knowledge = createKnowledgeWorkflow({ store, endpoint: gateway?.knowledgeEndpoint || endpoint, now: () => clock, onError: () => errors.push('KNOWLEDGE_ERROR') });
     let dispatches = 0;
     const batchSize = sample.ingestionBatchSize ?? sample.segments.length;
     assert.ok(Number.isInteger(batchSize) && batchSize >= 1 && batchSize <= 6);
@@ -93,20 +135,20 @@ export async function captureSemanticOffline({ directory, sample, response, sign
         const next = store.nextJob(run.listeningId); assert.equal(next.id, job.id);
         clock = Math.max(clock, next.ready_at || 0, Date.parse(next.retry_at) || 0);
         active = { domain: 'knowledge', id: job.id };
-        const result = await knowledge.execute(store.markJob(job.id, 'running'), 'synthetic-semantic-fixture', { signal: combined });
+        const result = await knowledge.execute(store.markJob(job.id, 'running'), credential, { signal: combined });
         results.push({ domain: 'knowledge', jobId: job.id, result });
         if (result.kind === 'terminal') { assert.ok(['ok','empty'].includes(result.outcome)); break; }
       }
     }
     }
     store.finishRun(run.runId); store.enableRelations(run.listeningId, { now: clock });
-    const relations = createRelationWorkflow({ store, endpoint, now: () => clock, requestTimeoutMs: 5000, onError: () => errors.push('RELATION_ERROR') });
+    const relations = createRelationWorkflow({ store, endpoint: gateway?.relationEndpoint || endpoint, now: () => clock, requestTimeoutMs: 5000, onError: () => errors.push('RELATION_ERROR') });
     for (let index = 0; index < 24; index++) {
       combined.throwIfAborted(); clock = Math.max(clock, store.relationProcessing(run.listeningId).nextReadyAt || 0);
       const job = store.nextRelationJob(run.listeningId, { now: clock, quietMs: 0 });
       if (!job) { const status = store.relationProcessing(run.listeningId); assert.equal(status.pendingJobs + status.runningJobs, 0); break; }
       active = { domain: 'relation', id: job.id };
-      const result = await relations.execute(job, 'synthetic-semantic-fixture', combined);
+      const result = await relations.execute(job, credential, combined);
       results.push({ domain: 'relation', jobId: job.id, result }); assert.ok(index < 23);
     }
     assert.deepEqual(errors, []);
@@ -125,6 +167,7 @@ export async function captureSemanticOffline({ directory, sample, response, sign
   } catch (error) { errorCode = combined.aborted ? 'TIMEOUT_OR_CANCELLED' : 'SEMANTIC_CAPTURE_INCOMPLETE'; }
   finally {
     clearTimeout(timer);
+    if (gateway) { try { await gateway.close(); } catch { errorCode ||= 'SEMANTIC_GATEWAY_CLEANUP'; } }
     const clean = await Promise.allSettled([server && closeServer(server, 'semantic provider'), Promise.resolve().then(() => store?.close())]);
     cleanup = clean.every(row => row.status === 'fulfilled');
   }
@@ -139,6 +182,7 @@ export async function captureSemanticOffline({ directory, sample, response, sign
     complete: !errorCode && cleanup, cleanup, errorCode, qualityEvaluated: false, fullQualityAcceptance: false, qualityStatus: 'not_run', liveCalls: 0,
     models: { knowledge: KNOWLEDGE_MODEL, relation: RELATION_MODEL, knowledgeContract: CONTRACT_REVISION, relationContract: RELATION_CONTRACT_VERSION },
     clock: 'offline workflow logical time; no latency measurement', sourceStart, sourceEnd, run, calls, results, errors, visible, before, after,
-    units: after ? semanticUnits(after) : [], artifacts };
+    units: after ? semanticUnits(after) : [], artifacts,
+    ...(pairedBudget ? { transport: { trialId: pairedBudget.trialId, budgetBindings, observations: gateway?.observations() || [] } } : {}) };
   await writeJson(path.join(directory, 'capture.json'), report); return report;
 }

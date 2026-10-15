@@ -83,6 +83,39 @@ billing limits. Those must be verified by the future frozen-plan collector;
 passing synthetic numeric bounds to this library does not authorize spending.
 The CLI remains disabled and no real model quality is evaluated.
 
+### Frozen same-source paired rehearsal
+
+`paired-offline` now connects the transport, persistent budget and production
+knowledge→relation capture in one executable path. Before any output, it freezes
+the current source/files, fixed models/contracts, original synthetic `qualified`
+and `empty` samples, two repetitions, and synthetic accounting bounds. Both
+baseline and candidate deliberately run the same source and fixture recipe;
+this checks collection pairing, not model improvement or real quality.
+
+A baseline claim must complete before candidate starts. The ledger is closed
+and reopened between roles; every request is matched against its active
+production SQLite reservation and reconstructed request before the accounting
+reservation commits and forwarding begins. Successful captures preserve gateway
+wire evidence and the unique durable attempt ID. The independent paired reader
+reopens all eight production SQLite captures and the shared budget, calls the
+existing request/source/result validator, checks frozen samples, role order,
+exact pairs, per-trial charges, request/response hashes and pre-send reservation
+timestamps, and refuses missing, edited, duplicated or incomplete evidence.
+It only reads the original evidence. Replaying an existing output directory or
+completed ledger role is rejected. An interrupted role stays incomplete; this
+version does not resume interrupted collections or reset their spent budget.
+
+Use `npm run quality:semantic -- paired-offline --release`, then
+`npm run quality:semantic -- check-paired-offline --out <reported-directory> --release`.
+No endpoint, credential, user corpus, arbitrary output or live switch is accepted
+by this runner. The fixed accounting values are test units, not provider price
+estimates or spending permission. Valid synthetic outputs exercise extraction
+and relation requests; repair/retry behavior remains covered by separate
+production/transport tests and is not claimed as paired-case coverage here.
+Actual distinct-source/live comparison, approved real corpus/gold/thresholds,
+official billing bounds and human review remain unimplemented or unprovided.
+Every result retains `qualityStatus=not_run` and `fullQualityAcceptance=false`.
+
 ## Reproduce
 
 Use Node24 and the repository development preflight. No audio, user material,
