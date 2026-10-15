@@ -4,7 +4,8 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { randomUUID, createHash } from 'node:crypto';
 import { closeServer } from '../../test-support/lifecycle.mjs';
-const fail = code => Object.assign(new Error(code), { code });
+const ownFaults = new WeakSet();
+const fail = code => { const error = Object.assign(new Error(code), { code }); ownFaults.add(error); return error; };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const integer = (value, low, high) => Number.isSafeInteger(value) && value >= low && value <= high;
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -34,7 +35,7 @@ async function bodyBytes(stream, maximum) {
  */
 export async function createSemanticGateway({ mode, upstream, expected, authorize, reserve, signal, liveAuthorized = false }) {
   if (!['offline', 'live'].includes(mode) || (mode === 'live' && (liveAuthorized !== true || process.env.CI))) throw fail('LIVE_AUTHORIZATION_REQUIRED');
-  if (!object(upstream) || typeof upstream.key !== 'string' || upstream.key.length < 8 || /[\r\n]/.test(upstream.key)) throw fail('UPSTREAM_KEY_REQUIRED');
+  if (!object(upstream) || typeof upstream.key !== 'string' || upstream.key.length < 8 || upstream.key.length > 4096 || !/^[a-zA-Z0-9._~+/-]+=*$/.test(upstream.key)) throw fail('UPSTREAM_KEY_REQUIRED');
   let url; try { url = new URL(upstream.endpoint); } catch { throw fail('UPSTREAM_SCOPE_DENIED'); }
   if (url.username || url.password || url.hash || url.search || (mode === 'live' ? url.protocol !== 'https:' :
     url.protocol !== 'http:' || !['127.0.0.1','[::1]'].includes(url.hostname))) throw fail('UPSTREAM_SCOPE_DENIED');
@@ -82,7 +83,7 @@ export async function createSemanticGateway({ mode, upstream, expected, authoriz
       row = { mode, kind: request.url.slice(1), status: 'receiving', endpoint: url.href, startedAt: new Date().toISOString() };
       observations.push(row);
       timer = setTimeout(() => { controller.abort(); if (!request.complete) request.destroy(); }, config.timeoutMs);
-      const wire = new TextDecoder('utf-8', { fatal: true }).decode(await abortable(bodyBytes(request, config.maxRequestBytes), combined));
+      const wire = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await abortable(bodyBytes(request, config.maxRequestBytes), combined));
       if (secret(wire)) throw fail('REQUEST_CONTAINS_CREDENTIAL');
       let body; try { body = JSON.parse(wire); } catch { throw fail('INVALID_JSON'); }
       const keys = row.kind === 'knowledge' ? ['model','enable_thinking','messages'] : ['model','enable_thinking','temperature','max_completion_tokens','response_format','messages'];
@@ -109,7 +110,7 @@ export async function createSemanticGateway({ mode, upstream, expected, authoriz
       if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); throw fail('REDIRECT_DENIED'); }
       const bytes = response.body ? await abortable(bodyBytes(response.body, config.maxResponseBytes), combined) : Buffer.alloc(0);
       combined.throwIfAborted();
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
       if (secret(text)) throw fail('RESPONSE_CONTAINS_CREDENTIAL');
       row.responseBytes = bytes.length; row.responseSha256 = hash(bytes);
       if (!response.ok) {
@@ -121,7 +122,7 @@ export async function createSemanticGateway({ mode, upstream, expected, authoriz
       // Preserve protocol-invalid content for production parsers and repair flow.
       row.responseWire = text; row.status = 'succeeded'; send(response.status, bytes);
     } catch (error) {
-      if (row) { row.status = combined.aborted ? 'cancelled' : 'failed'; row.code = /^[A-Z_]+$/.test(error.code || '') ? error.code : 'SEMANTIC_TRANSPORT_FAILED'; }
+      if (row) { row.status = combined.aborted ? 'cancelled' : 'failed'; row.code = ownFaults.has(error) && !secret(error.code) ? error.code : 'SEMANTIC_TRANSPORT_FAILED'; }
       send(502, '{}');
     } finally {
       clearTimeout(timer); controller.abort(); controllers.delete(controller); reply.removeListener('close', disconnected);

@@ -29,7 +29,7 @@ async function fixture(t, options = {}) {
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => closeServer(server, 'semantic test upstream'));
-  const gateway = await createSemanticGateway({ mode: 'offline', upstream: { endpoint: `http://127.0.0.1:${server.address().port}`, key },
+  const gateway = await createSemanticGateway({ mode: 'offline', upstream: { endpoint: `http://127.0.0.1:${server.address().port}`, key: options.key || key },
     expected: { ...expected(), ...options.expected }, authorize: options.authorize || (() => true),
     reserve: options.reserve || (context => { reservations.push(context); return `attempt-${reservations.length}`; }), signal: options.signal });
   t.after(() => gateway.close());
@@ -191,4 +191,29 @@ test('semantic adapter rejects invalid UTF-8 without inventing replacement-chara
   const response = await fetch(f.gateway.knowledgeEndpoint, { method: 'POST', headers: { authorization: `Bearer ${f.gateway.token}` }, body: wire });
   assert.equal(response.status, 502); assert.equal(f.received.length, 1);
   assert.ok(f.gateway.observations().every(row => row.responseWire === undefined));
+});
+
+test('callback error codes cannot become credential-bearing public diagnostics', { timeout: 5000 }, async t => {
+  const f = await fixture(t, { key: 'SYNTHETIC_SECRET_KEY', authorize: () => { throw Object.assign(new Error('safe'), { code: 'SYNTHETIC_SECRET_KEY' }); } });
+  assert.equal((await f.request()).status, 502);
+  assert.equal(f.gateway.observations()[0].code, 'SEMANTIC_TRANSPORT_FAILED');
+  assert.equal(f.received.length, 0);
+});
+
+test('semantic adapter rejects credentials outside the bearer-token alphabet', async () => {
+  for (const invalid of ['synthetic"secret-key', 'synthetic\\secret-key', 'synthetic secret-key']) {
+    await assert.rejects(createSemanticGateway({ mode: 'offline', upstream: { endpoint: 'http://127.0.0.1:1', key: invalid },
+      expected: expected(), authorize: () => true, reserve: () => 'r1' }), /UPSTREAM_KEY_REQUIRED/);
+  }
+});
+
+test('semantic adapter does not silently strip UTF-8 BOM from wire evidence', { timeout: 5000 }, async t => {
+  const responseBytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{}')]);
+  const f = await fixture(t, { respond: (_req, res) => res.end(responseBytes) });
+  const bomRequest = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(body))]);
+  const rejected = await fetch(f.gateway.knowledgeEndpoint, { method: 'POST', headers: { authorization: `Bearer ${f.gateway.token}` }, body: bomRequest });
+  assert.equal(rejected.status, 502); assert.equal(f.received.length, 0);
+  const response = await f.request(); assert.equal(response.status, 200);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), responseBytes);
+  assert.deepEqual(Buffer.from(f.gateway.observations()[1].responseWire), responseBytes);
 });
