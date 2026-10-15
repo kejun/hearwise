@@ -45,19 +45,21 @@ export async function createSemanticGateway({ mode, upstream, expected, authoriz
     !integer(config.maxRequests, 1, 1000) || !integer(config.maxRequestBytes, 256, 2 * 1024 * 1024) ||
     !integer(config.maxResponseBytes, 256, 8 * 1024 * 1024) || !integer(config.timeoutMs, 1, 120000) ||
     !Number.isFinite(Date.parse(config.expiresAt))) throw fail('INVALID_GATEWAY_LIMITS');
-  const secret = text => {
-    if (typeof text !== 'string') return false;
-    // Inspect decoded JSON strings as well as raw wire bytes. Conservative
-    // repeated unescaping also covers nested model JSON content, without ever
-    // storing a sanitized substitute as if it were the original response.
-    for (let depth = 0; depth < 8; depth++) {
-      if (text.includes(key) || text.includes(token) || /authorization\s*[":=]|bearer\s+[a-z0-9._~-]+/i.test(text)) return true;
-      const decoded = text.replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/\\\//g, '/');
-      if (decoded === text) return false;
-      text = decoded;
-    }
-    // Excessively nested escaping is not necessary for this model protocol.
-    return true;
+  const secret = (value, depth = 0) => {
+    // Decode each actual JSON string layer before examining its contents. A
+    // regex alone cannot distinguish a JSON escape from an escaped backslash.
+    // Excess nesting is outside this bounded model protocol and fails closed.
+    if (depth > 24) return true;
+    if (Array.isArray(value)) return value.some(item => secret(item, depth + 1));
+    if (object(value)) return Object.entries(value).some(([name, item]) => secret(name, depth + 1) || secret(item, depth + 1));
+    if (typeof value !== 'string') return false;
+    if (value.includes(key) || value.includes(token) || /authorization\s*[":=]|bearer\s+[a-z0-9._~-]+/i.test(value)) return true;
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed !== value) return secret(parsed, depth + 1);
+    } catch { /* Non-JSON provider text still gets the conservative check below. */ }
+    const decoded = value.replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))).replace(/\\\//g, '/');
+    return decoded !== value && secret(decoded, depth + 1);
   };
   if (secret(url.href) || secret(JSON.stringify(config))) throw fail('CONFIG_CONTAINS_CREDENTIAL');
   const validTime = () => { if (Date.now() >= Date.parse(config.expiresAt)) throw fail('APPROVAL_EXPIRED'); };

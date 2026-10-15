@@ -217,3 +217,13 @@ test('semantic adapter does not silently strip UTF-8 BOM from wire evidence', { 
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), responseBytes);
   assert.deepEqual(Buffer.from(f.gateway.observations()[1].responseWire), responseBytes);
 });
+for (const layers of [1,2,4]) test(`semantic adapter rejects credentials under ${layers} nested JSON content layers`, { timeout: 5000 }, async t => {
+  const encoded = [...key].map(char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
+  let nested = `{"secret":"${encoded}"}`;
+  for (let i = 1; i < layers; i++) nested = JSON.stringify({ content: nested });
+  const f = await fixture(t, { respond: (_req, res) => res.end(JSON.stringify({ choices: [{ message: { content: nested } }] })) });
+  const response = await f.request(); assert.equal(response.status, 502); assert.equal(await response.text(), '{}');
+  assert.equal(f.gateway.observations()[0].responseWire, undefined);
+  const payload = structuredClone(body); payload.messages[1].content = nested;
+  assert.equal((await f.request(payload)).status, 502); assert.equal(f.received.length, 1);
+});
