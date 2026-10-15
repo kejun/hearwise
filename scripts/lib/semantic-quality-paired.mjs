@@ -120,8 +120,9 @@ export async function runSemanticPairedOffline(directory, { signal } = {}) {
     clearTimeout(timeout);
     if (ledger) { try { if (activeRole) ledger.finishRun(activeRole, false); } finally { ledger.close(); } }
   }
-  const sourceEnd = await qualitySources();
-  if (contractDigest(sourceStart) !== contractDigest(sourceEnd)) errorCode = 'SEMANTIC_SOURCE_CHANGED';
+  let sourceEnd = null;
+  try { sourceEnd = await qualitySources(); } catch { errorCode = 'SEMANTIC_SOURCE_UNREADABLE'; }
+  if (sourceEnd && contractDigest(sourceStart) !== contractDigest(sourceEnd)) errorCode = 'SEMANTIC_SOURCE_CHANGED';
   const report = { schemaVersion: 1, kind: 'synthetic-semantic-pair', mode: 'offline', comparison: 'same-source-rehearsal', ...boundary,
     sourceStart, sourceEnd, startedAt, finishedAt: new Date().toISOString(), freezeDigest, complete: !errorCode, errorCode, captures, roleSnapshots };
   await writeJson(path.join(directory, 'paired.json'), report); return report;

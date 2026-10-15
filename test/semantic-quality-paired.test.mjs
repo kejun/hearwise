@@ -111,3 +111,24 @@ test('cancellation after an actual reservation preserves spent money across reop
   }
   assert.equal((await inspectSemanticPairedOffline(dir, source)).infrastructurePassed, false);
 });
+test('unreadable source after a real reservation still writes an incomplete paired report', { timeout: 20000 }, async () => {
+  const fixture = path.join(root, 'source-failure'), output = path.join(root, 'source-failure-output');
+  const moduleUrl = new URL('../scripts/lib/semantic-quality-paired.mjs', import.meta.url).href;
+  const program = `import {mkdirSync,writeFileSync,unlinkSync,readFileSync} from 'node:fs';
+    import {execFileSync} from 'node:child_process'; import {DatabaseSync} from 'node:sqlite';
+    import {runSemanticPairedOffline} from ${JSON.stringify(moduleUrl)};
+    mkdirSync(${JSON.stringify(fixture)});process.chdir(${JSON.stringify(fixture)});
+    mkdirSync('dist/server',{recursive:true});writeFileSync('dist/server/index.js','// Synthetic source fixture\\n');writeFileSync('sentinel.txt','synthetic');
+    const git=args=>execFileSync('git',args,{stdio:'ignore'});git(['init']);git(['add','.']);git(['-c','user.name=Synthetic Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture']);
+    const controller=new AbortController();let observed=false;
+    const timer=setInterval(()=>{let db;try{db=new DatabaseSync(${JSON.stringify(path.join(output, 'budget.sqlite'))},{readOnly:true});
+      if(!observed&&db.prepare('SELECT COUNT(*) AS n FROM attempts').get().n>0){observed=true;unlinkSync('sentinel.txt');controller.abort();}}
+      catch{}finally{db?.close();}},2);
+    try{const run=await runSemanticPairedOffline(${JSON.stringify(output)},{signal:controller.signal});
+      const persisted=JSON.parse(readFileSync(${JSON.stringify(path.join(output, 'paired.json'))},'utf8'));
+      console.log(JSON.stringify({observed,complete:run.complete,code:run.errorCode,sourceEnd:run.sourceEnd,persisted:persisted.errorCode}));}
+    finally{clearInterval(timer);}`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', program], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { observed: true, complete: false, code: 'SEMANTIC_SOURCE_UNREADABLE', sourceEnd: null, persisted: 'SEMANTIC_SOURCE_UNREADABLE' });
+});
