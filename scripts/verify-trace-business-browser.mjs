@@ -57,7 +57,7 @@ const observations = { regressionFailureArtifact, sourceStart, sourceEnd, source
 await writeJson(path.join(directory, 'observations.json'), observations);
 await writeFile(path.join(directory, 'worker.log'), (await Promise.all(checks.map(async row => `CHECK ${row.name}\n${await readFile(path.join(directory, `${row.name}.log`), 'utf8')}`))).join('\n'));
 const artifacts = await Promise.all(['observations.json', 'worker.log'].map(async name => ({ path: name, sha256: digest(await readFile(path.join(directory, name))) })));
-if (regressionFailureArtifact) artifacts.push(regressionFailureArtifact);
+report.failureArtifacts = regressionFailureArtifact ? [regressionFailureArtifact] : [];
 const rawValid = observations.businessArtifact && await checkTraceArtifacts(directory, [observations.businessArtifact], ['business-observations.json']);
 const finishedAt = new Date().toISOString();
 report.results = traceBusinessProperties.map(property => ({ ...context, property: { id: property.id, version: property.version }, startedAt, finishedAt,
