@@ -88,6 +88,7 @@
     "verify:upgrade:report": "node scripts/verify-upgrade-report.mjs",
     "preverify:realtime-baseline": "npm run build",
     "verify:realtime-baseline": "node scripts/verify-realtime-baseline.mjs",
+    "verify:device": "node scripts/verify-device.mjs",
     "preperformance:prepare": "npm run build",
     "performance:prepare": "node scripts/prepare-performance.mjs",
     "preperformance:collect": "npm run build",
