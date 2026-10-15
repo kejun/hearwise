@@ -35,6 +35,15 @@ test('actual workflow, boundary, build and mutation evidence validates its compl
 test('missing business snapshots, cases and wrong durable terminal state fail closed', () => {
   reject(value => delete value.workflows[0].captures[0].query);
   reject(value => value.workflows.pop()); reject(value => value.boundaries.pop());
+  const full = value => value.boundaries.find(row => row.name === 'full-public-boundary').actual;
+  reject(value => full(value).relationRequests.push(full(value).relationRequests[0]));
+  reject(value => full(value).durable.relation_requests[0].attempt = 2);
+  reject(value => {
+    const job = full(value).durable.relation_jobs[0], input = JSON.parse(job.input_json);
+    input.focus_segments.pop(); job.input_json = JSON.stringify(input);
+  });
+  reject(value => full(value).relationRequests[0].focus_segments[1].translation = 'stale translation');
+
   reject(value => value.workflows[0].captures[0].query.checkpoint.job.state = 'failed');
   reject(value => value.workflows[0].captures[0].calls.length = 0);
   reject(value => value.workflows.find(row => row.name === 'knowledge-retry').captures[0].query.checkpoint.job.state = 'complete');

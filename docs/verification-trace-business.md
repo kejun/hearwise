@@ -91,4 +91,4 @@ npm run test:browser -- trace-business
 
 执行者负责场景/实现映射，独立审查者核查反例与原始证据；发布负责人确认目标 head 的完整 CI 与真实浏览器附件。仅本地 Node 通过时，HW-15-04 保持未运行，KEJ-84 不能结为完成。
 
-完整应用夹具按实际 SQLite job 和 listening 身份等待 knowledge.execute / relation.execute 根终态，包括后续产生的全部任务。真实关系事务 COMMIT 后受控暂停根返回的回归证明：commit 子步骤完成时根仍可未结束，不能作为完整采集屏障。等待失败在清理前保留原始 Trace、堆栈、阶段、SQLite 和业务任务快照，before 失败将完整 baseline 持久到 regression-failure.json，并列入失败报告的 artifact manifest；清理仍在 finally 中逐项执行，清理错误保留原始异常。模型调用、成功断言与验证超时预算保持不变。
+固定单任务应用夹具在最终 ASR、翻译与知识任务完成后才启用关系整理，保留原先关系总调用次数为 1 的契约，避免把录音新增输入触发的第二个窗口版本混入该场景。完整应用夹具按实际 SQLite job 和 listening 身份等待 knowledge.execute / relation.execute 根终态，包括后续产生的全部任务。真实关系事务 COMMIT 后受控暂停根返回的回归证明：commit 子步骤完成时根仍可未结束，不能作为完整采集屏障。等待失败在清理前保留原始 Trace、堆栈、阶段、SQLite 和业务任务快照，before 失败将完整 baseline 持久到 regression-failure.json，并列入失败报告的 artifact manifest；清理仍在 finally 中逐项执行，清理错误保留原始异常。模型调用、成功断言与验证超时预算保持不变。

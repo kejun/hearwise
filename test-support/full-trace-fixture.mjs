@@ -27,6 +27,7 @@ async function socket(base, route) {
 
 // Complete application boundaries, with only paid services substituted locally.
 export async function fullTraceFixture({ observations = false } = {}) {
+  const relationRequests = [];
   const f = await speechFixture({ extraEnv: { HEARWISE_TRACE: '' }, seed: store => {
     const run = store.createRun(null, { source: 'en', targetLang: 'Chinese', audioSource: 'tab' }, 'Full trace fixture');
     const segment = store.addSegment(run.listeningId, run.runId, { id: 'seed', text: 'Eastman Kodak released the Brownie camera in 1900.' }).segment;
@@ -40,9 +41,10 @@ export async function fullTraceFixture({ observations = false } = {}) {
   }, modelResponse: body => {
     if (body.model === 'qwen-mt-flash') return '本轮真实适配器经过本地模拟模型。';
     const input = JSON.parse(body.messages.at(-1).content);
-    return input.candidates ? relationWireEnvelope(input) : { items: [] };
+    if (input.candidates) { relationRequests.push(input); return relationWireEnvelope(input); }
+    return { items: [] };
   } });
-  const sockets = []; let observed, capturedLogs, failure, stage = 'relation admission';
+  const sockets = []; let observed, capturedLogs, failure, stage = 'ASR and live speech';
   const durableSnapshot = () => {
     const db = new DatabaseSync(f.seeded.filename, { readOnly: true });
     try { return Object.fromEntries(['listening_runs', 'segments', 'extraction_jobs', 'relation_jobs', 'relation_requests'].map(table =>
@@ -52,12 +54,6 @@ export async function fullTraceFixture({ observations = false } = {}) {
   const jobs = table => durableSnapshot()[table].filter(job => job.listening_id === f.seeded.listeningId && job.id !== f.seeded.seededJobId);
   const waitTasks = (table, step) => waitForTraceTasks(() => traceEvents(f.logs()), () => jobs(table), step);
   try {
-    const relation = await fetch(`${f.base}/api/listenings/${f.seeded.listeningId}/graph`, { method: 'POST',
-      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'TRACE_SECRET_KEY' }) });
-    if (relation.status !== 202) throw new Error('Relation fixture admission failed');
-    stage = 'initial relation root';
-    await waitTasks('relation_jobs', 'relation.execute');
-    stage = 'ASR and live speech';
     const asr = await socket(f.base, '/ws'); sockets.push(asr.ws);
     asr.send({ type: 'start', key: 'TRACE_SECRET_KEY', listeningId: f.seeded.listeningId, source: 'en', targetLang: 'Chinese', audioSource: 'tab' });
     await until(() => asr.events.some(e => e.type === 'listening-ready'));
@@ -84,6 +80,15 @@ export async function fullTraceFixture({ observations = false } = {}) {
     await until(() => speech.events.some(e => e.type === 'speech.finished'));
     stage = 'knowledge roots';
     await waitTasks('extraction_jobs', 'knowledge.execute');
+    // This fixed single-task scenario enables relations only after both source
+    // segments and final translations settle. Enabling earlier also schedules
+    // a legitimate second input revision, outside its one-request budget.
+    stage = 'relation admission';
+    const relation = await fetch(`${f.base}/api/listenings/${f.seeded.listeningId}/graph`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'TRACE_SECRET_KEY' }) });
+    if (relation.status !== 202) throw new Error('Relation fixture admission failed');
+    stage = 'relation root after final inputs';
+    await waitTasks('relation_jobs', 'relation.execute');
     stage = 'preview and transcript speech';
     // Cover the second TTS provider and HTTP preview translation independently.
     const preview = await fetch(`${f.base}/api/translate`, { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -115,7 +120,7 @@ export async function fullTraceFixture({ observations = false } = {}) {
       await waitTasks('relation_jobs', 'relation.execute');
       const durable = durableSnapshot();
       if (observations) observed = { listeningId: run.listeningId, runId: run.runId, seededJobId: f.seeded.seededJobId,
-        detail, graph, durable, asrEvents: asr.events, speechEvents: speech.events, fishEvents: fish.events,
+        detail, graph, durable, relationRequests, asrEvents: asr.events, speechEvents: speech.events, fishEvents: fish.events,
         frames: [...speech.frames, ...fish.frames], provider: { mt: f.stats.mtRequests.length, knowledge: f.stats.providerRequests.filter(row => row.model !== 'qwen-mt-flash').length,
           qwen: f.stats.commits.length, fish: f.stats.fishRequests.length } };
     }
@@ -124,7 +129,7 @@ export async function fullTraceFixture({ observations = false } = {}) {
     failure = error;
     // Snapshot live evidence before shutdown can cancel roots or remove SQLite.
     const rawInput = f.logs();
-    error.traceFailure = { stage, stack: error.stack, rawInput, listeningId: f.seeded.listeningId };
+    error.traceFailure = { stage, stack: error.stack, rawInput, listeningId: f.seeded.listeningId, relationRequests };
     try {
       error.traceFailure.durable = durableSnapshot();
       error.traceFailure.tasks = buildBusinessOverview(traceReport(rawInput), f.seeded.listeningId).tasks;
