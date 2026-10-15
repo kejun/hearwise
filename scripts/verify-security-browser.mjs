@@ -14,7 +14,7 @@ const root = process.env.SECURITY_EVIDENCE_DIR || 'verification-evidence/securit
 const directory = await mkdtemp(path.join(root, 'security-'));
 const temporary = await mkdtemp(path.join(directory, 'temporary-runtime-'));
 const context = await metadata(), sourceStart = await securitySourceSnapshot(), startedAt = new Date().toISOString();
-const report = { ...context, profile: 'security', profileVersion: 1, nodeOnly, sourceStart, startedAt, finishedAt: null, complete: false, ok: false, results: [] };
+const report = { ...context, executionContext: { repositoryRoot: process.cwd(), evidenceDirectory: path.resolve(directory), nodeExecutable: process.execPath, overallTimeoutMs: 150000 }, profile: 'security', profileVersion: 1, nodeOnly, sourceStart, startedAt, finishedAt: null, complete: false, ok: false, results: [] };
 await writeJson(path.join(directory, 'report.json'), report); console.log(`Security evidence: ${directory}`);
 const env = { ...process.env, TMPDIR: path.resolve(temporary), TMP: path.resolve(temporary), TEMP: path.resolve(temporary) }; delete env.NODE_TEST_CONTEXT;
 const specifications = [
@@ -33,7 +33,7 @@ try {
     const execution = await runProcess(process.execPath, command, { env, timeoutMs: Math.min(check.timeoutMs, remaining),
       logFile: path.join(directory, `${check.name}.log`), onOutput: text => process.stdout.write(text) });
     if (check.files) { const tap = tapSummary(execution.tail); Object.assign(execution, tap, { ok: execution.ok && tap.ok }); }
-    checks.push({ name: check.name, command: [process.execPath, ...command], configuredTimeoutMs: check.timeoutMs, execution });
+    checks.push({ name: check.name, timeoutMs: Math.min(check.timeoutMs, remaining), command: [process.execPath, ...command], configuredTimeoutMs: check.timeoutMs, execution });
     if (execution.timedOut || execution.interrupted || execution.signal != null || execution.testComplete === false) break;
   }
 } catch (error) { failure = redactSecurityDiagnostic(error); }

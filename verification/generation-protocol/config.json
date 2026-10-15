@@ -1,0 +1,486 @@
+{
+  "schemaVersion": 1,
+  "specification": "configurations.qnt",
+  "init": "Init",
+  "step": "Step",
+  "invariant": "Safety",
+  "modelSpecifications": [
+    "protocol.qnt",
+    "configurations.qnt",
+    "witnesses.qnt",
+    "guards.qnt",
+    "negative-controls.qnt",
+    "relation-budget.qnt",
+    "knowledge-budget.qnt",
+    "relation-finite.qnt",
+    "knowledge-finite.qnt",
+    "negative-configurations.qnt",
+    "replay-refinement.qnt",
+    "replay-witnesses.qnt"
+  ],
+  "domains": [
+    {
+      "main": "relation_single",
+      "specification": "configurations.qnt",
+      "protocol": "relation",
+      "actors": 1,
+      "capacity": 1,
+      "kind": "generation-envelope",
+      "finiteMain": "relation_single_finite",
+      "traceMain": "relation_single",
+      "finiteSpecification": "relation-finite.qnt"
+    },
+    {
+      "main": "relation_multi_cap1",
+      "specification": "configurations.qnt",
+      "protocol": "relation",
+      "actors": 3,
+      "capacity": 1,
+      "kind": "generation-envelope",
+      "finiteMain": "relation_multi_cap1_finite",
+      "traceMain": "relation_multi_cap1",
+      "finiteSpecification": "relation-finite.qnt"
+    },
+    {
+      "main": "relation_multi_cap2",
+      "specification": "configurations.qnt",
+      "protocol": "relation",
+      "actors": 3,
+      "capacity": 2,
+      "kind": "generation-envelope",
+      "finiteMain": "relation_multi_cap2_finite",
+      "traceMain": "relation_multi_cap2",
+      "finiteSpecification": "relation-finite.qnt"
+    },
+    {
+      "main": "knowledge_single",
+      "specification": "configurations.qnt",
+      "protocol": "knowledge",
+      "actors": 1,
+      "capacity": 1,
+      "kind": "generation-envelope",
+      "finiteMain": "knowledge_single_finite",
+      "traceMain": "knowledge_single",
+      "finiteSpecification": "knowledge-finite.qnt"
+    },
+    {
+      "main": "knowledge_multi_cap1",
+      "specification": "configurations.qnt",
+      "protocol": "knowledge",
+      "actors": 3,
+      "capacity": 1,
+      "kind": "generation-envelope",
+      "finiteMain": "knowledge_multi_cap1_finite",
+      "traceMain": "knowledge_multi_cap1",
+      "finiteSpecification": "knowledge-finite.qnt"
+    },
+    {
+      "main": "knowledge_multi_cap2",
+      "specification": "configurations.qnt",
+      "protocol": "knowledge",
+      "actors": 3,
+      "capacity": 2,
+      "kind": "generation-envelope",
+      "finiteMain": "knowledge_multi_cap2_finite",
+      "traceMain": "knowledge_multi_cap2",
+      "finiteSpecification": "knowledge-finite.qnt"
+    },
+    {
+      "main": "relation_budget",
+      "specification": "relation-budget.qnt",
+      "protocol": "relation",
+      "actors": 1,
+      "parts": null,
+      "kind": "unchanged-product-budget",
+      "finiteMain": "relation_budget",
+      "traceMain": "relation_budget",
+      "finiteSpecification": "relation-budget.qnt"
+    },
+    {
+      "main": "knowledge_budget",
+      "specification": "knowledge-budget.qnt",
+      "protocol": "knowledge",
+      "actors": 1,
+      "parts": 2,
+      "kind": "unchanged-product-budget",
+      "finiteMain": "knowledge_budget",
+      "traceMain": "knowledge_budget",
+      "finiteSpecification": "knowledge-budget.qnt"
+    }
+  ],
+  "actors": [
+    {
+      "actor": 0,
+      "session": 0,
+      "task": 0
+    },
+    {
+      "actor": 1,
+      "session": 1,
+      "task": 0
+    },
+    {
+      "actor": 2,
+      "session": 0,
+      "task": 1
+    }
+  ],
+  "generations": [
+    0,
+    1
+  ],
+  "requestIdentity": "requestId = actor * 2 + observational generation; relation maps to immutable (job.id, epoch, attempt); knowledge maps to dispatch context and successor job ID, not progress_json.cycle.",
+  "envelopeScope": "One physical request per dispatch; all enabled action interleavings, two outcomes, repeated onUsage, duplicate Promise settlements, per-listening cancellation, two generations, deletion, and one quiescent restart. No reduction of product budget limits.",
+  "budgetScope": "Separate full unchanged original relation one-actor and knowledge two-part protocols. This is not the Cartesian product of all retries, all generations, and all concurrent actors.",
+  "traceQuotient": "finiteMain uses TRACE=false only to fix lastAction, actor, response. All guards, semantic state updates and invariant formulas are independent of TRACE. Witnesses, simulation and negative controls use TRACE=true.",
+  "witnesses": {
+    "specification": "witnesses.qnt",
+    "mains": [
+      "relation_single_witnesses",
+      "relation_multi_cap1_witnesses",
+      "relation_multi_cap2_witnesses",
+      "knowledge_single_witnesses",
+      "knowledge_multi_cap1_witnesses",
+      "knowledge_multi_cap2_witnesses"
+    ],
+    "counts": {
+      "relation_single_witnesses": 11,
+      "relation_multi_cap1_witnesses": 3,
+      "relation_multi_cap2_witnesses": 5,
+      "knowledge_single_witnesses": 10,
+      "knowledge_multi_cap1_witnesses": 4,
+      "knowledge_multi_cap2_witnesses": 6
+    },
+    "expectedTestCount": 39,
+    "seed": "42",
+    "maxSamples": 1,
+    "names": {
+      "relation_single_witnesses": [
+        "normalSuccessTest",
+        "normalFailureTest",
+        "cancelLateSuccessTest",
+        "cancelLateFailureTest",
+        "oldResponseWhileNewActiveTest",
+        "outOfOrderGenerationTest",
+        "duplicateSettlementTest",
+        "deleteLateRestartTest",
+        "deleteRestartLateTest",
+        "successfulRestartTest",
+        "repeatedLateUsageIsAttemptScopedTest"
+      ],
+      "relation_multi_cap1_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest"
+      ],
+      "relation_multi_cap2_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "oldPhysicalExceedsLocalCapacityTest",
+        "twoListeningOutOfOrderTest"
+      ],
+      "knowledge_single_witnesses": [
+        "normalSuccessTest",
+        "normalFailureTest",
+        "cancelLateSuccessTest",
+        "cancelLateFailureTest",
+        "oldResponseWhileNewActiveTest",
+        "outOfOrderGenerationTest",
+        "duplicateSettlementTest",
+        "deleteLateRestartTest",
+        "deleteRestartLateTest",
+        "successfulRestartTest"
+      ],
+      "knowledge_multi_cap1_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "cancelDoesNotCancelPendingJobTest"
+      ],
+      "knowledge_multi_cap2_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "oldPhysicalExceedsLocalCapacityTest",
+        "twoListeningOutOfOrderTest",
+        "cancelDoesNotCancelPendingJobTest"
+      ]
+    }
+  },
+  "guards": {
+    "specification": "guards.qnt",
+    "counts": {
+      "knowledge_guards": 7,
+      "relation_guards": 6
+    }
+  },
+  "directedMutants": {
+    "specification": "negative-controls.qnt",
+    "counts": {
+      "knowledge_reservation_negative": 1,
+      "knowledge_generation_negative": 2,
+      "relation_reservation_negative": 1,
+      "relation_generation_negative": 2
+    }
+  },
+  "mutants": [
+    {
+      "main": "mutant_relation_skip_reservation",
+      "expectedViolation": "budgetBeforeSend",
+      "maxSteps": 2,
+      "specification": "negative-configurations.qnt"
+    },
+    {
+      "main": "mutant_relation_skip_generation_guard",
+      "expectedViolation": "generationIsolation",
+      "maxSteps": 7,
+      "specification": "negative-configurations.qnt"
+    },
+    {
+      "main": "mutant_knowledge_skip_reservation",
+      "expectedViolation": "budgetBeforeSend",
+      "maxSteps": 2,
+      "specification": "negative-configurations.qnt"
+    },
+    {
+      "main": "mutant_knowledge_skip_generation_guard",
+      "expectedViolation": "generationIsolation",
+      "maxSteps": 7,
+      "specification": "negative-configurations.qnt"
+    }
+  ],
+  "profiles": {
+    "fast": {
+      "apalacheDepth": {
+        "relation_single": 8,
+        "relation_multi_cap1": 5,
+        "relation_multi_cap2": 5,
+        "knowledge_single": 8,
+        "knowledge_multi_cap1": 5,
+        "knowledge_multi_cap2": 5,
+        "relation_budget": 8,
+        "knowledge_budget": 8
+      },
+      "tlc": "Every declared finite domain must finish with queue=0; seeded simulation is separate.",
+      "timeoutMs": {
+        "tlc": 300000,
+        "bmc": 240000
+      },
+      "overallTimeoutMs": 2100000
+    },
+    "deep": {
+      "apalacheDepth": {
+        "relation_single": 12,
+        "relation_multi_cap1": 8,
+        "relation_multi_cap2": 8,
+        "knowledge_single": 12,
+        "knowledge_multi_cap1": 8,
+        "knowledge_multi_cap2": 8,
+        "relation_budget": 12,
+        "knowledge_budget": 12
+      },
+      "tlc": "Every declared finite domain must finish with queue=0; seeded simulation is separate.",
+      "timeoutMs": {
+        "tlc": 300000,
+        "bmc": 600000
+      },
+      "overallTimeoutMs": 4200000
+    }
+  },
+  "simulation": {
+    "seed": "20261014",
+    "samples": 50,
+    "maximumSteps": 35,
+    "selectedTraces": 3
+  },
+  "traceContract": {
+    "actions": [
+      "reserve",
+      "send",
+      "cancel",
+      "new_generation",
+      "response",
+      "duplicate",
+      "usage",
+      "delete",
+      "restart",
+      "stutter"
+    ],
+    "projectionFields": [
+      "generation",
+      "present",
+      "cancelled",
+      "activeOwner",
+      "requestGeneration",
+      "aborted",
+      "physical",
+      "reserved",
+      "usage",
+      "business",
+      "outcome",
+      "calls",
+      "callbackCount",
+      "restartCount"
+    ],
+    "ghostVariables": [
+      "authorizedBusiness",
+      "authorizedOutcome"
+    ],
+    "restart": "Clean scheduler/store reopen only after local owners are empty and no surviving listening has an aborted request; late external requests may still belong to deleted listenings. Does not model SIGKILL or recovery/retry of surviving cancelled knowledge jobs.",
+    "duplicate": "Repeated resolve/reject of one JS Promise is a business stutter. onUsage is a distinct real repeated callback and upserts only the original relation request journal row.",
+    "aborted": "Logical request invalidation before its business continuation. Not a direct copy of knowledge child scope signal.aborted after successful scope cleanup.",
+    "usage": "Normalized presence/nonlate-or-late attribution for the original relation_requests(job_id,attempt), not the exact durable outcome string: commit may change response_received to complete/partial, and another real onUsage can overwrite it. No knowledge usage journal is invented."
+  },
+  "exclusions": [
+    "Unbounded actor/generation count and a third generation",
+    "Cartesian product of full product retry budgets with all concurrent generations",
+    "Arbitrary source/window revisions and relation semantic quality",
+    "Knowledge recovery/retry of a surviving cancelled job; covered by independent recovery/budget work",
+    "Real-time scheduler fairness, provider completion fairness, or logical slots bounding external physical requests",
+    "In-flight restore: production restoreSafety rejects it",
+    "Supplier exactly-once, notification outbox, or hardware/power-loss durability",
+    "Model results alone proving real scheduler/workflow/SQLite trace agreement"
+  ],
+  "profileRationale": "Unchanged final envelope cost probe: relation cap2 complete 818608 distinct/12042993 generated/queue0/depth26 in 157.5s checker time; knowledge cap2 complete 141440 distinct/1321901 generated/queue0/depth29 in 22.4s. A 300s TLC bound was selected before final gate runs. Earlier TRACE-enabled 90s probe was incomplete; its temporary raw logs did not survive environment restoration and are not release evidence. No semantic states or product limits were removed.",
+  "refinement": {
+    "id": "fixed-ready-provider-permit-v1",
+    "specification": "replay-refinement.qnt",
+    "witnessSpecification": "replay-witnesses.qnt",
+    "domains": [
+      {
+        "main": "replay_relation_single",
+        "protocol": "relation",
+        "actors": 1,
+        "capacity": 1,
+        "witnessMain": "replay_relation_single_witnesses"
+      },
+      {
+        "main": "replay_relation_cap1",
+        "protocol": "relation",
+        "actors": 3,
+        "capacity": 1,
+        "witnessMain": "replay_relation_multi_cap1_witnesses"
+      },
+      {
+        "main": "replay_relation_cap2",
+        "protocol": "relation",
+        "actors": 3,
+        "capacity": 2,
+        "witnessMain": "replay_relation_multi_cap2_witnesses"
+      },
+      {
+        "main": "replay_knowledge_single",
+        "protocol": "knowledge",
+        "actors": 1,
+        "capacity": 1,
+        "witnessMain": "replay_knowledge_single_witnesses"
+      },
+      {
+        "main": "replay_knowledge_cap1",
+        "protocol": "knowledge",
+        "actors": 3,
+        "capacity": 1,
+        "witnessMain": "replay_knowledge_multi_cap1_witnesses"
+      },
+      {
+        "main": "replay_knowledge_cap2",
+        "protocol": "knowledge",
+        "actors": 3,
+        "capacity": 2,
+        "witnessMain": "replay_knowledge_multi_cap2_witnesses"
+      }
+    ],
+    "counts": {
+      "replay_relation_single_witnesses": 11,
+      "replay_relation_multi_cap1_witnesses": 3,
+      "replay_relation_multi_cap2_witnesses": 5,
+      "replay_knowledge_single_witnesses": 10,
+      "replay_knowledge_multi_cap1_witnesses": 4,
+      "replay_knowledge_multi_cap2_witnesses": 6
+    },
+    "expectedTestCount": 39,
+    "expectedSimulationTraces": 18,
+    "clockAdvanceMs": 6000,
+    "interpretation": "Fixed ready task environment with explicit one-use provider permits; each permit projects to base lifecycle stutter. Not general scheduler fairness or all production availability.",
+    "names": {
+      "replay_relation_single_witnesses": [
+        "normalSuccessTest",
+        "normalFailureTest",
+        "cancelLateSuccessTest",
+        "cancelLateFailureTest",
+        "oldResponseWhileNewActiveTest",
+        "outOfOrderGenerationTest",
+        "duplicateSettlementTest",
+        "deleteLateRestartTest",
+        "deleteRestartLateTest",
+        "successfulRestartTest",
+        "repeatedLateUsageIsAttemptScopedTest"
+      ],
+      "replay_relation_multi_cap1_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest"
+      ],
+      "replay_relation_multi_cap2_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "oldPhysicalExceedsLocalCapacityTest",
+        "twoListeningOutOfOrderTest"
+      ],
+      "replay_knowledge_single_witnesses": [
+        "normalSuccessTest",
+        "normalFailureTest",
+        "cancelLateSuccessTest",
+        "cancelLateFailureTest",
+        "oldResponseWhileNewActiveTest",
+        "outOfOrderGenerationTest",
+        "duplicateSettlementTest",
+        "deleteLateRestartTest",
+        "deleteRestartLateTest",
+        "successfulRestartTest"
+      ],
+      "replay_knowledge_multi_cap1_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "cancelDoesNotCancelPendingJobTest"
+      ],
+      "replay_knowledge_multi_cap2_witnesses": [
+        "cancelReleasesSlotTest",
+        "otherListeningSurvivesDeleteTest",
+        "threeTasksProgressTest",
+        "oldPhysicalExceedsLocalCapacityTest",
+        "twoListeningOutOfOrderTest",
+        "cancelDoesNotCancelPendingJobTest"
+      ]
+    }
+  },
+  "implementationControls": [
+    {
+      "id": "relation-reservation",
+      "protocol": "relation",
+      "mutation": "skip_reservation",
+      "witness": "normalSuccessTest"
+    },
+    {
+      "id": "knowledge-reservation",
+      "protocol": "knowledge",
+      "mutation": "skip_reservation",
+      "witness": "normalSuccessTest"
+    },
+    {
+      "id": "relation-generation-transaction",
+      "protocol": "relation",
+      "mutation": "omit_transaction_guard",
+      "witness": "oldResponseWhileNewActiveTest"
+    },
+    {
+      "id": "knowledge-accepted-content",
+      "protocol": "knowledge",
+      "mutation": "corrupt_accepted_fact",
+      "witness": "normalSuccessTest"
+    }
+  ]
+}

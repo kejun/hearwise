@@ -26,3 +26,17 @@ export function validateQualityObservations(rows, { mode, kind, startedAt, finis
   assert.equal(new Set(attempts.map(row => row.attemptId)).size, attempts.length);
   return attempts;
 }
+
+// Public final captions, durable segment text and actual provider output must agree.
+// This establishes plumbing consistency; it does not assess recognition quality.
+export function validateAsrResult(result, success) {
+  assert.ok(result.events.some(row => row.event.type === 'finished'));
+  assert.ok(!result.events.some(row => row.event.type === 'error'));
+  const finals = result.events.filter(row => row.event.type === 'segment-final').map(row => row.event.segment);
+  assert.deepEqual(finals.map(row => [row.id, row.original_text]), result.segments.map(row => [row.id, row.original_text]));
+  assert.equal(result.output, result.segments.map(row => row.original_text).join(' '));
+  for (const segment of result.segments) {
+    assert.equal(segment.listening_id, result.listeningId); assert.equal(segment.run_id, result.runId);
+    assert.ok(success.outputs.some(row => row.sentence_end && String(row.sentence_id) === segment.asr_sentence_id && row.text === segment.original_text));
+  }
+}

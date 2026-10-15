@@ -1,0 +1,204 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /workspace/scratch/826e8d4c7b66/hearwise-kej71-model/docs/name-protocol-cost-probes/_apalache-out/server/2026-10-15T00-30-16_9192524210640684180
+# APALACHE version: 0.62.1 | build: a321771                       I@00:30:16.847
+Starting checker server on port 18480...                          I@00:30:16.851
+The Apalache server is running on port 18480. Press Ctrl-C to stop.
+Failed to find a usable hardware address from the network interfaces; using random bytes: c9:5d:23:a8:8a:67:e8:e6 W@00:30:17.439
+Oct 15, 2026 12:30:19 AM com.google.protobuf.GeneratedMessage warnPre22Gencode
+WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
+As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
+PASS #0: SanyParser                                               I@00:30:20.172
+[TLC] Running TLC model checker...
+
+TLC2 Version 2026.10.14.153021
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 89 and seed -8011892417580029584 with 1 worker on 9 cores with 1024MB heap and 64MB offheap memory [pid: 182] (Linux 6.18.44 amd64, Debian 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /tmp/quint-tlc-eNopUT/mutant_rollback.tla
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/Integers.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/Sequences.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/FiniteSets.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/TLC.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/Apalache.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/Variants.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/_TLCTrace.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/Naturals.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/quint-tlc-eNopUT/tlc-16057690883166769642/TLCExt.tla (jar:file:/tmp/hearwise-quint/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module mutant_rollback
+Linting of module Apalache
+Linting of module Variants
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module mutant_rollback
+Starting... (2026-10-15 00:30:21)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-15 00:30:22.
+Error: Invariant q_inv is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ mutant_rollback_name_protocol_lastAction = "init"
+/\ mutant_rollback_name_protocol_actor = -1
+/\ mutant_rollback_name_protocol_state = [ revision |-> 0,
+  name |-> 0,
+  sourceName |-> 0,
+  associatedName |-> 0,
+  evidenceName |-> 0,
+  changes |-> 0,
+  sourceVersion |-> 0,
+  associatedVersion |-> 0,
+  evidenceVersion |-> 0,
+  anchorValid |-> TRUE,
+  background |-> "none",
+  stalePreserved |-> TRUE,
+  scopePreserved |-> TRUE,
+  identitiesPreserved |-> TRUE,
+  phase |-> (0 :> "unused" @@ 1 :> "unused"),
+  rawName |-> (0 :> "" @@ 1 :> ""),
+  submittedRevision |-> (0 :> -1 @@ 1 :> -1),
+  submittedName |-> (0 :> -1 @@ 1 :> -1),
+  operationId |-> (0 :> 0 @@ 1 :> 1),
+  requests |-> (0 :> 0 @@ 1 :> 0),
+  txResult |-> (0 :> "none" @@ 1 :> "none"),
+  reply |-> (0 :> "none" @@ 1 :> "none"),
+  commitBaseRevision |-> (0 :> -1 @@ 1 :> -1),
+  commitBaseAnchorValid |-> (0 :> TRUE @@ 1 :> TRUE),
+  loadedRevision |-> (0 :> -1 @@ 1 :> -1),
+  loadedName |-> (0 :> -1 @@ 1 :> -1),
+  receipt |-> (0 :> "none" @@ 1 :> "none"),
+  receiptRawName |-> (0 :> "" @@ 1 :> ""),
+  receiptInputRevision |-> (0 :> -1 @@ 1 :> -1),
+  receiptCommitRevision |-> (0 :> -1 @@ 1 :> -1),
+  receiptOwner |-> (0 :> -1 @@ 1 :> -1),
+  commits |-> (0 :> 0 @@ 1 :> 0) ]
+/\ mutant_rollback_name_protocol_argument = ""
+
+State 2: <mutant_rollback_name_protocol_prepare(0,"same") line 458, col 3 to line 539, col 7 of module mutant_rollback>
+/\ mutant_rollback_name_protocol_lastAction = "prepare"
+/\ mutant_rollback_name_protocol_actor = 0
+/\ mutant_rollback_name_protocol_state = [ revision |-> 0,
+  name |-> 0,
+  sourceName |-> 0,
+  associatedName |-> 0,
+  evidenceName |-> 0,
+  changes |-> 0,
+  sourceVersion |-> 0,
+  associatedVersion |-> 0,
+  evidenceVersion |-> 0,
+  anchorValid |-> TRUE,
+  background |-> "none",
+  stalePreserved |-> TRUE,
+  scopePreserved |-> TRUE,
+  identitiesPreserved |-> TRUE,
+  phase |-> (0 :> "prepared" @@ 1 :> "unused"),
+  rawName |-> (0 :> "Deebo" @@ 1 :> ""),
+  submittedRevision |-> (0 :> 0 @@ 1 :> -1),
+  submittedName |-> (0 :> 0 @@ 1 :> -1),
+  operationId |-> (0 :> 0 @@ 1 :> 1),
+  requests |-> (0 :> 0 @@ 1 :> 0),
+  txResult |-> (0 :> "none" @@ 1 :> "none"),
+  reply |-> (0 :> "none" @@ 1 :> "none"),
+  commitBaseRevision |-> (0 :> -1 @@ 1 :> -1),
+  commitBaseAnchorValid |-> (0 :> TRUE @@ 1 :> TRUE),
+  loadedRevision |-> (0 :> 0 @@ 1 :> -1),
+  loadedName |-> (0 :> 0 @@ 1 :> -1),
+  receipt |-> (0 :> "none" @@ 1 :> "none"),
+  receiptRawName |-> (0 :> "" @@ 1 :> ""),
+  receiptInputRevision |-> (0 :> -1 @@ 1 :> -1),
+  receiptCommitRevision |-> (0 :> -1 @@ 1 :> -1),
+  receiptOwner |-> (0 :> -1 @@ 1 :> -1),
+  commits |-> (0 :> 0 @@ 1 :> 0) ]
+/\ mutant_rollback_name_protocol_argument = "same"
+
+State 3: <mutant_rollback_name_protocol_send(0) line 545, col 3 to line 567, col 7 of module mutant_rollback>
+/\ mutant_rollback_name_protocol_lastAction = "send"
+/\ mutant_rollback_name_protocol_actor = 0
+/\ mutant_rollback_name_protocol_state = [ revision |-> 0,
+  name |-> 0,
+  sourceName |-> 0,
+  associatedName |-> 0,
+  evidenceName |-> 0,
+  changes |-> 0,
+  sourceVersion |-> 0,
+  associatedVersion |-> 0,
+  evidenceVersion |-> 0,
+  anchorValid |-> TRUE,
+  background |-> "none",
+  stalePreserved |-> TRUE,
+  scopePreserved |-> TRUE,
+  identitiesPreserved |-> TRUE,
+  phase |-> (0 :> "pending" @@ 1 :> "unused"),
+  rawName |-> (0 :> "Deebo" @@ 1 :> ""),
+  submittedRevision |-> (0 :> 0 @@ 1 :> -1),
+  submittedName |-> (0 :> 0 @@ 1 :> -1),
+  operationId |-> (0 :> 0 @@ 1 :> 1),
+  requests |-> (0 :> 1 @@ 1 :> 0),
+  txResult |-> (0 :> "none" @@ 1 :> "none"),
+  reply |-> (0 :> "none" @@ 1 :> "none"),
+  commitBaseRevision |-> (0 :> -1 @@ 1 :> -1),
+  commitBaseAnchorValid |-> (0 :> TRUE @@ 1 :> TRUE),
+  loadedRevision |-> (0 :> 0 @@ 1 :> -1),
+  loadedName |-> (0 :> 0 @@ 1 :> -1),
+  receipt |-> (0 :> "none" @@ 1 :> "none"),
+  receiptRawName |-> (0 :> "" @@ 1 :> ""),
+  receiptInputRevision |-> (0 :> -1 @@ 1 :> -1),
+  receiptCommitRevision |-> (0 :> -1 @@ 1 :> -1),
+  receiptOwner |-> (0 :> -1 @@ 1 :> -1),
+  commits |-> (0 :> 0 @@ 1 :> 0) ]
+/\ mutant_rollback_name_protocol_argument = ""
+
+State 4: <mutant_rollback_name_protocol_transaction(0,"receipt_fail") line 704, col 3 to line 931, col 7 of module mutant_rollback>
+/\ mutant_rollback_name_protocol_lastAction = "transaction"
+/\ mutant_rollback_name_protocol_actor = 0
+/\ mutant_rollback_name_protocol_state = [ revision |-> 0,
+  name |-> 0,
+  sourceName |-> 0,
+  associatedName |-> 0,
+  evidenceName |-> 0,
+  changes |-> 0,
+  sourceVersion |-> 1,
+  associatedVersion |-> 0,
+  evidenceVersion |-> 0,
+  anchorValid |-> TRUE,
+  background |-> "none",
+  stalePreserved |-> TRUE,
+  scopePreserved |-> TRUE,
+  identitiesPreserved |-> TRUE,
+  phase |-> (0 :> "pending" @@ 1 :> "unused"),
+  rawName |-> (0 :> "Deebo" @@ 1 :> ""),
+  submittedRevision |-> (0 :> 0 @@ 1 :> -1),
+  submittedName |-> (0 :> 0 @@ 1 :> -1),
+  operationId |-> (0 :> 0 @@ 1 :> 1),
+  requests |-> (0 :> 1 @@ 1 :> 0),
+  txResult |-> (0 :> "rolled_back" @@ 1 :> "none"),
+  reply |-> (0 :> "none" @@ 1 :> "none"),
+  commitBaseRevision |-> (0 :> 0 @@ 1 :> -1),
+  commitBaseAnchorValid |-> (0 :> TRUE @@ 1 :> TRUE),
+  loadedRevision |-> (0 :> 0 @@ 1 :> -1),
+  loadedName |-> (0 :> 0 @@ 1 :> -1),
+  receipt |-> (0 :> "none" @@ 1 :> "none"),
+  receiptRawName |-> (0 :> "" @@ 1 :> ""),
+  receiptInputRevision |-> (0 :> -1 @@ 1 :> -1),
+  receiptCommitRevision |-> (0 :> -1 @@ 1 :> -1),
+  receiptOwner |-> (0 :> -1 @@ 1 :> -1),
+  commits |-> (0 :> 0 @@ 1 :> 0) ]
+/\ mutant_rollback_name_protocol_argument = "receipt_fail"
+
+90 states generated, 63 distinct states found, 51 states left on queue.
+The depth of the complete state graph search is 4.
+Finished in 00s at (2026-10-15 00:30:22)
+Trace exploration spec path: /tmp/quint-tlc-eNopUT/mutant_rollback_TTrace_1791991821.tla
+
+[violation] Found an issue (772ms).
+error: found a counterexample

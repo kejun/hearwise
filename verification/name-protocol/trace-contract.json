@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "specificationVersion": "1.0",
+  "domain": "name-protocol",
+  "itfVariables": ["state", "lastAction", "actor", "argument"],
+  "configuration": { "mode": "independent or reuse", "attempts": [0, 1], "operationIds": [0, 1] },
+  "actions": {
+    "prepare": ["new", "same", "exact", "raw_mismatch", "revision_mismatch"],
+    "send": [""],
+    "cancel": [""],
+    "transaction": ["ok", "associated_fail", "receipt_fail"],
+    "deliver": [""],
+    "lose_response": ["lost", "proxy502"],
+    "lookup": ["ok", "unavailable"],
+    "refresh": [""],
+    "background_change": ["revision", "anchor"],
+    "stutter": [""]
+  },
+  "scalars": {
+    "revision": "Distinct actual knowledge snapshot revision ordinal, initially 0; each changed name or background translation changes it once.",
+    "name": "0=Deebo, 1=Tibo, 2=Mira.",
+    "sourceName": "Name token in the linked original segment; unchanged unlinked and other-listening sources are checked separately.",
+    "associatedName": "Name token across associated item summary, fact and assertion text; all independently checked by adapter.",
+    "evidenceName": "Name token in active remapped support quotes/source text (anchor validity separately represented).",
+    "changes": "Number of actually committed non-no-op replacement operations, 0..2.",
+    "sourceVersion": "Observed replacement generation of linked source, 0..2; an ordinal, not a production DB column.",
+    "associatedVersion": "Observed replacement generation of associated knowledge/fact/assertion records, 0..2.",
+    "evidenceVersion": "Observed replacement generation of active supports, 0..2.",
+    "anchorValid": "All active support hashes, safe-integer UTF-16 bounds and quotes match current linked source. Invalidated source supports do not change the knowledge revision.",
+    "background": "none, revision (linked translation completion), or anchor (active source support corruption), each at most once.",
+    "stalePreserved": "Historical stale support rows equal baseline exactly.",
+    "scopePreserved": "Unlinked segment and entire unrelated listening's business rows equal baseline exactly.",
+    "identitiesPreserved": "Item/fact/relation/assertion/support IDs and relation endpoints equal baseline."
+  },
+  "attemptMaps": ["phase", "rawName", "submittedRevision", "submittedName", "operationId", "requests", "txResult", "reply", "commitBaseRevision", "commitBaseAnchorValid", "loadedRevision", "loadedName"],
+  "operationMaps": ["receipt", "receiptRawName", "receiptInputRevision", "receiptCommitRevision", "receiptOwner", "commits"],
+  "mapSemantics": {
+    "phase": ["unused", "prepared", "cancelled", "pending", "saved", "conflict", "failed", "recovering", "unknown", "done"],
+    "txResult": ["none", "committed", "duplicate", "fingerprint_conflict", "revision_conflict", "anchor_conflict", "rolled_back"],
+    "reply": ["none", "ok", "conflict", "failed", "unknown", "receipt"],
+    "receipt": ["none", "succeeded"],
+    "rawName": "Exact input string; padding is significant for the fingerprint despite equal trimmed target.",
+    "receiptRawName": "Symbolic raw input of original successful operation; bind to actual SHA256(JSON.stringify(['name_replace',rawName,actualRevision])).",
+    "receiptInputRevision": "Original submitted revision ordinal, persisted on receipt; never updated on replay.",
+    "receiptCommitRevision": "Observed snapshot ordinal immediately after original commit, retained by adapter; not a new persisted field.",
+    "receiptOwner": "Attempt slot that first committed the ID, -1 if none; observation bookkeeping, not a DB field.",
+    "commits": "Actually committed successful operation count per ID, 0 or1; no-op counts as commit."
+  },
+  "adapter": {
+    "export": "createNameProtocolAdapter",
+    "interface": ["act(step)", "project()", "observe()", "check()", "close()"],
+    "initial": "Synthetic fixture from seedNameReplacement(graph:true), historical stale support, another listening, linked translation eligible for one update. Both attempts unused. No edit receipts. No override: override and legacy-codec rules reuse KEJ-69/70.",
+    "prepare": "Own new picks name actor+1, same uses current name; freeze current snapshot revision. In reuse config actor1 explicitly copies actor0 ID+body (exact), adds surrounding raw-name spaces (raw_mismatch), or keeps raw name with a changed current revision (revision_mismatch). Actor0 must have sent before actor1 reuses its ID. No transport call at prepare.",
+    "send": "One explicit POST queued at real test-only HTTP holding proxy. Each attempt sends once. No automatic retry.",
+    "transaction": "One synchronous actual handler/store call, including best-effort synchronous notification. Receipt lookup first; exact replay returns stored receipt and changed=false before checking stale revision/anchor. Associated-write fault only triggers on changed replacements; no-op skips associated writes and still succeeds. Receipt-write fault triggers on every new receipt, including no-op; duplicate paths do not write and ignore injected write faults. Triggered write faults abort actual SQLite transaction; retain complete before/after table rows. No await inside the transaction.",
+    "lookup": "GET only. Existing receipt gives phase saved/reply receipt; unlike POST ok this only establishes the original stored ID outcome. Do not assert deliberately mismatched retry body succeeded. Browser UUID generation prevents ordinary UI collision; real browser is separately required.",
+    "refresh": "Fresh GET after outcome; phase done, actual latest name and revision. It may stand for reopening a dialog, but this adapter alone is not browser evidence.",
+    "background_change": "revision changes linked translation only; anchor changes an active support's quote/source hash only, leaving knowledge snapshot revision equal. Both happen between complete SQLite calls.",
+    "mutations": "ignore_fingerprint maps to actual removed fingerprint guard; partial_rollback and receipt_without_commit represent possible split-transaction failures. Revision/anchor guards are inherited boundary coverage, not new production changes.",
+    "replayClassification": ["model_property_violation", "implementation_mismatch", "driver_cannot_replay"]
+  },
+  "scope": {
+    "attempts": 2,
+    "changes": 2,
+    "backgroundChanges": 1,
+    "fingerprint": "Exact finite input tuple, not a proof of SHA256 collision freedom. IDs are scoped to one listening/item; cross-scope rejection requires implementation regression.",
+    "coordinates": "Finite model abstracts transformed UTF-16 content by symbols. Coordinate laws are the separate KEJ-70 Lean/name-interval profile and real replay comparisons.",
+    "liveness": "No liveness claim. Eventual completion needs fair dispatch/delivery and available recovery reads; permanent unavailability is allowed.",
+    "exclusions": ["Unbounded attempts", "Hash collision freedom", "Power loss/process kill recovery", "Paid provider behavior", "Legacy revision/override state combinations already covered in KEJ-69/70", "Full browser behavior from model-only results"]
+  }
+}

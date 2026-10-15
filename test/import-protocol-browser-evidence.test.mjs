@@ -102,11 +102,14 @@ test('browser fetch observer never gates, substitutes or consumes the actual app
   const clone = Promise.withResolvers(), entered = Promise.withResolvers();
   const original = { status: 200, clone() { return { json() { entered.resolve(); return clone.promise; } }; } };
   const calls = [], window = { fetch: async function (...args) { calls.push({ receiver: this, args }); return original; } };
-  const context = { window, location: { href: 'http://fixture/' }, URL, Request };
+  const context = { window, location: { href: 'http://fixture/' }, URL, Request, Blob, File };
   runInNewContext(`(${observeImportFetch.toString()})()`, context);
-  const options = { method: 'POST', body: 'unchanged upload body' };
+  const options = { method: 'POST', body: new File(['unchanged upload body'], 'backup.sqlite', { type: 'application/octet-stream' }) };
   const returned = await window.fetch('/api/data/import/validate?mode=append', options);
   assert.equal(returned, original); assert.equal(calls[0].receiver, window);
+  const observed = window.__importProtocolResponses[0];
+  assert.equal(observed.index, 0); assert.equal(observed.method, 'POST');
+  assert.deepEqual(JSON.parse(JSON.stringify(observed.requestBody)), { kind: 'File', size: options.body.size, name: 'backup.sqlite', type: 'application/octet-stream' });
   assert.deepEqual(calls[0].args, ['/api/data/import/validate?mode=append', options]);
   await entered.promise;
   assert.equal(window.__importProtocolResponses[0].done, false, 'application receives its Response before observation completes');
@@ -116,4 +119,55 @@ test('browser fetch observer never gates, substitutes or consumes the actual app
   assert.equal(window.__importProtocolResponses[0].body.token, 'synthetic');
   assert.equal(await window.fetch('/api/listenings'), original);
   assert.equal(window.__importProtocolResponses.length, 1, 'other endpoints are not cloned');
+});
+
+test('fetch observation preserves real File and Blob HTTP bytes without an extra request', async t => {
+  const { observeImportFetch } = await import('../test-support/import-protocol-browser-observer.mjs');
+  const { runInNewContext } = await import('node:vm');
+  const { createServer } = await import('node:http');
+  const { once } = await import('node:events');
+  const received = [], server = createServer(async (request, response) => {
+    const parts = []; for await (const chunk of request) parts.push(chunk);
+    received.push({ url: request.url, method: request.method, bytes: Buffer.concat(parts) });
+    response.setHeader('Content-Type', 'application/json'); response.end('{"accepted":true}');
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = `http://127.0.0.1:${server.address().port}`, calls = [];
+  const window = { fetch: function (...args) { calls.push({ receiver: this, args }); return fetch(...args); } };
+  runInNewContext(`(${observeImportFetch.toString()})()`, { window, location: { href: origin }, URL, Request, Blob, File });
+  const bytes = Buffer.from('原始备份\u0000bytes');
+  for (const body of [new File([bytes], 'backup.sqlite'), new Blob([bytes])]) {
+    const options = { method: 'POST', body }, url = origin + '/api/data/import/validate?mode=append';
+    const response = await window.fetch(url, options); assert.deepEqual(await response.json(), { accepted: true });
+    assert.equal(calls.at(-1).receiver, window); assert.equal(calls.at(-1).args[1], options);
+    assert.deepEqual(received.at(-1).bytes, bytes);
+  }
+  assert.equal(calls.length, 2); assert.equal(received.length, 2);
+  assert.deepEqual(window.__importProtocolResponses.map(row => row.requestBody.size).join(','), `${bytes.length},${bytes.length}`);
+  assert.equal(window.__importProtocolResponses[0].requestBody.kind, 'File'); assert.equal(window.__importProtocolResponses[1].requestBody.kind, 'Blob');
+  assert.deepEqual(window.__importProtocolResponses.map(row => row.index).join(','), '0,1');
+});
+
+test('optional upload digest reads the actual File without delaying the original fetch', async () => {
+  const { observeImportFetch } = await import('../test-support/import-protocol-browser-observer.mjs');
+  const { runInNewContext } = await import('node:vm');
+  const { createHash, webcrypto } = await import('node:crypto');
+  const gate = Promise.withResolvers(), bytes = new Uint8Array([83, 81, 76, 0, 255]);
+  class HeldFile extends File { arrayBuffer() { return gate.promise; } }
+  const body = new HeldFile([bytes], 'actual.sqlite'), calls = [];
+  const original = new Response('{"accepted":true}', { headers: { 'content-type': 'application/json' } });
+  const window = { fetch: async (...args) => { calls.push(args); return original; } };
+  runInNewContext(`(${observeImportFetch.toString()})({ uploadDigest: true })`,
+    { window, location: { href: 'http://fixture/' }, URL, Request, Blob, File, crypto: webcrypto });
+  const response = await window.fetch('/api/data/import/validate?mode=append', { method: 'POST', body });
+  assert.equal(response, original); assert.equal(calls.length, 1); assert.equal(calls[0][1].body, body);
+  const observed = window.__importProtocolResponses[0]; assert.equal(observed.uploadDigestComplete, false);
+  gate.resolve(bytes.buffer);
+  for (let i = 0; i < 50 && !observed.uploadDigestComplete; i++) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(observed.uploadDigestComplete, true); assert.equal(observed.uploadDigestError, undefined);
+  assert.equal(observed.requestBody.sha256, createHash('sha256').update(bytes).digest('hex'));
+  assert.equal(observed.requestBody.size, bytes.length); assert.equal(observed.requestBody.name, 'actual.sqlite');
+  assert.equal(calls.length, 1, 'hash observation never uploads a second copy');
+  assert.deepEqual(await response.json(), { accepted: true }, 'observer did not consume the app response');
 });

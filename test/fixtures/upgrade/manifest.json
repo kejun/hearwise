@@ -1,0 +1,145 @@
+{
+  "manifestVersion": 1,
+  "metadata": {
+    "formatVersion": 2,
+    "description": "Actual historical schemas and synthetic records generated with each pinned original implementation; no provider calls.",
+    "fixedTime": "2026-10-01T12:00:00.000Z",
+    "node": "v24.19.0",
+    "sqlite": "3.53.3",
+    "providerCalls": 0
+  },
+  "fixtures": [
+    {
+      "version": 1,
+      "schema": {
+        "path": "v1.schema.json",
+        "sha256": "8d3f17d9fd19dfdccd0cbebf6757130d731d64c252344f95de98497088393df6"
+      },
+      "rows": {
+        "path": "v1.rows.json",
+        "sha256": "e9b4172985ad189e27d647e96144856a14333db38e9e7448591d985d6ee9acd1"
+      }
+    },
+    {
+      "version": 2,
+      "schema": {
+        "path": "v2.schema.json",
+        "sha256": "a2a360f8c0fbf1669e4057ceebef039ef09100359cc99d3e718a6f300ed237a6"
+      },
+      "rows": {
+        "path": "v2.rows.json",
+        "sha256": "4a167c30e17b031148d0da8e2bdea46b542e79a348de21be8826616aa7bfbf6f"
+      }
+    },
+    {
+      "version": 3,
+      "schema": {
+        "path": "v3.schema.json",
+        "sha256": "57d9ff7d533d98952dcdeb92944611aa7a678771c5330be30db2d61ea80b034c"
+      },
+      "rows": {
+        "path": "v3.rows.json",
+        "sha256": "524765cd093149841d2e54c6b9a6a31549cf1d07a9841232138d886dcd0061db"
+      }
+    },
+    {
+      "version": 4,
+      "schema": {
+        "path": "v4.schema.json",
+        "sha256": "8b23f6e2a0662ddf9a9cb0d414817dfecb33dba301eb001fb5b4f17c786dfa70"
+      },
+      "rows": {
+        "path": "v4.rows.json",
+        "sha256": "0dc3144bdb9ec02d4da43dd15b0593c57c771f221c223ae5af05a3f7ae29a810"
+      }
+    },
+    {
+      "version": 5,
+      "schema": {
+        "path": "v5.schema.json",
+        "sha256": "768b715c92074eeab7724d2788ed0586cbd50740a2c485cab0e0d8d461ae7a27"
+      },
+      "rows": {
+        "path": "v5.rows.json",
+        "sha256": "32a6fa518cf4834b8493e1658df46aaf7f805dc9ae782c6b3e680586aeaf18a8"
+      }
+    },
+    {
+      "version": 6,
+      "schema": {
+        "path": "v6.schema.json",
+        "sha256": "693520956dae03d88a077bb09f487f57338299da71ea4a9b4ce1eab44717cc8a"
+      },
+      "rows": {
+        "path": "v6.rows.json",
+        "sha256": "1267c29ca70f5578edb5f8b36e08ffadec21f3ed4f6fb7e168ebd9257d4db795"
+      }
+    },
+    {
+      "version": 7,
+      "schema": {
+        "path": "v7.schema.json",
+        "sha256": "1e34721b5134f55dd440f8fb87eab8222d845e7b7fa1d8753ae4445e5f82a521"
+      },
+      "rows": {
+        "path": "v7.rows.json",
+        "sha256": "b81e6de2a8fccbbfb4c3d10a5670de3f6003de7edd9081d252deba677b8a68f4"
+      }
+    },
+    {
+      "version": 8,
+      "schema": {
+        "path": "v8.schema.json",
+        "sha256": "f7a679c32827f4d5b33fc2ddd7d2f1a97089534bbed1e00b6a14f2b6a81a713c"
+      },
+      "rows": {
+        "path": "v8.rows.json",
+        "sha256": "8250833d506e366fe7986f65b6c949b49073add7d77994a9d6f0bf4d1152c098"
+      }
+    },
+    {
+      "version": 9,
+      "schema": {
+        "path": "v9.schema.json",
+        "sha256": "4660a9c8802c9ba37f0a6e39295f4606b3eb43f8f775c89f2966ab1e1b21150f"
+      },
+      "rows": {
+        "path": "v9.rows.json",
+        "sha256": "42e00fa4da708d8bb591cafcc140a16d86f54335335dd5f909074978e2ef3ccb"
+      }
+    },
+    {
+      "version": 10,
+      "schema": {
+        "path": "v10.schema.json",
+        "sha256": "2b32a2ef2ceedd2c02090768569d23ed5436ff4a8d6ba4e04d30c6c5989e9941"
+      },
+      "rows": {
+        "path": "v10.rows.json",
+        "sha256": "dae1506252d2dd389ccfca9c4dfbe7c6776cdae34b1f1a3c0ee218e6db8b2d60"
+      }
+    },
+    {
+      "version": 11,
+      "schema": {
+        "path": "v11.schema.json",
+        "sha256": "0778d38e6816b478e7876496bdf8efa1431429a6abfdd2cb1572eff7482932f4"
+      },
+      "rows": {
+        "path": "v11.rows.json",
+        "sha256": "431d420e615a023df74b21305b71b1a83f3bb766e8505113d371d0b596144ba3"
+      }
+    },
+    {
+      "version": 12,
+      "schema": {
+        "path": "v12.schema.json",
+        "sha256": "25d7105effe6a29d7d96f76b61a34ac3a5fbd95fa15988a55d13512ef2fc1aa8"
+      },
+      "rows": {
+        "path": "v12.rows.json",
+        "sha256": "ce50645661b41b8f96b0f23228c1f5fac3eee814a0f666198810f79d4429f056"
+      }
+    }
+  ]
+}

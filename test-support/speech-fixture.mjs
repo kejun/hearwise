@@ -10,8 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
-export async function speechFixture({ autoSentences = false, autoNow = () => Date.now(), audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, onTtsCommit, extraEnv = {}, serverImports = [] } = {}) {
-  const directory = await mkdtemp(path.join(tmpdir(), 'hearwise-speech-'));
+export async function speechFixture({ autoSentences = false, autoNow = () => Date.now(), audioSamples = 2400, fishStatus = 200, translationText, legacyIncrementalEnv = false, translationDelay = 0, seed, modelResponse, onAsrFinish, onTtsCommit, extraEnv = {}, serverImports = [], directoryRoot = tmpdir() } = {}) {
+  const directory = await mkdtemp(path.join(directoryRoot, 'hearwise-speech-'));
   const filename = path.join(directory, 'test.sqlite');
   let seeded;
   if (seed) { const store = new ListeningStore(filename); try { seeded = await seed(store); } finally { store.close(); } }
@@ -27,7 +27,7 @@ export async function speechFixture({ autoSentences = false, autoNow = () => Dat
       if (translationDelay) await new Promise(resolve => setTimeout(resolve, translationDelay));
     }
     const chosenTranslation = typeof translationText === 'function' ? translationText(body.messages?.[0]?.content) : translationText;
-    const override = modelResponse ? await modelResponse(body, stats, seeded) : undefined;
+    const override = modelResponse ? await modelResponse(body, stats, seeded, { request: req, response: res }) : undefined;
     const text = override === undefined ? (body.model === 'qwen-mt-flash' ? chosenTranslation ?? `这是第 ${body.messages[0].content.match(/\d+/)?.[0] || 1} 句中文译文。` : '{"items":[]}') : typeof override === 'string' ? override : JSON.stringify(override);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));
@@ -136,7 +136,7 @@ export async function speechFixture({ autoSentences = false, autoNow = () => Dat
   } finally {
     child.stdout.removeListener('data', onData); child.removeListener('error', onError); child.removeListener('exit', onExit);
   }
-  return { base, stats, final, async withAutoSentencesPaused(operation) {
+  return { base, child, stats, final, async withAutoSentencesPaused(operation) {
     if (typeof operation !== 'function') throw new TypeError('Automatic sentence scope requires an operation');
     const previous = autoSentences; autoSentences = false;
     try { return await operation(); } finally { autoSentences = previous; }
