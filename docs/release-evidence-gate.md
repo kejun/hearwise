@@ -50,6 +50,8 @@ Cache keys bind fixed toolchain/lock/environment for compiled tools. Evidence id
 
 Run the existing build/tests and actual proof/model profiles first. Build once before parallel readers; evidence checks never download or execute proof tools.
 
+Before invoking `verify:m1:report`, replace `RELATION_RUN`, `KNOWLEDGE_RUN`, `PROCESS_RUN` and `GENERATION_RUN` with the actual unique run directories printed by the corresponding preceding profile commands for this same candidate. These tokens are placeholders, not directory names; missing directories remain `not_run` and exit nonzero.
+
 ```
 npm test
 npm run verify -- --release

@@ -105,6 +105,8 @@
 
 复核命令（先按各域文档运行，不允许把四个不同 SHA 的目录拼接）：
 
+执行前，将 `RELATION_RUN`、`KNOWLEDGE_RUN`、`PROCESS_RUN`、`GENERATION_RUN` 分别替换为前序对应 profile 命令实际打印的唯一 run 目录，且四者属于同一候选。它们只是占位符，不是已经存在的目录；缺失目录仍按 not_run 非零退出。
+
 ```sh
 mkdir -p verification-evidence
 npm run verify:m1:report -- --relation RELATION_RUN --knowledge KNOWLEDGE_RUN --process PROCESS_RUN --generation GENERATION_RUN --release --output verification-evidence/m1-summary.json
@@ -180,7 +182,7 @@ npm run verify:realtime-baseline -- --profile=smoke --negative=retain-asr-socket
 
 ## 证据保存与搬移
 
-CI artifacts 按现有工作流仅保留 14 天。发布负责人应在过期前保存完整原包、GitHub run/artifact 身份、原 SHA、下载时间和包摘要；临时云目录与链接存在不证明原始文件仍可读取。不能只保存汇总 JSON 或截图，不能声称已重下/重放未实际取得的历史产物。
+`.github/workflows/ci.yml` 中的验证和发布证据 artifacts 按现有配置保留 14 天；其他工作流按各自期限，例如 `acceptance-audit.lock.yml` 包含 1 天和 3 天的 artifacts。发布负责人应在对应 artifact 实际过期前保存完整原包、GitHub run/artifact 身份、原 SHA、下载时间和包摘要；临时云目录与链接存在不证明原始文件仍可读取。不能只保存汇总 JSON 或截图，不能声称已重下/重放未实际取得的历史产物。
 
 搬移保留原执行 cwd、工具位置和所有相对结构，不编辑 provenance 字段来适配新路径。使用该域支持的 reader 重新检查原始附件；某 reader 拒绝搬移/跨 checkout 时保留拒绝，回到受支持的原环境复核或在新目标重跑。历史证据失效、丢失、过期或缺少原始对象时保持 not_run/incomplete/stale；发布摘要标清原来源和未复核原因。
 
