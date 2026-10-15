@@ -60,7 +60,8 @@ npm run verify:edit-protocol -- --release
 npm run verify:process-crash -- --release
 npm run verify:generation-protocol -- --release
 npm run verify:upgrade -- --release
-npm run verify:m1:report -- --relation RELATION_RUN --knowledge KNOWLEDGE_RUN --process PROCESS_RUN --generation GENERATION_RUN --release --output m1-summary.json
+mkdir -p verification-evidence
+npm run verify:m1:report -- --relation RELATION_RUN --knowledge KNOWLEDGE_RUN --process PROCESS_RUN --generation GENERATION_RUN --release --output verification-evidence/m1-summary.json
 npm run verify:playback-protocol -- --release
 npm run verify:scheduler -- --release
 npm run verify:name-protocol -- --release

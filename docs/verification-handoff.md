@@ -106,10 +106,11 @@
 复核命令（先按各域文档运行，不允许把四个不同 SHA 的目录拼接）：
 
 ```sh
-npm run verify:m1:report -- --relation RELATION_RUN --knowledge KNOWLEDGE_RUN --process PROCESS_RUN --generation GENERATION_RUN --release --output m1-summary.json
+mkdir -p verification-evidence
+npm run verify:m1:report -- --relation RELATION_RUN --knowledge KNOWLEDGE_RUN --process PROCESS_RUN --generation GENERATION_RUN --release --output verification-evidence/m1-summary.json
 ```
 
-该命令会重新调用四域 gate；`m1-summary.json` 不是可以代替原目录的证据。AC-P12 必须有真实预期/实际状态差异；下文 HTTP 401 演示只证明三态报告闭环，不替代 AC-P12 的预算/代次破坏检出。
+该命令会重新调用四域 gate；`verification-evidence/m1-summary.json` 不是可以代替原目录的证据。AC-P12 必须有真实预期/实际状态差异；下文 HTTP 401 演示只证明三态报告闭环，不替代 AC-P12 的预算/代次破坏检出。
 
 ## 形式化、实现桥与假设清单
 
