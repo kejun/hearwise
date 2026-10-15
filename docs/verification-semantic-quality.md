@@ -7,11 +7,56 @@ quality acceptance. `HW-05-04` is always `not_run`; `qualityEvaluated`,
 `fullQualityAcceptance` and `releaseEligible` are always false. An exit code of
 zero from `offline` means the capture/review/evidence plumbing passed.
 
-There is no paid knowledge/relation adapter in this stage. `collect` and any
-`--live` request reject before reading credentials or making requests. The
-ASR/MT quality toolkit merged in PR83 supplies only source hashing, deterministic
-JSON digests and file helpers. Its live adapter, attempt counts and budget are
-not reused for this domain. No production behavior or database schema changes.
+The evaluation transport boundary is implemented in
+`scripts/lib/semantic-quality-gateway.mjs`, but the complete live collector is
+still not wired. `collect` and any `--live` request continue to reject before
+reading credentials or making requests. The ASR/MT toolkit's fixed attempt
+counts and budget must not be reused for this domain. No production behavior or
+database schema changes.
+
+### Domain transport boundary
+
+`createSemanticGateway` exposes separate loopback knowledge/relation endpoints
+and a fresh local capability. It forwards the production request bytes unchanged
+to one configured endpoint, substituting the upstream credential only there.
+Offline mode accepts literal loopback HTTP only; live mode requires explicit
+caller authorization, HTTPS, an unexpired configuration, and refuses ordinary
+CI. This library's flag is a caller attestation, not evidence of user approval.
+
+Every actual upstream attempt first calls the mandatory `authorize` callback,
+then waits for `reserve` to commit a unique worst-case-cost reservation. Both
+receive the exact request/hash/domain and an abort signal. The eventual collector
+must bind that request to the frozen corpus/model/prompt and actual production
+SQLite request reservation. Knowledge split parts, shared extra attempts and
+repair counts, and relation window counts remain production-domain obligations;
+this transport's total-request cap is not a replacement for them. It neither
+borrows ASR/MT counts nor claims to implement the missing semantic budget ledger.
+
+No automatic retry, redirect, refund or arbitrary extra provider option is
+allowed. The boundary enforces request/response bytes, overall attempt time,
+model identity, request shape and local capability, and cancels upstream work
+on disconnect/close. Provider errors preserve status and safe Retry-After but
+never relay untrusted error bodies. Successful protocol-invalid content is
+retained for the production parser's normal repair behavior. Byte/time caps do
+not limit provider token generation or billed work after disconnect: the caller
+must reserve a verified official worst-case billing bound before each attempt.
+
+Observations retain request bytes/hash, non-secret successful response bytes/hash,
+status, timestamps and reservation identity. They are diagnostic records, not a
+validated live quality report or automatically safe public content. Credential
+matches are rejected before persistence/forwarding. A late reservation after
+cancellation remains recorded and is never forwarded or refunded; a callback
+that never settles leaves `reservationStatus=pending`, and a callback failure is
+`rejected_or_unknown`. Such uncertainty cannot become complete billing evidence.
+Close stays bounded rather than waiting forever on an uncooperative callback.
+
+The new tests use original synthetic text and a loopback provider through the
+real knowledge/relation workflows and SQLite, confirming that durable request
+reservations precede network access and the resulting entities/assertions are
+persisted. They also cover denial, expiry, duplicate reservations, byte limits,
+redirects, stalls and cancellation. No real provider has been called. A frozen
+semantic plan, persistent domain budget, complete paired collection/reader and
+human review are still required before enabling the CLI or claiming acceptance.
 
 ## Reproduce
 
