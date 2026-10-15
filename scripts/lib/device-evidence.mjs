@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -128,8 +129,9 @@ export function evaluateDeviceObservations(context, observations, currentSource)
       }
     });
     const values = Object.values(row?.criteria || {});
+    const observedFailure = Object.keys(definition.criteria).some(key => row?.criteria?.[key] === false);
     rows.push({ id: definition.id, complete: issues.length === before && values.every(value => typeof value === 'boolean'),
-      status: issues.length > before ? 'incomplete' : values.includes(false) ? 'failed' : values.every(value => value === true) ? 'reported_passed' : 'not_run' });
+      status: observedFailure ? 'failed' : issues.length > before ? 'incomplete' : values.every(value => value === true) ? 'reported_passed' : 'not_run' });
   }
   const complete = issues.length === 0 && rows.every(row => row.complete) &&
     observations.operatorAttested === true && observations.applicationVersionConfirmed === true;
@@ -142,17 +144,50 @@ export function evaluateDeviceObservations(context, observations, currentSource)
     claim: 'Operator-reported short checks for the declared device and settings only; no authenticated physical observation, full support matrix or release acceptance.' };
 }
 
+function validateRetainedDatabase(seedFile, deviceFile, recordings) {
+  const seed = new DatabaseSync(seedFile, { readOnly: true });
+  let device;
+  try {
+    device = new DatabaseSync(deviceFile, { readOnly: true });
+    // Read a consistent snapshot, including committed WAL changes. Do not open
+    // ListeningStore here: reporting must not migrate or recover the test DB.
+    device.exec('PRAGMA busy_timeout = 3000; BEGIN');
+    assert.deepEqual(device.prepare('PRAGMA integrity_check').all().map(row => row.integrity_check), ['ok']);
+    assert.deepEqual(device.prepare('PRAGMA foreign_key_check').all(), []);
+    assert.deepEqual(device.prepare('PRAGMA user_version').get(), seed.prepare('PRAGMA user_version').get());
+    assert.equal(recordings.length, deviceTexts.length);
+    assert.equal(new Set(recordings.map(row => row.listeningId)).size, deviceTexts.length);
+    assert.equal(new Set(recordings.map(row => row.runId)).size, deviceTexts.length);
+    for (const [index, recording] of recordings.entries()) {
+      assert.equal(recording.title, deviceTexts[index].title);
+      const identity = db => ({ listening: db.prepare('SELECT id,title FROM listenings WHERE id=?').get(recording.listeningId),
+        run: db.prepare('SELECT id,listening_id,run_no,source_lang,target_lang,state FROM listening_runs WHERE id=?').get(recording.runId),
+        segments: db.prepare('SELECT id,listening_id,run_id,sequence_no,original_text,translation_text FROM segments WHERE run_id=? ORDER BY sequence_no').all(recording.runId) });
+      const expected = identity(seed);
+      assert.equal(expected.listening?.title, recording.title); assert.equal(expected.run?.listening_id, recording.listeningId);
+      assert.deepEqual(expected.segments.map(row => row.original_text), deviceTexts[index].segments);
+      assert.deepEqual(identity(device), expected, 'Retain seeded recording identities and speech content');
+    }
+  } finally { try { device?.close(); } finally { seed.close(); } }
+}
+
 export async function readDeviceEvidence(directory) {
   const context = JSON.parse(await readFile(path.join(directory, 'context.json'), 'utf8'));
   const observations = JSON.parse(await readFile(path.join(directory, 'observations.json'), 'utf8'));
   const report = evaluateDeviceObservations(context, observations, await sourceSnapshot());
+  const invalidate = (label, error) => {
+    report.issues.push(`${label}: ${error.message}`); report.complete = false; report.reportedPassed = false;
+    if (report.manualStatus !== 'failed') report.manualStatus = 'incomplete';
+  };
+  const seed = path.join(directory, 'seed.sqlite');
   try {
     assert.equal(context.fixture.file, 'seed.sqlite');
-    const seed = path.join(directory, 'seed.sqlite'); assert.ok((await lstat(seed)).isFile());
+    assert.ok((await lstat(seed)).isFile());
     assert.equal(digest(await readFile(seed)), context.fixture.sha256, 'Fixed speech fixture changed');
-  } catch (error) {
-    report.issues.push(`fixture: ${error.message}`); report.complete = false; report.reportedPassed = false;
-    if (report.manualStatus !== 'failed') report.manualStatus = 'incomplete';
-  }
+  } catch (error) { invalidate('fixture', error); }
+  try {
+    const device = path.join(directory, 'device.sqlite'); assert.ok((await lstat(device)).isFile());
+    validateRetainedDatabase(seed, device, context.fixture.recordings);
+  } catch (error) { invalidate('device-database', error); }
   return report;
 }
