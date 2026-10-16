@@ -22,7 +22,8 @@ jobs:
   performance-smoke:
     name: History and graph measurement collector smoke
     runs-on: ubuntu-24.04
-    # Includes setup, 1-minute fixture preparation, 5-minute collection and upload.
+    # Includes setup, a 7.5-minute bounded pair deadline, and artifact upload.
+    # Same-source calibration exercises the pipeline; no approved targets, no release pass.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,13 +40,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run performance:prepare -- verification-evidence/performance smoke
-          prepared="$(find verification-evidence/performance -name prepared.json -type f)"
-          test "$(printf '%s\n' "$prepared" | wc -l)" -eq 1
-          npm run performance:collect -- "$prepared" smoke
-          report="$(find verification-evidence/performance -maxdepth 2 -name report.json -type f)"
-          test "$(printf '%s\n' "$report" | wc -l)" -eq 1
-          npm run performance:report -- "$(dirname "$report")" --clean
+          npm run performance:bounded -- . . verification-evidence/performance
+          pair="$(find verification-evidence/performance -maxdepth 2 -name pair.json -type f)"
+          test "$(printf '%s\n' "$pair" | wc -l)" -eq 1
+          npm run performance:bounded:report -- "$(dirname "$pair")"
+          node scripts/check-performance-bounded-negative.mjs "$(dirname "$pair")"
       - name: Preserve measurements including incomplete browser attempts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

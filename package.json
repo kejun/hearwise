@@ -94,7 +94,9 @@
     "preperformance:collect": "npm run build",
     "performance:collect": "node scripts/collect-performance.mjs",
     "performance:report": "node scripts/verify-performance-report.mjs",
-    "performance:compare": "node scripts/compare-performance.mjs"
+    "performance:compare": "node scripts/compare-performance.mjs",
+    "performance:bounded": "node scripts/run-performance-bounded.mjs",
+    "performance:bounded:report": "node scripts/verify-performance-bounded.mjs"
   },
   "dependencies": {
     "cytoscape": "3.34.3",
