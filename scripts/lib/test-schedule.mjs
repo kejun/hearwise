@@ -26,6 +26,8 @@ const exclusiveFiles = new Set([
   'test/semantic-quality-realtime-capture.test.mjs',
   'test/semantic-quality-realtime-corpus.test.mjs',
   'test/semantic-quality-provider-pair.test.mjs',
+  'test/semantic-quality-batch-integration.test.mjs',
+  'test/semantic-quality-batch-failure.test.mjs',
   'test/quality-offline-evidence.test.mjs',
   'test/trace-business-evidence.test.mjs',
   'test/release-atomicity-evidence.test.mjs',

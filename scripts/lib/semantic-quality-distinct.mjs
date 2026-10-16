@@ -15,6 +15,9 @@ import { createSemanticReviewTemplate, assessSemanticReview } from './semantic-q
 import { semanticFixtureSample } from '../../test-support/semantic-quality-fixture.mjs';
 import { SEMANTIC_PROVIDER_PROFILE, semanticProviderBudget, assertSemanticProviderApproval, validateSemanticProviderApprovalBinding } from './semantic-quality-provider-policy.mjs';
 import { createSemanticProviderBridge, assertSemanticProviderSafeInput } from './semantic-quality-provider-bridge.mjs';
+import { validateSemanticBatchPlan, semanticBatchTrials, semanticBatchBudget, validateBatchApprovals } from './semantic-quality-batch-plan.mjs';
+import { assessSemanticBatch } from './semantic-quality-batch-assessment.mjs';
+const batch = plan => plan?.kind === 'semantic-corpus-batch-plan';
 const worker = fileURLToPath(new URL('./semantic-quality-source-worker.mjs', import.meta.url));
 const same = (a,b) => assert.equal(contractDigest(a), contractDigest(b));
 const json = async file => {const bytes=await readFile(file);assert.ok(bytes.length<=64*1024*1024,'EVIDENCE_FILE_TOO_LARGE');return JSON.parse(bytes);};
@@ -45,13 +48,13 @@ function execute(root, input, signal) {
     });
   });
 }
-async function manifests(checkouts, signal) {
+async function manifests(checkouts, signal, corpusBatchPlan) {
   assert.ok(checkouts && roles.every(role => typeof checkouts[role] === 'string' && checkouts[role]), 'TWO_EXPLICIT_CHECKOUTS_REQUIRED');
   const roots = Object.fromEntries(await Promise.all(roles.map(async role => [role, await realpath(checkouts[role])])));
   assert.notEqual(roots.baseline, roots.candidate, 'INDEPENDENT_CHECKOUTS_REQUIRED');
   assert.ok(!roots.baseline.startsWith(roots.candidate + path.sep) && !roots.candidate.startsWith(roots.baseline + path.sep));
   const values = {};
-  const probes = await Promise.allSettled(roles.map(role => execute(roots[role], { mode: 'probe' }, signal)));
+  const probes = await Promise.allSettled(roles.map(role => execute(roots[role], { mode: 'probe', ...(corpusBatchPlan?{corpusBatchPlan}:{}) }, signal)));
   for (const [index, role] of roles.entries()) { if (probes[index].status === 'rejected') throw probes[index].reason; values[role] = probes[index].value; }
   assert.notEqual(values.baseline.source.sha, values.candidate.source.sha, 'DISTINCT_COMMITS_REQUIRED');
   assert.notEqual(values.baseline.source.tree, values.candidate.source.tree, 'DISTINCT_TREES_REQUIRED');
@@ -68,7 +71,8 @@ function planFor(directory, source, frozenAt, sources, reviewers) {
   }
   return { ...base, comparison: 'distinct-source-rehearsal', sources, reviewers };
 }
-export async function runSemanticDistinctOffline(directory, { checkouts, reviewers, corpusPlan, providerEndpoint, signal } = {}) {
+export async function runSemanticDistinctOffline(directory, { checkouts, reviewers, corpusPlan, providerEndpoint, signal, release=false } = {}) {
+  if(batch(corpusPlan)) return runBatch(directory,{checkouts,reviewers,corpusPlan,providerEndpoint,signal,release});
   if (corpusPlan) return runCorpusPair(directory, { checkouts, reviewers, corpusPlan, providerEndpoint, signal });
   await assertHarnessRoot(); directory = path.resolve(directory);
   directory = path.join(await realpath(path.dirname(directory)), path.basename(directory));
@@ -104,6 +108,7 @@ export async function runSemanticDistinctOffline(directory, { checkouts, reviewe
   await write(path.join(directory, 'paired.json'), report); return report;
 }
 export async function inspectSemanticDistinctOffline(directory, { checkouts, reviewers, corpusPlan, release = false, signal } = {}) {
+  if(batch(corpusPlan)) return inspectBatch(directory,{checkouts,reviewers,corpusPlan,release,signal});
   if (corpusPlan) return inspectCorpusPair(directory, { checkouts, reviewers, corpusPlan, release, signal });
   directory = path.resolve(directory);
   try {
@@ -266,7 +271,8 @@ async function inspectCorpusPair(directory,{checkouts,reviewers,corpusPlan,relea
 
 function providerProposal(base,testTransport) {
   if(testTransport)assert.equal(testTransport.profile,'semantic-provider-test-only-v1','TEST_TRANSPORT_INVALID');
-  semanticProviderBudget(base.corpusPlan);
+  if(batch(base.corpusPlan))for(const trial of semanticBatchTrials(base.corpusPlan))semanticProviderBudget(trial.plan);
+  else semanticProviderBudget(base.corpusPlan);
   for(const role of roles)for(const kind of ['knowledge','relation'])assert.equal(base.sources[role].models[kind],SEMANTIC_PROVIDER_PROFILE.model,'PROVIDER_SOURCE_MODEL_MISMATCH');
   return {schemaVersion:1,kind:'semantic-provider-pair-proposal',evidenceKind:testTransport?'test-only':'actual-upstream',
     profile:SEMANTIC_PROVIDER_PROFILE,directory:base.directory,source:base.source,sources:base.sources,corpusPlan:base.corpusPlan,sharedBudget:base.budget,reviewers:base.reviewers};
@@ -275,8 +281,8 @@ export async function planSemanticProviderPair(directory,{checkouts,reviewers,co
   await assertHarnessRoot();directory=await corpusPairOutput(directory);
   const source=await qualitySources();
   if(release)assert.equal(source.dirty,false,'RELEASE_SOURCE_DIRTY');
-  const sources=await manifests(checkouts,signal);
-  const proposal=providerProposal(corpusPairPlan(directory,source,sources,corpusPlan,reviewers),testTransport);
+  const sources=await manifests(checkouts,signal,batch(corpusPlan)?corpusPlan:undefined);
+  const proposal=providerProposal((batch(corpusPlan)?batchBase:corpusPairPlan)(directory,source,sources,corpusPlan,reviewers),testTransport);
   return {requestDigest:contractDigest(proposal),proposal,qualityStatus:'not_run',qualityEvaluated:false,releaseEligible:false,liveCalls:0,invoiceGuarantee:false};
 }
 export async function collectSemanticProviderPair(directory,options={}) {
@@ -288,16 +294,17 @@ export async function collectSemanticProviderPair(directory,options={}) {
   assertSemanticProviderSafeInput(options.key,proposal);
   assertSemanticProviderApproval({approval:options.approval,requestDigest,expiresAt:proposal.corpusPlan.budget.expiresAt});
   const approval=validateSemanticProviderApprovalBinding({approval:options.approval,requestDigest,expiresAt:proposal.corpusPlan.budget.expiresAt});
-  return runCorpusPair(directory,{...options,provider:{proposal,requestDigest,approval,key:options.key,testTransport:options.testTransport}});
+  return (batch(options.corpusPlan)?runBatch:runCorpusPair)(directory,{...options,provider:{proposal,requestDigest,approval,key:options.key,testTransport:options.testTransport}});
 }
 export async function inspectSemanticProviderPair(directory,options={}) {
-  return inspectCorpusPair(directory,{...options,providerEvidence:true});
+  return (batch(options.corpusPlan)?inspectBatch:inspectCorpusPair)(directory,{...options,providerEvidence:true});
 }
 async function inspectProviderTranscript(directory,provider,captures,snapshot,run) {
   const tape=await json(path.join(directory,'provider.json'));
   same({schemaVersion:tape.schemaVersion,requestDigest:tape.requestDigest,evidenceKind:tape.evidenceKind},{schemaVersion:1,requestDigest:provider.requestDigest,evidenceKind:provider.evidenceKind});
   same(run.provider,{requestDigest:provider.requestDigest,evidenceKind:provider.evidenceKind});
-  const calls=roles.flatMap(role=>captures[role].calls.map((call,index)=>({role,call,binding:captures[role].transport.budgetBindings[index]})));
+  const entries=Array.isArray(captures)?captures:roles.map(role=>({role,capture:captures[role]}));
+  const calls=entries.flatMap(({role,capture})=>capture.calls.map((call,index)=>({role,call,binding:capture.transport.budgetBindings[index]})));
   assert.equal(tape.rows.length,calls.length);assert.equal(tape.rows.length,snapshot.attempts.length);
   for(const [index,row]of tape.rows.entries()){
     const {role,call,binding}=calls[index],attempt=snapshot.attempts[index];
@@ -309,4 +316,112 @@ async function inspectProviderTranscript(directory,provider,captures,snapshot,ru
   }
   assert.equal(run.liveCalls,provider.evidenceKind==='actual-upstream'?tape.rows.length:0);
   assert.equal(run.testTransportCalls,provider.evidenceKind==='test-only'?tape.rows.length:0);
+}
+
+// Batch v2 reuses the single-trial production collector and empty-database replay.
+// One ledger owns both role claims and every sample/repetition; no per-item purse.
+function batchBase(directory,source,sources,corpusPlan,reviewers) {
+  corpusPlan=validateSemanticBatchPlan(corpusPlan);same(reviewers,corpusPlan.reviewers);
+  for(const role of roles){
+    assert.equal(sources[role].semanticCorpusBatchProtocolVersion,1,'BATCH_SOURCE_PROTOCOL_REQUIRED');
+    assert.ok(directory!==sources[role].root&&!directory.startsWith(sources[role].root+path.sep),'OUTPUT_OUTSIDE_TARGETS_REQUIRED');
+  }
+  return {schemaVersion:2,kind:'semantic-corpus-batch-freeze',mode:'offline',comparison:'distinct-source-batch',directory,source,sources,corpusPlan,budget:semanticBatchBudget(corpusPlan),reviewers,...boundary};
+}
+function batchPrefix(snapshot,trials,trial,after=false) {
+  const value=structuredClone(snapshot),limit=trial.index+(after?1:0),allowed=new Set(trials.slice(0,limit).map(x=>x.trialId));
+  value.attempts=value.attempts.filter(row=>allowed.has(row.trial_id));
+  value.runs=value.runs.slice(0,roles.indexOf(trial.role)+1);
+  const current=value.runs.at(-1);current.state='running';current.finished_at=null;
+  value.reservedMicros=value.attempts.reduce((n,row)=>n+row.reserved_micros,0);return value;
+}
+function batchPair(directory,plan,trial,before) {
+  return {role:trial.role,ledgerPath:path.join(directory,'budget.sqlite'),budget:plan.budget,freezeDigest:contractDigest(plan),before,
+    batch:{plan:plan.corpusPlan,trialIndex:trial.index,roleDirectory:path.join(directory,trial.role)}};
+}
+function batchCaptureRow(trial,complete) {return {role:trial.role,sampleId:trial.sampleId,repetition:trial.repetition,trialId:trial.trialId,directory:trial.directory,complete};}
+async function runBatch(directory,{checkouts,reviewers,corpusPlan,providerEndpoint,signal,provider,release=false}) {
+  await assertHarnessRoot();corpusPlan=validateSemanticBatchPlan(corpusPlan);same(reviewers,corpusPlan.reviewers);
+  const endpoint=provider?null:corpusEndpoint(providerEndpoint);assert.ok(Date.now()<Date.parse(corpusPlan.budget.expiresAt),'BUDGET_APPROVAL_EXPIRED');
+  directory=await corpusPairOutput(directory);const sourceStart=await qualitySources();if(release)assert.equal(sourceStart.dirty,false,'RELEASE_SOURCE_DIRTY');
+  const sources=await manifests(checkouts,signal,corpusPlan),base=batchBase(directory,sourceStart,sources,corpusPlan,reviewers);
+  if(provider)same(provider.proposal,providerProposal(base,provider.testTransport));
+  const frozenAt=new Date().toISOString();
+  if(provider&&!provider.testTransport)assert.equal(validateBatchApprovals(corpusPlan,frozenAt).complete,true,'BATCH_PRE_APPROVALS_REQUIRED');
+  const plan={...base,frozenAt,...(provider?{mode:'provider',provider:{...provider.proposal,requestDigest:provider.requestDigest,approval:provider.approval}}:{})};
+  const freezeDigest=contractDigest(plan),trials=semanticBatchTrials(corpusPlan);
+  await mkdir(directory,{recursive:false,mode:0o700});await write(path.join(directory,'freeze.json'),plan);
+  const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),corpusPlan.batchTimeoutMs),combined=signal?AbortSignal.any([signal,abort.signal]):abort.signal;
+  let ledger,activeRole,errorCode,bridge;const roleSnapshots=[],providerRows=[],captures=[];
+  try {
+    ledger=openSemanticQualityBudget(path.join(directory,'budget.sqlite'),plan.budget,freezeDigest);
+    for(const role of roles){
+      combined.throwIfAborted();const roleDirectory=path.join(directory,role);await mkdir(roleDirectory,{mode:0o700});
+      ledger.claimRun({role,sourceSha:sources[role].source.sha,directory:roleDirectory,expectedSnapshot:ledger.snapshot()});activeRole=role;
+      for(const trial of trials.filter(x=>x.role===role)){
+        combined.throwIfAborted();const trialDirectory=path.join(directory,trial.directory),pair=batchPair(directory,plan,trial,ledger.snapshot());
+        if(release){const current=await qualitySources();assert.equal(current.dirty,false,'RELEASE_SOURCE_DIRTY');same(current,sourceStart);}
+        if(provider)bridge=await createSemanticProviderBridge({approval:provider.approval,requestDigest:provider.requestDigest,expiresAt:corpusPlan.budget.expiresAt,key:provider.key,plan:trial.plan,source:sources[role],role,trialId:trial.trialId,snapshot:()=>ledger.snapshot(),signal:combined,testTransport:provider.testTransport});
+        try{await execute(sources[role].root,{mode:'corpus-capture',manifest:sources[role],directory:trialDirectory,corpusPlan:trial.plan,pair,providerEndpoint:bridge?.endpoint||endpoint,...(provider?{realtime:true,providerCapability:bridge.capability}:{})},combined);}
+        finally{if(bridge){await bridge.close();providerRows.push(...bridge.rows);bridge=null;}}
+        const item=await json(path.join(trialDirectory,'worker.json'));assert.equal(item.complete,true);same(item.snapshot,ledger.snapshot());captures.push(batchCaptureRow(trial,true));
+      }
+      ledger.finishRun(role,true);activeRole=null;roleSnapshots.push({role,snapshot:ledger.snapshot()});
+    }
+    same(await manifests(checkouts,combined,corpusPlan),sources);
+  }catch{errorCode=combined.aborted?'SEMANTIC_BATCH_CANCELLED':'SEMANTIC_BATCH_INCOMPLETE';}
+  finally{clearTimeout(timer);if(ledger){try{if(activeRole)ledger.finishRun(activeRole,false);}finally{ledger.close();}}}
+  let sourceEnd=null;try{sourceEnd=await qualitySources();same(sourceStart,sourceEnd);}catch{errorCode='SEMANTIC_SOURCE_CHANGED_OR_UNREADABLE';}
+  const report={schemaVersion:2,kind:'semantic-corpus-batch-run',mode:provider?'provider':'offline',comparison:base.comparison,...boundary,
+    sourceStart,sourceEnd,startedAt:frozenAt,finishedAt:new Date().toISOString(),freezeDigest,complete:!errorCode,errorCode,captures,roleSnapshots};
+  if(provider){report.provider={requestDigest:provider.requestDigest,evidenceKind:provider.proposal.evidenceKind};report.liveCalls=provider.testTransport?0:providerRows.filter(x=>x.forwarded).length;report.testTransportCalls=provider.testTransport?providerRows.filter(x=>x.forwarded).length:0;await write(path.join(directory,'provider.json'),{schemaVersion:1,...report.provider,rows:providerRows});}
+  await write(path.join(directory,'paired.json'),report);return report;
+}
+async function inspectBatch(directory,{checkouts,reviewers,corpusPlan,release=false,signal,providerEvidence=false,testTransport}) {
+  let timer;
+  try{
+    await assertHarnessRoot();corpusPlan=validateSemanticBatchPlan(corpusPlan);same(reviewers,corpusPlan.reviewers);directory=await realpath(directory);
+    const abort=new AbortController();timer=setTimeout(()=>abort.abort(),corpusPlan.batchTimeoutMs);signal=signal?AbortSignal.any([signal,abort.signal]):abort.signal;
+    // Reject an incomplete matrix before spawning either trusted source worker.
+    const trials=semanticBatchTrials(corpusPlan),run=await json(path.join(directory,'paired.json'));
+    assert.equal(run.complete,true);same(run.captures,trials.map(x=>batchCaptureRow(x,true)));
+    const source=await qualitySources();if(release)assert.equal(source.dirty,false,'RELEASE_SOURCE_DIRTY');
+    const saved=await json(path.join(directory,'freeze.json')),sources=await manifests(checkouts,signal,corpusPlan),base=batchBase(directory,source,sources,corpusPlan,reviewers);
+    assert.equal(new Date(saved.frozenAt).toISOString(),saved.frozenAt);assert.ok(Date.parse(saved.frozenAt)<=Date.now());let provider;
+    if(providerEvidence){provider=saved.provider;assert.ok(provider);const proposal=providerProposal(base,testTransport),requestDigest=contractDigest(proposal);same({...provider,approval:undefined,requestDigest:undefined},{...proposal,approval:undefined,requestDigest:undefined});assert.equal(provider.requestDigest,requestDigest);validateSemanticProviderApprovalBinding({approval:provider.approval,requestDigest,expiresAt:corpusPlan.budget.expiresAt});}
+    const plan={...base,frozenAt:saved.frozenAt,...(provider?{mode:'provider',provider}:{})};same(saved,plan);
+    const freezeDigest=contractDigest(plan);
+    assert.equal(run.schemaVersion,2);assert.equal(run.kind,'semantic-corpus-batch-run');assert.equal(run.mode,provider?'provider':'offline');assert.equal(run.comparison,base.comparison);
+    for(const [key,value]of Object.entries(boundary))if(!provider||key!=='liveCalls')same(run[key],value);
+    same(run.sourceStart,source);same(run.sourceEnd,source);assert.equal(run.freezeDigest,freezeDigest);assert.equal(run.complete,true);assert.equal(run.errorCode,undefined);
+    assert.equal(run.startedAt,plan.frozenAt);assert.ok(Date.parse(run.finishedAt)>=Date.parse(run.startedAt)&&Date.parse(run.finishedAt)<=Date.now());
+    same(run.captures,trials.map(x=>batchCaptureRow(x,true)));
+    const snapshot=corpusLedger(directory,plan.budget,freezeDigest),trialIndex=new Map(trials.map(x=>[x.trialId,x.index]));
+    same(snapshot.runs.map(({role,source_sha,directory,state})=>({role,source_sha,directory,state})),roles.map(role=>({role,source_sha:sources[role].source.sha,directory:path.join(directory,role),state:'complete'})));
+    const [baseline,candidate]=snapshot.runs;assert.ok(Date.parse(baseline.started_at)>=Date.parse(plan.frozenAt)&&Date.parse(candidate.started_at)>=Date.parse(baseline.finished_at)&&Date.parse(candidate.finished_at)<=Date.parse(run.finishedAt));
+    let position=-1;const counts={knowledge:0,relation:0},byTrial={};
+    for(const [index,row]of snapshot.attempts.entries()){
+      assert.equal(row.id,index+1);assert.ok(trialIndex.has(row.trial_id));const current=trialIndex.get(row.trial_id);assert.ok(current>=position);position=current;
+      assert.ok(['knowledge','relation'].includes(row.kind));assert.equal(row.reserved_micros,plan.budget.attemptMicros[row.kind]);assert.equal(row.observation_json,null);
+      assert.ok(++counts[row.kind]<=plan.budget.maxAttempts[row.kind]);const key=`${row.trial_id}:${row.kind}`;byTrial[key]=(byTrial[key]||0)+1;assert.ok(byTrial[key]<=plan.budget.trialLimits[row.trial_id][row.kind]);
+    }
+    assert.ok(Number.isSafeInteger(snapshot.reservedMicros)&&snapshot.reservedMicros<=plan.budget.ceilingMicros);
+    same(run.roleSnapshots,roles.map((role,index)=>({role,snapshot:prefixFor(snapshot,index)})));
+    const assessments=[],providerCaptures=[];let previousFinish=Date.parse(plan.frozenAt);
+    for(const trial of trials){
+      signal?.throwIfAborted();const trialDirectory=path.join(directory,trial.directory),before=batchPrefix(snapshot,trials,trial),after=batchPrefix(snapshot,trials,trial,true),pair=batchPair(directory,plan,trial,before);
+      const item=await json(path.join(trialDirectory,'worker.json'));same(item.snapshot,after);
+      const result=await execute(sources[trial.role].root,{mode:'corpus-read',manifest:sources[trial.role],directory:trialDirectory,corpusPlan:trial.plan,pair,...(provider?{realtime:true}:{})},signal);assert.equal(result.infrastructurePassed,true);same(result.pair,{role:trial.role,before,after});
+      const capture=await json(path.join(trialDirectory,'capture/capture.json'));same(capture.sourceStart,sources[trial.role].source);same(capture.sourceEnd,sources[trial.role].source);same(capture.sample,trial.plan.sample);
+      const owner=snapshot.runs[roles.indexOf(trial.role)];assert.ok(Date.parse(capture.startedAt)>=Math.max(previousFinish,Date.parse(owner.started_at))&&Date.parse(capture.finishedAt)<=Date.parse(owner.finished_at));previousFinish=Date.parse(capture.finishedAt);
+      same(capture.transport.budgetBindings.map(x=>Number(x.attemptId)),snapshot.attempts.filter(x=>x.trial_id===trial.trialId).map(x=>x.id));providerCaptures.push({role:trial.role,capture});
+      let assessment;try{assessment=assessSemanticReview(capture,await json(path.join(trialDirectory,'review.json')),{reviewers});}catch{assessment={contractValid:false,complete:false};}
+      assessments.push({role:trial.role,sampleId:trial.sampleId,repetition:trial.repetition,trialId:trial.trialId,assessment});
+    }
+    if(provider)await inspectProviderTranscript(directory,provider,providerCaptures,snapshot,run);
+    same(await manifests(checkouts,signal,corpusPlan),sources);same(await qualitySources(),source);
+    const assessment=assessSemanticBatch(corpusPlan,assessments,{frozenAt:plan.frozenAt,evidenceKind:provider?.evidenceKind||'offline',infrastructurePassed:true});
+    return {schemaVersion:2,kind:'semantic-batch-summary',...boundary,...assessment,complete:true,infrastructurePassed:true,comparison:base.comparison,sources,
+      scope:{pairs:trials.length/2,captures:trials.length,attempts:snapshot.attempts.length,reservedMicros:snapshot.reservedMicros},liveCalls:run.liveCalls,testTransportCalls:run.testTransportCalls||0};
+  }catch{return {...boundary,complete:false,infrastructurePassed:false,ruleDecision:'incomplete',errorCode:'SEMANTIC_BATCH_EVIDENCE_REJECTED'};}finally{clearTimeout(timer);}
 }

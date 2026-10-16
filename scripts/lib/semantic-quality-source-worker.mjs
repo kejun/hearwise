@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { realpath, readFile, readdir, lstat, readlink } from 'node:fs/promises';
+import { realpath, readFile, lstat } from 'node:fs/promises';
+import { readdirSync, lstatSync, realpathSync, readlinkSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { qualitySources } from './quality-collector.mjs';
 import { sourceSnapshot, validBuildSource } from './runner-evidence-contract.mjs';
@@ -11,8 +12,9 @@ import { contractDigest, hashBytes } from './quality-contract.mjs';
 import { openSemanticQualityBudget } from './quality-budget.mjs';
 import { readSemanticCapture as trustedRead } from './semantic-quality-evidence.mjs';
 import { verifySyntheticPersistence } from './semantic-quality-paired.mjs';
-import { semanticCorpusBudget } from './semantic-quality-corpus-plan.mjs';
-import { collectSemanticCorpusOffline, inspectSemanticCorpusOffline } from './semantic-quality-corpus.mjs';
+import { validateSemanticCorpusPlan, semanticCorpusBudget } from './semantic-quality-corpus-plan.mjs';
+import { validateSemanticBatchPlan, semanticBatchTrials, semanticBatchBudget } from './semantic-quality-batch-plan.mjs';
+import { collectSemanticCorpusOffline, inspectSemanticCorpusOffline, validateSemanticCorpusPair } from './semantic-quality-corpus.mjs';
 import { semanticFixtureResponse } from '../../test-support/semantic-quality-fixture.mjs';
 const same = (a,b) => assert.equal(contractDigest(a), contractDigest(b));
 const root = await realpath(process.cwd());
@@ -22,27 +24,26 @@ const abort = new AbortController();
 process.on('SIGTERM', () => abort.abort()); process.on('SIGINT', () => abort.abort());
 async function dependencyDigest(directory = path.join(root, 'node_modules')) {
   const files = [];
-  async function visit(dir) {
-    const entries = (await readdir(dir, { withFileTypes: true })).sort((a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  function visit(dir) {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) await visit(full);
+      if (entry.isDirectory()) visit(full);
       else files.push(full);
     }
   }
-  await visit(directory);
-  // Bound filesystem concurrency without caching bytes across either manifest.
-  // Each role still hashes every installed file before and after execution.
-  const rows = new Array(files.length); let next = 0;
-  await Promise.all(Array.from({ length: Math.min(16, files.length) }, async () => {
-    while (next < files.length) {
-      const index = next++, full = files[index], stat = await lstat(full), relative = path.relative(root, full);
-      if (stat.isSymbolicLink()) {
-        assert.ok((await realpath(full)).startsWith(path.join(root, 'node_modules') + path.sep), 'BORROWED_DEPENDENCY');
-        rows[index] = [relative, 'link', await readlink(full)];
-      } else { assert.ok(stat.isFile()); rows[index] = [relative, stat.mode & 0o777, hashBytes(await readFile(full))]; }
+  visit(directory);
+  // Reread every installed byte on each manifest. Synchronous filesystem calls
+  // avoid per-file promise overhead; no bytes or hashes cross manifest boundaries.
+  const rows = files.map(full => {
+    const stat = lstatSync(full), relative = path.relative(root, full);
+    if (stat.isSymbolicLink()) {
+      assert.ok(realpathSync(full).startsWith(path.join(root, 'node_modules') + path.sep), 'BORROWED_DEPENDENCY');
+      return [relative, 'link', readlinkSync(full)];
     }
-  }));
+    assert.ok(stat.isFile());
+    return [relative, stat.mode & 0o777, hashBytes(readFileSync(full))];
+  });
   return contractDigest(rows);
 }
 async function manifest() {
@@ -61,20 +62,46 @@ async function manifest() {
   const source = await qualitySources(), build = await sourceSnapshot();
   assert.equal(source.dirty, false, 'CLEAN_SOURCE_REQUIRED'); assert.ok(validBuildSource(build), 'EXACT_BUILD_REQUIRED');
   const k = await local('knowledge.mjs'), r = await local('relations.mjs');
-  return { root, source, build, dependencies, dependencyDigest: await dependencyDigest(), profile: { knowledgeModel: k.KNOWLEDGE_MODEL, relationModel: r.RELATION_MODEL, knowledgePrompt: k.SYSTEM_PROMPT_V2, knowledgeRepairPrompt: k.knowledgeRepairRequestMessages({},[])[0].content, relationPrompt: r.RELATION_SYSTEM_PROMPT }, models: { knowledge: k.KNOWLEDGE_MODEL, relation: r.RELATION_MODEL,
+  let hasCorpus=false;
+  try { await lstat(path.join(root,'scripts/lib/semantic-quality-corpus.mjs')); hasCorpus=true; }
+  catch(error) { if(error.code!=='ENOENT')throw error; }
+  const corpus=hasCorpus?await local('scripts/lib/semantic-quality-corpus.mjs'):undefined;
+  const protocol=corpus?.semanticCorpusBatchProtocolVersion;
+  return { root, source, build, dependencies, dependencyDigest: await dependencyDigest(), ...(protocol===undefined?{}:{semanticCorpusBatchProtocolVersion:protocol}), profile: { knowledgeModel: k.KNOWLEDGE_MODEL, relationModel: r.RELATION_MODEL, knowledgePrompt: k.SYSTEM_PROMPT_V2, knowledgeRepairPrompt: k.knowledgeRepairRequestMessages({},[])[0].content, relationPrompt: r.RELATION_SYSTEM_PROMPT }, models: { knowledge: k.KNOWLEDGE_MODEL, relation: r.RELATION_MODEL,
     knowledgeContract: k.CONTRACT_REVISION, relationContract: r.RELATION_CONTRACT_VERSION } };
+}
+async function verifyBatchPlan(plan,source) {
+  assert.equal(source.semanticCorpusBatchProtocolVersion,1,'CORPUS_BATCH_CAPABILITY_REQUIRED');
+  const targetPlan=await local('scripts/lib/semantic-quality-corpus-plan.mjs'),targetBatch=await local('scripts/lib/semantic-quality-batch-plan.mjs');
+  const targetCorpus=await local('scripts/lib/semantic-quality-corpus.mjs');
+  assert.equal(targetCorpus.semanticCorpusBatchProtocolVersion,1,'CORPUS_BATCH_CAPABILITY_REQUIRED');
+  same(targetBatch.validateSemanticBatchPlan(plan),validateSemanticBatchPlan(plan));
+  const trials=semanticBatchTrials(plan);same(targetBatch.semanticBatchTrials(plan),trials);
+  same(targetBatch.semanticBatchBudget(plan),semanticBatchBudget(plan));
+  for(const trial of trials.filter(row=>row.role==='baseline'&&row.repetition===0)){
+    same(targetPlan.validateSemanticCorpusPlan(trial.plan),validateSemanticCorpusPlan(trial.plan));
+    same(targetPlan.semanticCorpusBudget(trial.plan),semanticCorpusBudget(trial.plan));
+  }
+  return targetCorpus;
 }
 process.once('message', async input => {
   try {
     const before = await manifest();
-    if (input.mode === 'probe') { await send({ ok: true, value: before }); return; }
+    if (input.mode === 'probe') { if(input.corpusBatchPlan!==undefined)await verifyBatchPlan(input.corpusBatchPlan,before); await send({ ok: true, value: before }); return; }
     same(before, input.manifest);
     if (['corpus-capture','corpus-read'].includes(input.mode)) {
       const targetPlan = await local('scripts/lib/semantic-quality-corpus-plan.mjs');
       same(targetPlan.semanticCorpusBudget(input.corpusPlan), semanticCorpusBudget(input.corpusPlan));
+      let collect=collectSemanticCorpusOffline;
+      if(input.pair?.batch){
+        const targetCorpus=await verifyBatchPlan(input.pair.batch.plan,before);
+        const context={directory:input.directory,source:before.source};
+        same(targetCorpus.validateSemanticCorpusPair(input.pair,input.corpusPlan,context),validateSemanticCorpusPair(input.pair,input.corpusPlan,context));
+        collect=targetCorpus.collectSemanticCorpusOffline;
+      }
       const options = { plan: input.corpusPlan, pair: input.pair, executionRoot: root, signal: abort.signal, release: true, realtime: input.realtime === true, providerCapability: input.providerCapability };
       const result = input.mode === 'corpus-capture'
-        ? await collectSemanticCorpusOffline(input.directory, { ...options, providerEndpoint: input.providerEndpoint })
+        ? await collect(input.directory, { ...options, providerEndpoint: input.providerEndpoint })
         : await inspectSemanticCorpusOffline(input.directory, options);
       assert.equal(result.complete, true, 'CORPUS_INCOMPLETE');
       same(await manifest(), before); await send({ ok: true, value: result }); return;

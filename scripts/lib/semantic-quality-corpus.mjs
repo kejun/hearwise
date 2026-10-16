@@ -13,9 +13,11 @@ import { qualitySources } from './quality-collector.mjs';
 import { contractDigest, hashBytes } from './quality-contract.mjs';
 import { semanticDatabase, semanticUnits } from './semantic-quality-capture.mjs';
 import { validateSemanticCorpusPlan, semanticCorpusBudget } from './semantic-quality-corpus-plan.mjs';
+import { semanticBatchTrials, semanticBatchBudget } from './semantic-quality-batch-plan.mjs';
 import { openSemanticQualityBudget } from './quality-budget.mjs';
 import { createSemanticReviewTemplate, assessSemanticReview } from './semantic-quality-review.mjs';
 import { closeServer, stopChild } from '../../test-support/lifecycle.mjs';
+export const semanticCorpusBatchProtocolVersion=1;
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const boundary={qualityStatus:'not_run',qualityEvaluated:false,fullQualityAcceptance:false,releaseEligible:false,liveCalls:0};
 const same=(a,b)=>assert.equal(contractDigest(a),contractDigest(b));
@@ -57,21 +59,34 @@ function objectKeys(value,expected){
   for(const key of keys){const descriptor=Object.getOwnPropertyDescriptor(value,key);assert.ok(expected.includes(key)&&descriptor.enumerable&&Object.hasOwn(descriptor,'value'),'CORPUS_PAIR_INVALID');}
 }
 function timestamp(value){assert.equal(typeof value,'string');assert.ok(Number.isFinite(Date.parse(value)));assert.equal(new Date(value).toISOString(),value);return Date.parse(value);}
-function snapshotRows(snapshot,pair,plan){
+function batchContext(pair,plan){
+  if(!Object.hasOwn(pair,'batch'))return undefined;
+  objectKeys(pair.batch,['plan','trialIndex','roleDirectory']);
+  const trials=semanticBatchTrials(pair.batch.plan);
+  assert.ok(Number.isSafeInteger(pair.batch.trialIndex)&&!Object.is(pair.batch.trialIndex,-0)&&pair.batch.trialIndex>=0&&pair.batch.trialIndex<trials.length,'CORPUS_PAIR_TRIAL_INVALID');
+  const trial=trials[pair.batch.trialIndex];assert.equal(trial.role,pair.role);same(trial.plan,plan);
+  const roleDirectory=pair.batch.roleDirectory;
+  assert.equal(typeof roleDirectory,'string');assert.ok(path.isAbsolute(roleDirectory));assert.equal(path.resolve(roleDirectory),roleDirectory);
+  return {trials,trial,budget:semanticBatchBudget(pair.batch.plan)};
+}
+function snapshotRows(snapshot,pair,plan,batch){
   objectKeys(snapshot,['id','currency','binding','freezeDigest','ceilingMicros','reservedMicros','attempts','runs']);
   const ledger=openSemanticQualityBudget(':memory:',pair.budget,pair.freezeDigest);
   try {const empty=ledger.snapshot();same({...snapshot,reservedMicros:0,attempts:[],runs:[]},empty);}finally{ledger.close();}
   assert.ok(Array.isArray(snapshot.attempts)&&snapshot.attempts.length<=pair.budget.maxAttempts.knowledge+pair.budget.maxAttempts.relation);
   assert.ok(Array.isArray(snapshot.runs)&&snapshot.runs.length===(pair.role==='baseline'?1:2));
   same(snapshot.runs.map(row=>row.role),pair.role==='baseline'?['baseline']:['baseline','candidate']);
-  const counts={knowledge:0,relation:0},trials={};let reserved=0;
+  const roster=batch?.trials||['baseline','candidate'].map((role,index)=>({role,index,trialId:`${role}:${plan.sample.id}:0`}));
+  const trialById=new Map(roster.map(row=>[row.trialId,row]));
+  const counts={knowledge:0,relation:0},trials={};let reserved=0,lastTrial=-1;
   for(const [index,row] of snapshot.attempts.entries()){
     objectKeys(row,['id','kind','trial_id','reserved_micros','reserved_at','observation_json']);
     assert.equal(row.id,index+1);assert.ok(['knowledge','relation'].includes(row.kind));
-    assert.ok(['baseline','candidate'].some(role=>row.trial_id===`${role}:${plan.sample.id}:0`));
-    const role=row.trial_id.split(':')[0],run=snapshot.runs.find(value=>value.role===role);assert.ok(run);
+    const trial=trialById.get(row.trial_id);assert.ok(trial,'CORPUS_PAIR_TRIAL_INVALID');
+    if(batch){assert.ok(trial.index>=lastTrial,'CORPUS_PAIR_TRIAL_ORDER_INVALID');lastTrial=trial.index;}
+    const role=trial.role,run=snapshot.runs.find(value=>value.role===role);assert.ok(run);
     assert.equal(row.reserved_micros,pair.budget.attemptMicros[row.kind]);reserved+=row.reserved_micros;
-    assert.ok(++counts[row.kind]<=pair.budget.maxAttempts[row.kind]);const key=`${role}:${row.kind}`;trials[key]=(trials[key]||0)+1;assert.ok(trials[key]<=pair.budget.maxTrialAttempts[row.kind]);
+    assert.ok(++counts[row.kind]<=pair.budget.maxAttempts[row.kind]);const key=`${row.trial_id}:${row.kind}`;trials[key]=(trials[key]||0)+1;assert.ok(trials[key]<=(batch?pair.budget.trialLimits[row.trial_id][row.kind]:pair.budget.maxTrialAttempts[row.kind]));
     assert.ok(timestamp(row.reserved_at)>=timestamp(run.started_at));if(run.finished_at!==null)assert.ok(timestamp(row.reserved_at)<=timestamp(run.finished_at));
     assert.ok(row.observation_json===null||typeof row.observation_json==='string'&&row.observation_json.length<=10000);
     if(row.observation_json!==null)JSON.parse(row.observation_json);
@@ -85,19 +100,32 @@ function snapshotRows(snapshot,pair,plan){
 }
 // Internal coordinator contract. Executable paths never come from evidence.
 export function validateSemanticCorpusPair(pair,plan,{directory,source}={}){
-  objectKeys(pair,['role','ledgerPath','budget','freezeDigest','before']);assert.ok(['baseline','candidate'].includes(pair.role));
+  const isBatch=Object.hasOwn(pair||{},'batch');
+  objectKeys(pair,['role','ledgerPath','budget','freezeDigest','before',...(isBatch?['batch']:[])]);assert.ok(['baseline','candidate'].includes(pair.role));
   assert.equal(typeof pair.ledgerPath,'string');assert.ok(path.isAbsolute(pair.ledgerPath));assert.equal(path.resolve(pair.ledgerPath),pair.ledgerPath);assert.match(pair.freezeDigest,/^[a-f0-9]{64}$/);
-  objectKeys(pair.budget,['id','currency','ceilingMicros','maxAttempts','attemptMicros','maxTrialAttempts','expiresAt']);
+  const batch=batchContext(pair,plan);
+  objectKeys(pair.budget,['id','currency','ceilingMicros','maxAttempts','attemptMicros','maxTrialAttempts','expiresAt',...(batch?['trialLimits']:[])]);
   for(const field of ['maxAttempts','attemptMicros','maxTrialAttempts'])objectKeys(pair.budget[field],['knowledge','relation']);
-  const single=semanticCorpusBudget(plan),expected={...single,maxAttempts:Object.fromEntries(Object.entries(single.maxAttempts).map(([kind,count])=>[kind,count*2]))};
-  same(pair.budget,expected);pair=structuredClone(pair);snapshotRows(pair.before,pair,plan);
-  const current=pair.before.runs.find(row=>row.role===pair.role);assert.equal(current.directory,directory);assert.equal(current.source_sha,source.sha);
-  assert.ok(pair.before.attempts.every(row=>row.trial_id===`baseline:${plan.sample.id}:0`&&pair.role==='candidate'),'CORPUS_PAIR_PREFIX_INVALID');
-  if(pair.role==='candidate'){const previous=pair.before.runs[0];assert.notEqual(previous.directory,directory);assert.ok(timestamp(previous.finished_at)<=timestamp(current.started_at));}
+  const single=batch?undefined:semanticCorpusBudget(plan),expected=batch?.budget||{...single,maxAttempts:Object.fromEntries(Object.entries(single.maxAttempts).map(([kind,count])=>[kind,count*2]))};
+  if(batch){
+    objectKeys(pair.budget.trialLimits,Object.keys(expected.trialLimits));
+    for(const limits of Object.values(pair.budget.trialLimits))objectKeys(limits,['knowledge','relation']);
+    assert.equal(directory,path.join(pair.batch.roleDirectory,path.basename(batch.trial.directory)),'CORPUS_PAIR_DIRECTORY_INVALID');
+  }
+  same(pair.budget,expected);pair=structuredClone(pair);snapshotRows(pair.before,pair,plan,batch);
+  const roleDirectory=batch?pair.batch.roleDirectory:directory;
+  const current=pair.before.runs.find(row=>row.role===pair.role);assert.equal(current.directory,roleDirectory);assert.equal(current.source_sha,source.sha);
+  const prior=new Set(batch?.trials.filter(row=>row.index<batch.trial.index).map(row=>row.trialId));
+  assert.ok(pair.before.attempts.every(row=>batch?prior.has(row.trial_id):row.trial_id===`baseline:${plan.sample.id}:0`&&pair.role==='candidate'),'CORPUS_PAIR_PREFIX_INVALID');
+  if(pair.role==='candidate'){const previous=pair.before.runs[0];assert.notEqual(previous.directory,roleDirectory);assert.ok(timestamp(previous.finished_at)<=timestamp(current.started_at));}
   return pair;
 }
 function pairBinding(pair){const {ledgerPath,...binding}=pair;return binding;}
-function validatePairAfter(snapshot,pair,plan){snapshotRows(snapshot,pair,plan);same(snapshot.runs,pair.before.runs);same(snapshot.attempts.slice(0,pair.before.attempts.length),pair.before.attempts);assert.ok(snapshot.attempts.slice(pair.before.attempts.length).every(row=>row.trial_id===`${pair.role}:${plan.sample.id}:0`));}
+function validatePairAfter(snapshot,pair,plan){
+  const batch=batchContext(pair,plan),trialId=batch?.trial.trialId||`${pair.role}:${plan.sample.id}:0`;
+  snapshotRows(snapshot,pair,plan,batch);same(snapshot.runs,pair.before.runs);same(snapshot.attempts.slice(0,pair.before.attempts.length),pair.before.attempts);
+  assert.ok(snapshot.attempts.slice(pair.before.attempts.length).every(row=>row.trial_id===trialId),'CORPUS_PAIR_SUFFIX_INVALID');
+}
 function restorePairPrefix(filename,pair){
   // Only called with a new scratch path. Initialize the trusted schema/binding,
   // then restore validated accounting rows; semantic SQLite always starts empty.

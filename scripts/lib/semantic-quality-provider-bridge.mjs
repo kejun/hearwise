@@ -54,8 +54,12 @@ export function assertSemanticProviderSafeInput(key,value) {
   assert.ok(!secretScanner(key)(value),'PROVIDER_INPUT_CONTAINS_SECRET');
 }
 
-export async function createSemanticProviderBridge({ approval, requestDigest, expiresAt, key, plan, source, role, snapshot, signal, testTransport }) {
+export async function createSemanticProviderBridge({ approval, requestDigest, expiresAt, key, plan, source, role, trialId, snapshot, signal, testTransport }) {
   assertSemanticProviderApproval({ approval, requestDigest, expiresAt });
+  if(trialId===undefined)trialId=`${role}:${plan.sample.id}:0`;
+  const trialPrefix=`${role}:${plan.sample.id}:`;
+  assert.ok(['baseline','candidate'].includes(role)&&typeof trialId==='string'&&trialId.startsWith(trialPrefix)&&
+    /^(?:0|[1-9]\d*)$/.test(trialId.slice(trialPrefix.length))&&Number.isSafeInteger(Number(trialId.slice(trialPrefix.length))),'PROVIDER_TRIAL_INVALID');
   assert.ok(!process.env.CI || testTransport, 'LIVE_PROVIDER_DISABLED_IN_CI');
   assert.ok(typeof key === 'string' && /^[a-zA-Z0-9._~+/-]{8,4096}=*$/.test(key), 'PROVIDER_KEY_REQUIRED');
   if(testTransport)assert.ok(testTransport.profile==='semantic-provider-test-only-v1'&&typeof testTransport.send==='function','TEST_TRANSPORT_INVALID');
@@ -84,7 +88,7 @@ export async function createSemanticProviderBridge({ approval, requestDigest, ex
       // ledger here; a repeated or unclaimed local request cannot spend again.
       const state=snapshot(),last=state.attempts.at(-1),run=state.runs.find(x=>x.role===role);
       assert.ok(run?.state==='running'&&run.source_sha===source.source.sha);
-      assert.ok(last&&last.kind===kind&&last.trial_id===`${role}:${plan.sample.id}:0`&&!used.has(last.id));
+      assert.ok(last&&last.kind===kind&&last.trial_id===trialId&&!used.has(last.id));
       assert.equal(last.reserved_micros,SEMANTIC_PROVIDER_PROFILE.attemptMicros);assert.ok(state.reservedMicros<=state.ceilingMicros);
       check();combined.throwIfAborted();used.add(last.id);
       row={role,kind,attemptId:String(last.id),trialId:last.trial_id,requestWire:wire,requestSha256:hashBytes(wire),startedAt:new Date().toISOString(),forwarded:false};rows.push(row);

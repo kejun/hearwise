@@ -1,0 +1,243 @@
+{
+  "schemaVersion": 2,
+  "kind": "semantic-corpus-batch-plan",
+  "samples": [
+    {
+      "id": "qualified",
+      "kind": "offline-text-corpus",
+      "segments": [
+        "Orion reported that Atlas did not acquire Nova for 15 dollars. If approved, Atlas plans to acquire Nova for 20 dollars. Orion is a separate publisher."
+      ],
+      "ingestionBatchSize": 1,
+      "gold": {
+        "approved": false,
+        "variants": [
+          {
+            "id": "expected",
+            "units": [
+              {
+                "id": "atlas",
+                "kind": "entity",
+                "meaning": "Atlas is a distinct named entity",
+                "alternatives": [
+                  "Atlas is independently mentioned"
+                ],
+                "sourceIndexes": [
+                  0
+                ]
+              },
+              {
+                "id": "nova",
+                "kind": "entity",
+                "meaning": "Nova is a distinct named entity",
+                "alternatives": [
+                  "Nova is independently mentioned"
+                ],
+                "sourceIndexes": [
+                  0
+                ]
+              },
+              {
+                "id": "orion",
+                "kind": "entity",
+                "meaning": "Orion is a distinct named entity",
+                "alternatives": [
+                  "Orion is independently mentioned"
+                ],
+                "sourceIndexes": [
+                  0
+                ]
+              },
+              {
+                "id": "atlas-fact",
+                "kind": "fact",
+                "owner": "atlas",
+                "meaning": "Atlas did not acquire Nova for 15 dollars; acquisition for 20 dollars is planned only if approved.",
+                "alternatives": [],
+                "sourceIndexes": [
+                  0
+                ]
+              },
+              {
+                "id": "nova-fact",
+                "kind": "fact",
+                "owner": "nova",
+                "meaning": "Nova is independently mentioned.",
+                "alternatives": [],
+                "sourceIndexes": [
+                  0
+                ]
+              },
+              {
+                "id": "orion-fact",
+                "kind": "fact",
+                "owner": "orion",
+                "meaning": "Orion is independently mentioned.",
+                "alternatives": [],
+                "sourceIndexes": [
+                  0
+                ]
+              },
+              {
+                "id": "denied-payment",
+                "kind": "relation",
+                "subject": "atlas",
+                "object": "nova",
+                "meaning": "Atlas did not acquire Nova for 15 dollars.",
+                "alternatives": [],
+                "sourceIndexes": [
+                  0
+                ]
+              },
+              {
+                "id": "conditional-plan",
+                "kind": "relation",
+                "subject": "atlas",
+                "object": "nova",
+                "meaning": "Only if approved, Atlas plans a 20-dollar acquisition of Nova.",
+                "alternatives": [],
+                "sourceIndexes": [
+                  0
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "empty",
+      "kind": "offline-text-corpus",
+      "segments": [
+        "Good morning. Thank you for listening."
+      ],
+      "ingestionBatchSize": 1,
+      "gold": {
+        "approved": false,
+        "variants": [
+          {
+            "id": "expected",
+            "units": []
+          }
+        ]
+      }
+    }
+  ],
+  "repetitions": 2,
+  "reviewers": [
+    "synthetic contract oracle (not a human reviewer)"
+  ],
+  "budget": {
+    "id": "replace-with-approved-budget-id",
+    "currency": "CNY",
+    "ceilingMicros": 1,
+    "attemptMicros": {
+      "knowledge": 1147369,
+      "relation": 1147369
+    },
+    "expiresAt": "2000-01-01T00:00:00.000Z"
+  },
+  "limits": {
+    "maxRequestBytes": 32768,
+    "maxResponseBytes": 16384,
+    "requestTimeoutMs": 3000,
+    "totalTimeoutMs": 15000
+  },
+  "batchTimeoutMs": 180000,
+  "corpus": {
+    "id": "synthetic-batch-corpus",
+    "version": 1,
+    "sourceKind": "synthetic",
+    "acceptanceSplitFrozen": false
+  },
+  "assessment": {
+    "method": "manual-unit-matches-v1",
+    "matchingPolicy": "one-complete-variant-same-pair-v1",
+    "aggregation": "all-pairs-and-micro-global-v1",
+    "directions": {
+      "precision": "higher-is-better",
+      "recall": "higher-is-better",
+      "severeErrors": "lower-is-better"
+    },
+    "emptyPolicy": "valid-empty-null-v1",
+    "thresholds": {
+      "entity": {
+        "precisionMin": null,
+        "recallMin": null,
+        "precisionRegressionMax": null,
+        "recallRegressionMax": null
+      },
+      "fact": {
+        "precisionMin": null,
+        "recallMin": null,
+        "precisionRegressionMax": null,
+        "recallRegressionMax": null
+      },
+      "relation": {
+        "precisionMin": null,
+        "recallMin": null,
+        "precisionRegressionMax": null,
+        "recallRegressionMax": null
+      }
+    },
+    "severeErrorTypes": [
+      "number",
+      "negation",
+      "condition",
+      "attribution",
+      "merge",
+      "duplicate",
+      "unsupported"
+    ],
+    "severeErrorMax": 0,
+    "criticalGoldIds": {
+      "qualified": {
+        "expected": []
+      },
+      "empty": {
+        "expected": []
+      }
+    }
+  },
+  "approvals": {
+    "corpusRights": {
+      "approved": false,
+      "reviewedBy": null,
+      "reviewedAt": null,
+      "reference": null
+    },
+    "acceptanceSplit": {
+      "approved": false,
+      "reviewedBy": null,
+      "reviewedAt": null,
+      "reference": null
+    },
+    "gold": [
+      {
+        "sampleId": "qualified",
+        "sampleDigest": "693ca3d30228c41121ec51a80f329994c0db91345a7bdccfee88c5bcb020e926",
+        "goldDigest": "61023d4a738e8bbbfd457931d8fa453d27e67aa229c5b21354666c54a4fd7c6e",
+        "approved": false,
+        "reviewedBy": null,
+        "reviewedAt": null,
+        "reference": null
+      },
+      {
+        "sampleId": "empty",
+        "sampleDigest": "375459164c45cf43a64546ad4ac42453363926c92690f973efd2ff79e2d68755",
+        "goldDigest": "4b19f5846d0fff191db56ce7e150726865e24328ef40c49c53ace01668ba1371",
+        "approved": false,
+        "reviewedBy": null,
+        "reviewedAt": null,
+        "reference": null
+      }
+    ],
+    "rules": {
+      "rulesDigest": "9a9c727b8c056382841a13fdf56927829210974716b6b65e340c3c4ab2bb1b2d",
+      "approved": false,
+      "reviewedBy": null,
+      "reviewedAt": null,
+      "reference": null
+    }
+  }
+}

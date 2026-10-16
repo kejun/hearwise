@@ -539,3 +539,80 @@ Real legal corpus permission, representative development/acceptance split,
 reviewed gold variants, frozen quality thresholds/repetition rules and actual
 human assessment remain external acceptance requirements. Neither preview nor
 technical collection marks these requirements as satisfied.
+
+## Finite batch evaluation (KEJ-78)
+
+A `semantic-corpus-batch-plan` (schema 2) freezes an ordered sample roster,
+repetitions, two source manifests, reviewers, shared budget, and assessment
+rules before any baseline result. It uses the existing `--plan` option and
+existing distinct/provider commands; the single-sample schema 1 is unchanged.
+Both trusted target checkouts must explicitly support batch protocol 1. The
+coordinator probes both target validators/planners before the first capture.
+
+The schedule is all baseline sample/repetition trials, then all candidate
+trials. Each role is claimed once in one durable SQLite ledger. Every trial has
+its own capture database, review and raw evidence, but no separate allowance.
+Per-trial and total request limits are derived from the production part/window
+bounds; the total monetary ceiling is never multiplied by sample count. Failed
+or cancelled reservations remain spent. Missing trials prevent a complete
+batch, and an incomplete baseline cannot authorize a candidate run.
+
+The preview digest is stable. Actual collection writes one immutable freeze
+with its real timestamp before role claims. It binds the complete plan and
+provider approval, including rules and declared gold digests. Historical reading
+uses this recorded timestamp and does not renew provider permission. Source,
+budget, roster, repetition or threshold changes require a new preview/approval.
+
+Use `verification/semantic-quality/batch-plan.template.json` as a structural
+example. Its synthetic corpus, null thresholds, unapproved declarations,
+expired budget and placeholder ceiling do not authorize or pass real quality.
+Supply your own finite budget/expiry, corpus and reviewed rules explicitly.
+The dated official provider profile still applies to real provider requests.
+
+After collection, fill each trial's existing `review.json`; do not replace it
+with model self-scoring. Run `check-distinct-offline --provider-evidence` to
+rebuild each trial from original responses into empty SQLite, then
+`assess-distinct-offline --provider-evidence` for the complete batch decision.
+For a local fixture, omit `--provider-evidence` and use the existing
+`distinct-offline --provider http://127.0.0.1:PORT/` collection mode. Every
+command also needs the same `--plan`, `--reviewers`, `--baseline`, `--candidate`
+and `--out` arguments. `--release` requires a clean coordinator and targets.
+
+The reader checks exact matrix coverage, order, source manifests, shared
+ledger prefixes/suffixes and response/persistence consistency before assessment.
+Artifacts cannot select executable source paths. Reviewer identities and corpus
+rights/gold/rules approvals are operator declarations, not independently
+verified identities. The legacy inner gold `approved:false` is retained for
+annotation-format compatibility; separate digest-bound batch declarations carry
+operator approval without rewriting captured source text.
+
+Rules apply both to each pair and micro-aggregated counts across the batch.
+Precision/recall minima and maximum regressions are frozen per entity, fact and
+relation kind. Counts are summed before division; nullable rates are not
+averaged or converted into perfect scores. Correct candidate-empty results against empty gold stay `valid_empty`,
+including when the baseline had false positives. Repetition variation reports observed metric ranges, not random
+persisted-ID differences. Candidate severe errors and omission of frozen
+`criticalGoldIds` veto a pass independently of averages. A weaker baseline does
+not itself veto an improved candidate that meets the frozen rules.
+
+`ruleDecision` distinguishes passed, failed, incomplete annotations/evidence,
+and not-run unknown rules. Fixture/test-only evidence may pass a simulated rule
+decision but keeps `qualityStatus=not_run`. A finite operator-corpus quality
+result additionally requires actual-upstream evidence and complete pre-freeze
+rights, split, gold and rules declarations, with manual review of every trial.
+No current test produces or claims that real result. `fullQualityAcceptance`
+and `releaseEligible` remain false; final real quality, devices and publication
+acceptance are consolidated in KEJ-87.
+
+Existing per-capture and worker deadlines are unchanged. A batch has an explicit
+bounded overall deadline; it does not rerun incomplete items until they happen
+to pass or refund ambiguous work. Unsupported scope is rejected rather than
+silently dropping samples or increasing execution budgets.
+
+The automated batch regression executes two physical source trees with two
+samples and two repetitions each, then uses the actual assessment CLI to replay
+every capture. This complete matrix uses loopback/offline scheduling. Separate
+provider-batch failure coverage checks a real HTTP transport hook, durable cost
+reservation, and whole-batch cancellation; existing provider-pair tests retain
+real-time scheduling coverage. These are separate bounded regression files,
+each under the existing 90-second file watchdog, not additional acceptance runs.

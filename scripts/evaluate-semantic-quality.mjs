@@ -12,7 +12,7 @@ import { createSemanticReviewTemplate, assessSemanticReview } from './lib/semant
 import { createSemanticFailureCases } from './lib/semantic-quality-failures.mjs';
 const help = `Knowledge / relation semantic evaluation; real quality remains unapproved.
 Commands: corpus-offline | check-corpus-offline | assess-corpus-offline | plan | offline | check-offline | paired-offline | check-paired-offline | distinct-offline | check-distinct-offline | assess-distinct-offline | prepare-review | assess | failure-cases
---plan FILE      exact caller-supplied offline corpus/budget/reviewer plan
+--plan FILE      exact caller-supplied single corpus or finite batch/rules plan
 --provider URL   loopback-only HTTP fixture provider, no credential arguments
 --approve SHA    fresh approval of the exact provider plan digest, only with collect --live
 --provider-evidence  credential-free offline readback of a prior provider collection
@@ -26,8 +26,12 @@ plan with explicit corpus/checkouts/output previews the bounded provider plan, w
 collect --live requires --approve SHA and an operator-supplied HEARWISE_SEMANTIC_API_KEY.
 No default spending limit or approval is supplied. Whole-model conservative reservations can greatly exceed actual usage.
 A collection is technical evidence only; it does not certify real semantic quality.
-A successful offline exit verifies plumbing only; HW-05-04 and all real quality remain not_run.
+Batch assess evaluates frozen rules across every sample/repetition. Offline/test-only decisions remain simulations.
+A successful offline exit never certifies real quality; full acceptance and release remain separate.
 `;
+const assessmentPassed = result => result.ruleDecision === undefined
+  ? result.reviewComplete && result.offlineReviewPassed
+  : result.ruleDecision === 'passed';
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: { help: { type: 'boolean' }, out: { type: 'string' },
     capture: { type: 'string' }, reviewers: { type: 'string' }, review: { type: 'string' }, release: { type: 'boolean' }, baseline: { type: 'string' }, candidate: { type: 'string' }, live: { type: 'boolean' }, plan: { type: 'string' }, provider: { type: 'string' }, approve: { type: 'string' }, 'provider-evidence': { type: 'boolean' } } });
@@ -58,7 +62,7 @@ async function main() {
       }
       const result = await inspectSemanticProviderPair(values.out, options);
       console.log(JSON.stringify(result, null, 2));
-      process.exitCode = result.infrastructurePassed && (command !== 'assess-distinct-offline' || result.reviewComplete && result.offlineReviewPassed) ? 0 : 1;
+      process.exitCode = result.infrastructurePassed && (command !== 'assess-distinct-offline' || assessmentPassed(result)) ? 0 : 1;
     } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
     return;
   }
@@ -91,7 +95,7 @@ async function main() {
     try {
       if (command === 'distinct-offline') await runSemanticDistinctOffline(values.out, options);
       const summary = await inspectSemanticDistinctOffline(values.out, options);
-      console.log(JSON.stringify(summary, null, 2)); process.exitCode = summary.infrastructurePassed && (command !== 'assess-distinct-offline' || summary.reviewComplete && summary.offlineReviewPassed) ? 0 : 1;
+      console.log(JSON.stringify(summary, null, 2)); process.exitCode = summary.infrastructurePassed && (command !== 'assess-distinct-offline' || assessmentPassed(summary)) ? 0 : 1;
     } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
     return;
   }

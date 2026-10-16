@@ -2,6 +2,31 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const positive = value => Number.isSafeInteger(value) && value > 0;
+function semanticTrialLimits(config) {
+  const descriptor = config && Object.getOwnPropertyDescriptor(config, 'trialLimits');
+  if (!descriptor) return undefined;
+  const invalid = () => { throw new Error('INVALID_BUDGET'); };
+  const entries = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalid();
+    const keys = Reflect.ownKeys(value);
+    for (const key of keys) {
+      const property = Object.getOwnPropertyDescriptor(value, key);
+      if (typeof key !== 'string' || !property.enumerable || !Object.hasOwn(property, 'value')) invalid();
+    }
+    return keys;
+  };
+  if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) invalid();
+  const limits = descriptor.value, ids = entries(limits);
+  if (!ids.length || ids.length > 16) invalid();
+  for (const id of ids) {
+    if (id.length > 200 || !/^(?:baseline|candidate):[a-zA-Z0-9][a-zA-Z0-9._:-]*:(?:0|[1-9]\d*)$/.test(id) ||
+        !Number.isSafeInteger(Number(id.slice(id.lastIndexOf(':') + 1)))) invalid();
+    const kinds = entries(limits[id]);
+    if (kinds.length !== 2 || !['knowledge', 'relation'].every(kind => kinds.includes(kind) && positive(limits[id][kind]))) invalid();
+  }
+  return limits;
+}
 
 // Evaluation-only ledger. Reservation is committed before the caller opens an
 // upstream connection. An ambiguous, failed or cancelled attempt is never refunded.
@@ -13,18 +38,23 @@ export function openQualityBudget(filename, config, freezeDigest) {
 // future frozen semantic plan; accepting them is not approval or billing proof.
 // Reuse the same transactional ledger without inheriting ASR2/MT1 semantics.
 export function openSemanticQualityBudget(filename, config, freezeDigest) {
+  // Check descriptors before cloning so a batch roster cannot execute getters
+  // or hide entries that JSON would omit from the durable binding.
+  semanticTrialLimits(config);
   config = structuredClone(config);
   if (!config || !['knowledge', 'relation'].every(kind => positive(config.maxTrialAttempts?.[kind])) ||
       !Number.isFinite(Date.parse(config.expiresAt)) ||
       (config.requireRunClaim !== undefined && config.requireRunClaim !== true)) throw new Error('INVALID_BUDGET');
+  if (config.trialLimits && Object.values(config.trialLimits).some(limits =>
+    ['knowledge', 'relation'].some(kind => limits[kind] > config.maxTrialAttempts[kind] || limits[kind] > config.maxAttempts?.[kind]))) throw new Error('INVALID_BUDGET');
   // The wrapper forces this flag: omission and any caller key position must
   // produce the same semantic binding, without changing legacy digests.
   delete config.requireRunClaim;
   return openBudget(filename, { ...config, requireRunClaim: true }, freezeDigest,
-    { knowledge: config.maxTrialAttempts.knowledge, relation: config.maxTrialAttempts.relation }, 'semantic-v1');
+    { knowledge: config.maxTrialAttempts.knowledge, relation: config.maxTrialAttempts.relation }, 'semantic-v1', config.trialLimits);
 }
 
-function openBudget(filename, config, freezeDigest, trialLimits, domain) {
+function openBudget(filename, config, freezeDigest, trialLimits, domain, trialLimitsById) {
   config = structuredClone(config);
   const kinds = Object.keys(trialLimits);
   if (!config || !config.id || !['CNY', 'USD'].includes(config.currency) || !positive(config.ceilingMicros) ||
@@ -75,11 +105,13 @@ function openBudget(filename, config, freezeDigest, trialLimits, domain) {
       db.exec('BEGIN IMMEDIATE');
       try {
         unexpired();
+        const limit = trialLimitsById ? Object.hasOwn(trialLimitsById, trialId) && trialLimitsById[trialId][kind] : trialLimits[kind];
+        if (!positive(limit)) throw new Error('INVALID_ATTEMPT');
         if (config.requireRunClaim && !db.prepare("SELECT 1 FROM runs WHERE role=? AND state='running'").get(trialId.split(':')[0])) throw new Error('RUN_CLAIM_MISSING');
         const total = db.prepare('SELECT COALESCE(SUM(reserved_micros),0) AS amount FROM attempts').get().amount;
         const count = db.prepare('SELECT COUNT(*) AS n FROM attempts WHERE kind=?').get(kind).n;
         const trialCount = db.prepare('SELECT COUNT(*) AS n FROM attempts WHERE kind=? AND trial_id=?').get(kind, trialId).n;
-        if (trialCount >= trialLimits[kind]) throw new Error('TRIAL_ATTEMPT_LIMIT');
+        if (trialCount >= limit) throw new Error('TRIAL_ATTEMPT_LIMIT');
         const amount = config.attemptMicros[kind];
         if (count >= config.maxAttempts[kind] || amount > config.ceilingMicros - total) throw new Error('BUDGET_EXHAUSTED');
         unexpired();
