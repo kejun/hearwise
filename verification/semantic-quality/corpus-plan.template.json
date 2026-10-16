@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "kind": "offline-semantic-corpus-plan",
+  "mode": "offline",
+  "sample": {
+    "id": "original-example",
+    "kind": "offline-text-corpus",
+    "segments": ["Atlas is a camera maker. Nova is an independent garden tool."],
+    "ingestionBatchSize": 1,
+    "gold": {"approved": false, "variants": [{"id": "unreviewed", "units": []}]}
+  },
+  "reviewers": ["replace-with-declared-reviewer-label"],
+  "budget": {
+    "id": "synthetic-accounting-only",
+    "currency": "USD",
+    "ceilingMicros": 100,
+    "attemptMicros": {"knowledge": 1, "relation": 1},
+    "expiresAt": "2020-01-01T00:00:00.000Z"
+  },
+  "limits": {
+    "maxRequestBytes": 128000,
+    "maxResponseBytes": 128000,
+    "requestTimeoutMs": 5000,
+    "totalTimeoutMs": 30000
+  }
+}

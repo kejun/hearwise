@@ -338,3 +338,83 @@ repair/retry accounting and real-domain review comparison). Those are code
 work, not merely human sign-off. Separately required are lawful development and
 held-out data, human gold/adjudication, frozen thresholds/repetitions/rules and
 explicit finite paid-provider authorization. `collect` and `--live` still reject.
+
+## Configurable offline text-corpus collection
+
+`corpus-offline`, `check-corpus-offline` and `assess-corpus-offline` extend the
+existing knowledge→relation capture, gateway, transactional budget and review
+contracts. They accept a strict JSON plan with one text sample (up to 24 segments,
+6,000 characters per segment and 60,000 total), ingestion batch size, unapproved
+multi-answer gold, declared reviewers, finite synthetic accounting units and
+request/response/time limits. The input is transcript text, not audio or an ASR
+quality claim. The caller must provide the same plan for independent readback;
+changing the corpus, gold, batch policy or budget invalidates the frozen binding.
+
+The plan derives request bounds through actual `ListeningStore.extractionRange`
+and `splitFocusSegments`: each knowledge job reserves capacity for two requests
+per part plus the two shared extras, and each six-segment relation window for
+three requests. Every actual extract, repair or relation request is rebuilt from
+its active persisted production reservation before a durable budget reservation
+allows forwarding. Budgets can deliberately be too small: already reserved cost
+is retained and an unreserved continuation cannot be reported as complete.
+Amounts are **synthetic accounting units**, not official provider prices or
+permission to spend. There is still no live CLI or credential argument.
+
+Start from `verification/semantic-quality/corpus-plan.template.json`. Its expiry
+is deliberately in the past: set a finite future expiry, review the sample and
+replace the reviewer label before running. The empty gold is an unreviewed
+placeholder, never an acceptance gold. Combined request/response evidence is
+bounded before collection; oversized configurations are rejected.
+
+Example commands (all paths are explicit):
+
+```sh
+npm run quality:semantic -- corpus-offline --plan /private/plan.json --provider http://127.0.0.1:12345/ --out /private/new-run
+npm run quality:semantic -- check-corpus-offline --plan /private/plan.json --out /private/new-run --release
+npm run quality:semantic -- assess-corpus-offline --plan /private/plan.json --out /private/new-run --release
+```
+
+The provider is an explicitly selected loopback fixture service that receives
+ordinary chat-completion request JSON and returns an HTTP response. HTTPS,
+non-loopback hosts, redirects, endpoint credentials and credential CLI options
+are rejected. Provider status, delivered bytes and bounded numeric Retry-After
+are recorded, including malformed JSON, protocol failure and retryable errors.
+The old fixed synthetic commands retain their contracts and limits.
+
+Independent verification starts a fresh SQLite database and re-executes the
+actual workflows against the recorded raw HTTP responses. It compares every
+request, final database table, checkpoints, candidates, aliases, relations,
+supports, observations and budget rows. It never seeds replay from the reported
+before/after snapshots. Coordinated edits to a database, snapshots, units and
+checksums therefore do not suffice to change a fact. Original databases and the
+original budget are opened read-only; replay uses a separate temporary budget.
+
+Collection records actual wall-clock reads and production UUID generation inside
+an isolated child; it does not freeze collection time. Replay consumes this
+literal runtime tape to preserve persisted IDs, repair identities and ordering.
+Transport capabilities remain random and are excluded from the UUID tape. Real
+parent deadlines remain active in collection and replay. The existing offline
+logical scheduler advances waits; this is not latency or real-time behavior
+measurement. No SQL runtime fields or semantic text are erased to make replay
+match. An unsupported nondeterministic database transition or changed runtime
+sequence fails closed instead of manufacturing a match. Corpus text that looks
+like a UUID is never rewritten. Evidence contains original text and responses;
+it is not anonymized and must not be published as safe public data.
+
+Successful collection means the bounded attempt sequence was captured and can
+be independently reproduced. It can include a terminal model/protocol failure;
+that outcome remains visible in the final job state and diagnostics. Unfilled
+review templates are generated automatically, but decisions are never filled.
+`check-corpus-offline` can succeed with review pending; `assess-corpus-offline`
+requires the existing review contract to pass. Neither grants human identity,
+model quality, or release acceptance: `qualityStatus=not_run`,
+`fullQualityAcceptance=false`, `releaseEligible=false`, and `liveCalls=0`.
+
+Remaining live work includes official billing upper-bound verification, explicit
+provider/corpus authorization, real-time collection semantics and live evidence
+integration. This configurable corpus path is not yet joined to the earlier
+distinct-source paired CLI; that command still uses its fixed synthetic corpus.
+Real quality additionally needs lawful split corpus, human adjudicated gold,
+calibrated frozen rules and an approved finite provider budget.
+
+Corpus output must be outside the checkout or covered by Git ignore rules, checked before any artifacts are created (including parent symlink resolution). The aggregate plan budget includes sixfold worst-case JSON string expansion, with a final 64 MiB serialized capture guard. Exceeding that guard leaves the run incomplete and retains durable charges; it never reports a completed collection whose evidence cannot be reopened.

@@ -20,6 +20,7 @@ const exclusiveFiles = new Set([
   'test/playback-protocol-replay.test.mjs',
   'test/quality-collector.test.mjs',
   'test/semantic-quality-distinct.test.mjs',
+  'test/semantic-quality-corpus.test.mjs',
   'test/quality-offline-evidence.test.mjs',
   'test/trace-business-evidence.test.mjs',
   'test/release-atomicity-evidence.test.mjs',
