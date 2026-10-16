@@ -49,8 +49,14 @@ test('literal corpus plan is detached, canonical, deeply frozen and carries no a
 });
 
 test('corpus limits include 24 segments, 6000 characters each and 60000 total characters', () => {
-  assert.equal(validateSemanticCorpusPlan(planFor(Array(24).fill('x'.repeat(2500)))).sample.segments.length, 24);
-  assert.equal(validateSemanticCorpusPlan(planFor(Array(10).fill('x'.repeat(6000)))).sample.segments[0].length, 6000);
+  // Large corpora remain supported with a response cap that fits the combined
+  // evidence bound; corpus size does not implicitly grant unbounded output.
+  const many = planFor(Array(24).fill('x'.repeat(2500)));
+  many.limits.maxResponseBytes = 16384;
+  assert.equal(validateSemanticCorpusPlan(many).sample.segments.length, 24);
+  const long = planFor(Array(10).fill('x'.repeat(6000)));
+  long.limits.maxResponseBytes = 16384;
+  assert.equal(validateSemanticCorpusPlan(long).sample.segments[0].length, 6000);
   assert.throws(() => validateSemanticCorpusPlan(planFor(Array(25).fill('x'))), /CORPUS_SEGMENTS_INVALID/);
   assert.throws(() => validateSemanticCorpusPlan(planFor(['x'.repeat(6001)])), /CORPUS_SEGMENT_INVALID/);
   assert.throws(() => validateSemanticCorpusPlan(planFor([...Array(10).fill('x'.repeat(6000)), 'x'])), /CORPUS_TEXT_LIMIT/);
