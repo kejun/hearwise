@@ -16,6 +16,9 @@ import { qualitySources } from './quality-collector.mjs';
 import { writeJson } from './verification-evidence.mjs';
 import { createSemanticGateway } from './semantic-quality-gateway.mjs';
 
+// Callers must verify this capability before requesting realtime collection.
+export const semanticRealtimeSchedulerVersion = 1;
+
 export function semanticDatabase(filename) {
   const db = new DatabaseSync(filename, { readOnly: true });
   try {
@@ -43,7 +46,10 @@ export function semanticUnits(snapshot) {
   ];
 }
 
-export async function captureSemanticOffline({ directory, sample, response, signal, pairedBudget, corpusPlan }) {
+export async function captureSemanticOffline({ directory, sample, response, signal, pairedBudget, corpusPlan, scheduler }) {
+  // Scheduler is a trusted caller hook, never provider-controlled plan data.
+  assert.ok(scheduler === undefined || scheduler?.kind === 'realtime' && typeof scheduler.waitUntil === 'function', 'SEMANTIC_SCHEDULER_INVALID');
+  const realtime = scheduler !== undefined;
   const sourceStart = await qualitySources();
   const maxCalls = corpusPlan ? pairedBudget.maxCalls : 24, requestBytes = corpusPlan?.limits.maxRequestBytes || 128000;
   const dispatchLimit = corpusPlan ? maxCalls * 3 : 24;
@@ -54,6 +60,13 @@ export async function captureSemanticOffline({ directory, sample, response, sign
   let store, server, gateway, active, run, clock = Date.now(), before, after, visible, errorCode, cleanup = false;
   const calls = [], results = [], errors = [], diagnostics = [], budgetBindings = [];
   const reportDiagnostic = code => (corpusPlan ? diagnostics : errors).push(code);
+  const workflowNow = () => realtime ? Date.now() : clock;
+  const waitForDue = async due => {
+    await scheduler.waitUntil(due, combined);
+    combined.throwIfAborted();
+    clock = Date.now();
+    assert.ok(clock >= due, 'SEMANTIC_SCHEDULER_EARLY_RETURN');
+  };
   const reservationFor = domain => domain === 'relation' ? store.getRelationJob(active.id) : store.knowledgeCheckpoint(active.id);
   try {
     assert.equal(sample.kind, corpusPlan ? 'offline-text-corpus' : 'synthetic-contract-fixture'); assert.ok(sample.segments.length > 0 && sample.segments.length <= (corpusPlan ? 24 : 6));
@@ -127,7 +140,7 @@ export async function captureSemanticOffline({ directory, sample, response, sign
         } });
     }
     const credential = gateway?.token || 'synthetic-semantic-fixture';
-    const knowledge = createKnowledgeWorkflow({ store, endpoint: gateway?.knowledgeEndpoint || endpoint, now: () => clock, onError: () => reportDiagnostic('KNOWLEDGE_ERROR') });
+    const knowledge = createKnowledgeWorkflow({ store, endpoint: gateway?.knowledgeEndpoint || endpoint, now: workflowNow, onError: () => reportDiagnostic('KNOWLEDGE_ERROR') });
     let dispatches = 0;
     const batchSize = sample.ingestionBatchSize ?? sample.segments.length;
     assert.ok(Number.isInteger(batchSize) && batchSize >= 1 && batchSize <= (corpusPlan ? 24 : 6));
@@ -141,7 +154,8 @@ export async function captureSemanticOffline({ directory, sample, response, sign
       for (;;) {
         combined.throwIfAborted(); assert.ok(++dispatches <= dispatchLimit);
         const next = store.nextJob(run.listeningId); assert.equal(next.id, job.id);
-        clock = Math.max(clock, next.ready_at || 0, Date.parse(next.retry_at) || 0);
+        if (realtime) await waitForDue(Math.max(next.ready_at || 0, Date.parse(next.retry_at) || 0));
+        else clock = Math.max(clock, next.ready_at || 0, Date.parse(next.retry_at) || 0);
         active = { domain: 'knowledge', id: job.id };
         const result = await knowledge.execute(store.markJob(job.id, 'running'), credential, { signal: combined });
         results.push({ domain: 'knowledge', jobId: job.id, result });
@@ -149,10 +163,14 @@ export async function captureSemanticOffline({ directory, sample, response, sign
       }
     }
     }
-    store.finishRun(run.runId); store.enableRelations(run.listeningId, { now: clock });
-    const relations = createRelationWorkflow({ store, endpoint: gateway?.relationEndpoint || endpoint, now: () => clock, requestTimeoutMs: corpusPlan?.limits.requestTimeoutMs || 5000, onError: () => reportDiagnostic('RELATION_ERROR') });
+    store.finishRun(run.runId);
+    if (realtime) clock = Date.now();
+    store.enableRelations(run.listeningId, { now: clock });
+    const relations = createRelationWorkflow({ store, endpoint: gateway?.relationEndpoint || endpoint, now: workflowNow, requestTimeoutMs: corpusPlan?.limits.requestTimeoutMs || 5000, onError: () => reportDiagnostic('RELATION_ERROR') });
     for (let index = 0; index < dispatchLimit; index++) {
-      combined.throwIfAborted(); clock = Math.max(clock, store.relationProcessing(run.listeningId).nextReadyAt || 0);
+      combined.throwIfAborted();
+      if (realtime) await waitForDue(store.relationProcessing(run.listeningId).nextReadyAt || 0);
+      else clock = Math.max(clock, store.relationProcessing(run.listeningId).nextReadyAt || 0);
       const job = store.nextRelationJob(run.listeningId, { now: clock, quietMs: 0 });
       if (!job) { const status = store.relationProcessing(run.listeningId); assert.equal(status.pendingJobs + status.runningJobs, 0); break; }
       active = { domain: 'relation', id: job.id };
@@ -191,7 +209,7 @@ export async function captureSemanticOffline({ directory, sample, response, sign
     complete: !errorCode && cleanup, cleanup, errorCode, qualityEvaluated: false, fullQualityAcceptance: false, qualityStatus: 'not_run', liveCalls: 0,
     ...(corpusPlan ? { corpusPlanDigest: contractDigest(corpusPlan), diagnostics } : {}),
     models: { knowledge: KNOWLEDGE_MODEL, relation: RELATION_MODEL, knowledgeContract: CONTRACT_REVISION, relationContract: RELATION_CONTRACT_VERSION },
-    clock: 'offline workflow logical time; no latency measurement', sourceStart, sourceEnd, run, calls, results, errors, visible, before, after,
+    clock: realtime ? 'realtime workflow wall time; local provider bridge' : 'offline workflow logical time; no latency measurement', sourceStart, sourceEnd, run, calls, results, errors, visible, before, after,
     units: after ? semanticUnits(after) : [], artifacts,
     ...(pairedBudget ? { transport: { trialId: pairedBudget.trialId, budgetBindings, observations: gateway?.observations() || [] } } : {}) };
   if (corpusPlan) assert.ok(Buffer.byteLength(JSON.stringify(report, null, 2) + '\n') <= 64 * 1024 * 1024, 'CORPUS_SERIALIZED_EVIDENCE_LIMIT');
