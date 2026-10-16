@@ -2,18 +2,21 @@
 
 ## Delivery status
 
-This stage delivers an executable **offline rehearsal**, not the real semantic
-quality acceptance. `HW-05-04` is always `not_run`; `qualityEvaluated`,
-`fullQualityAcceptance` and `releaseEligible` are always false. An exit code of
-zero from `offline` means the capture/review/evidence plumbing passed.
+The offline rehearsals and a narrowly scoped, approval-bound provider collector
+are implemented. Real semantic quality acceptance is **not executed**:
+`HW-05-04` remains `not_run`; `qualityEvaluated`, `fullQualityAcceptance` and
+`releaseEligible` remain false. Technical collection/replay and completed human
+quality acceptance are separate results.
 
-The evaluation transport boundary is implemented in
-`scripts/lib/semantic-quality-gateway.mjs`, but the complete live collector is
-still not wired. `collect` and any `--live` request continue to reject before
-reading credentials or making requests. The ASR/MT toolkit's fixed attempt
-counts must not be reused for this domain; its transactional ledger is shared
-through an explicit semantic-domain policy. No production behavior or
-database schema changes.
+Provider execution has no implicit approval or default spending budget. The
+existing `collect --live` entry requires an explicit current operator approval
+of the exact preview digest plus a separately supplied credential. Merely
+reading an artifact or an old approval never authorizes another collection.
+Ordinary CI refuses real-provider execution. All implementation tests use
+loopback/test-only transport; they do not attest that the provider was called.
+
+No production model, request parameter or database schema is changed. Existing
+offline commands retain their local-only defaults and evidence contracts.
 
 ### Domain transport boundary
 
@@ -332,12 +335,11 @@ authenticated human approval, and synthetic annotations do not calibrate a
 real-world threshold. Every result keeps qualityStatus=not_run,
 fullQualityAcceptance=false, releaseEligible=false and liveCalls=0.
 
-Still unimplemented: a general real-corpus plan/part/window mapper, official
-worst-case billing integration and authorized live collection/readback (including
-repair/retry accounting and real-domain review comparison). Those are code
-work, not merely human sign-off. Separately required are lawful development and
-held-out data, human gold/adjudication, frozen thresholds/repetitions/rules and
-explicit finite paid-provider authorization. `collect` and `--live` still reject.
+The original fixed-fixture stage did not include corpus mapping or provider
+collection. The later sections below describe those implementations. Real
+acceptance still requires lawful development and held-out data, human
+gold/adjudication, frozen thresholds/repetitions/rules and explicit finite
+paid-provider authorization; an offline rehearsal grants none of these.
 
 ## Configurable offline text-corpus collection
 
@@ -461,5 +463,79 @@ This joins configurable corpus collection to actual distinct-source comparison.
 It still uses an explicitly selected local fixture provider and logical offline
 scheduling. External provider endpoint/credential admission, official worst-case
 price policy, approved corpus transmission, and finite paid execution are not
-implemented by this mode. Real quality acceptance remains `not_run`; `collect`
-and `--live` remain disabled.
+implemented by this offline mode. The separately approval-bound collector is
+described below; real quality acceptance remains `not_run`.
+
+
+## Approval-bound official provider collection
+
+The supported profile is deliberately limited to the existing production
+`qwen3.8-flash` text requests, `enable_thinking:false`, and the exact endpoint
+`https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions`. Alternative
+hosts, regions, query strings, aliases, extra tools, multiple responses and
+changed request fields are rejected. This does not generalize to arbitrary
+OpenAI-compatible providers. Knowledge extraction and repair keep their existing
+request bodies; relations retain their existing 6000-token parameter.
+
+### Published billing assumptions, checked 2026-10-16
+
+- [Platform model page](https://www.qianwenai.com/models/qwen3.8-flash)
+  directly associates that endpoint/model with standard CNY 0.8 input and
+  CNY 2.7 output per million tokens. No cache or promotional discounts are used.
+- [Exact model limits](https://help.aliyun.com/zh/model-studio/qwen3-8-flash)
+  list 991808 maximum non-thinking input tokens and 131072 output tokens.
+- [Platform Chat API](https://platform.qianwenai.com/docs/api-reference/chat/openai-chat)
+  documents default n=1 and up to 10 tokens of output-limit tolerance. This
+  policy conservatively includes the tolerance even at model capacity.
+
+Each HTTP attempt separately rounds input and output charges upward:
+ceil(991808 × 800000 / 1000000) + ceil(131082 × 2700000 / 1000000)
+= 793447 + 353922 = **1147369 micro-CNY**, or CNY 1.147369. Both domains use that same
+full-capacity reservation, including relations with their smaller output limit.
+Integer arithmetic and overflow checks avoid floating-point under-reservation.
+This is a deliberately conservative reservation based on dated published
+assumptions, often much larger than actual usage. It is not a guarantee of the
+provider's invoice or a cap on unrelated account activity. The operator must
+review current pricing and explicitly supply the total finite budget; no budget
+is selected automatically. Failed, cancelled and ambiguous attempts are not
+refunded; each repair/retry requires a new reservation before forwarding.
+
+### Operator sequence
+
+1. Supply a corpus plan with CNY currency, both attemptMicros set to 1147369,
+   an explicitly chosen ceiling and expiry, reviewer labels, two trusted clean
+   checkouts/builds/independent dependencies, and a fresh output directory.
+2. Run existing `plan` with --plan, --reviewers, --baseline, --candidate and
+   --out. Preview binds the exact corpus, two manifests, output directory,
+   provider/profile evidence and shared budget. It does not acquire credentials
+   or send provider requests.
+3. Only after approving that concrete scope, invoke existing `collect --live`
+   with the same arguments and `--approve` equal to the preview digest. The
+   operator supplies their existing key through HEARWISE_SEMANTIC_API_KEY;
+   never put it in command arguments, plan JSON or repository files.
+4. Use `check-distinct-offline --provider-evidence` with the same caller plan
+   and explicit checkouts for credential-free historical inspection. This is
+   offline replay even when the original collection used a provider. Use
+   `assess-distinct-offline --provider-evidence` for the existing review gate.
+
+A changed corpus, source, dependency, output path, price policy or budget
+invalidates the approval digest. An expired approval cannot start or continue
+forwarding. Historical inspection can read expired evidence, but cannot renew
+approval or make provider requests. Target checkouts are explicitly trusted
+executable code; a child process is not a security sandbox. The provider key is
+held by the trusted parent bridge; workers receive only ephemeral local
+capabilities, transmitted in memory and excluded from evidence.
+
+Real collection waits on actual workflow ready_at/retry_at deadlines. It does
+not advance a logical clock to bypass production retry waits. Independent
+inspection replays ordered recorded clock/UUID/wait events with original
+responses into an empty semantic SQLite database. It regenerates requests and
+compares full persisted output and shared-ledger prefixes/suffixes. Replay
+consistency does not independently authenticate the origin of provider text.
+Existing finite watchdogs remain; a corpus that cannot finish in the chosen
+bounded window is incomplete, not silently granted extra runtime.
+
+Real legal corpus permission, representative development/acceptance split,
+reviewed gold variants, frozen quality thresholds/repetition rules and actual
+human assessment remain external acceptance requirements. Neither preview nor
+technical collection marks these requirements as satisfied.

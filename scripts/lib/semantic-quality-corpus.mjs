@@ -35,9 +35,10 @@ async function outputDirectory(value,executionRoot){
   }return directory;
 }
 function ledgerRows(file){const db=new DatabaseSync(file,{readOnly:true});try{same(db.prepare('PRAGMA integrity_check').all().map(x=>x.integrity_check),['ok']);return {binding:db.prepare('SELECT digest FROM binding WHERE id=1').get().digest,attempts:db.prepare('SELECT * FROM attempts ORDER BY id').all().map(x=>({...x})),runs:db.prepare('SELECT * FROM runs ORDER BY role').all().map(x=>({...x}))};}finally{db.close();}}
-async function execute(directory,plan,url,freezeDigest,runtime,signal,executionRoot,pair,claimedDirectory=directory){
-  await write(path.join(directory,'input.json'),{directory,plan,endpoint:url,freezeDigest,...(runtime?{runtime}:{}),...(pair?{pair,claimedDirectory}:{})});
-  const child=spawn(process.execPath,[path.join(root,'scripts/lib/semantic-quality-corpus-worker.mjs'),path.join(directory,'input.json')],{cwd:executionRoot,env:{PATH:process.env.PATH},stdio:['ignore','pipe','pipe']});
+async function execute(directory,plan,url,freezeDigest,runtime,signal,executionRoot,pair,claimedDirectory=directory,realtime=false,providerCapability){
+  await write(path.join(directory,'input.json'),{directory,plan,endpoint:url,freezeDigest,...(providerCapability?{providerCapabilityRequired:true}:{}),...(realtime?{realtime:true}:{}),...(runtime?{runtime}:{}),...(pair?{pair,claimedDirectory}:{})});
+  const child=spawn(process.execPath,[path.join(root,'scripts/lib/semantic-quality-corpus-worker.mjs'),path.join(directory,'input.json')],{cwd:executionRoot,env:{PATH:process.env.PATH},stdio:[providerCapability?'pipe':'ignore','pipe','pipe']});
+  if(providerCapability){child.stdin.on('error',()=>{});child.stdin.end(providerCapability);}
   let bytes=0,overflow=false;const cap=chunk=>{bytes+=chunk.length;if(bytes>1024*1024){overflow=true;child.kill('SIGTERM');}};child.stdout.on('data',cap);child.stderr.on('data',cap);
   let timedOut=false;const stop=()=>{timedOut=true;child.kill('SIGTERM');};const timeout=setTimeout(stop,plan.limits.totalTimeoutMs+5000);signal?.addEventListener('abort',stop,{once:true});if(signal?.aborted)stop();
   const kill=setInterval(()=>{if(timedOut)child.kill('SIGKILL');},1500);
@@ -114,25 +115,26 @@ function restorePairPrefix(filename,pair){
   }finally{db.close();}
   ledger=openSemanticQualityBudget(filename,pair.budget,pair.freezeDigest);try{same(ledger.snapshot(),pair.before);}finally{ledger.close();}
 }
-export async function collectSemanticCorpusOffline(directory,{plan,providerEndpoint,signal,executionRoot=root,pair}={}){
-  executionRoot=await harness(executionRoot);plan=validateSemanticCorpusPlan(plan);const url=endpoint(providerEndpoint);directory=await outputDirectory(directory,executionRoot);
+export async function collectSemanticCorpusOffline(directory,{plan,providerEndpoint,signal,executionRoot=root,pair,realtime=false,providerCapability}={}){
+  assert.ok(providerCapability===undefined||typeof providerCapability==='string'&&/^[A-Za-z0-9_-]{32,256}$/.test(providerCapability),'CORPUS_PROVIDER_CAPABILITY_INVALID');
+  assert.equal(typeof realtime,'boolean','CORPUS_REALTIME_INVALID');executionRoot=await harness(executionRoot);plan=validateSemanticCorpusPlan(plan);const url=endpoint(providerEndpoint);directory=await outputDirectory(directory,executionRoot);
   assert.ok(Date.now()<Date.parse(plan.budget.expiresAt),'BUDGET_APPROVAL_EXPIRED');signal?.throwIfAborted();
   const source=await qualitySources();if(pair!==undefined)pair=validateSemanticCorpusPair(pair,plan,{directory,source});await mkdir(directory,{recursive:false,mode:0o700});
-  const frozen={schemaVersion:1,kind:'offline-semantic-corpus-freeze',plan,source,...(pair?{pair:pairBinding(pair)}:{}),...boundary},freezeDigest=contractDigest(frozen);
+  const frozen={schemaVersion:1,kind:'offline-semantic-corpus-freeze',plan,source,...(realtime?{realtime:true}:{}),...(pair?{pair:pairBinding(pair)}:{}),...boundary},freezeDigest=contractDigest(frozen);
   await write(path.join(directory,'freeze.json'),frozen);
   let errorCode;
-  try {await execute(directory,plan,url,freezeDigest,undefined,signal,executionRoot,pair);same(await qualitySources(),source);
+  try {await execute(directory,plan,url,freezeDigest,undefined,signal,executionRoot,pair,directory,realtime,providerCapability);same(await qualitySources(),source);
     const capture=await json(path.join(directory,'capture/capture.json'));await write(path.join(directory,'review.json'),createSemanticReviewTemplate(capture,{reviewers:plan.reviewers}));}
   catch {errorCode=signal?.aborted?'CORPUS_CANCELLED':'CORPUS_INCOMPLETE';}
   await write(path.join(directory,'run.json'),{schemaVersion:1,freezeDigest,complete:!errorCode,errorCode,...boundary});
   return {complete:!errorCode,errorCode,...boundary};
 }
-export async function inspectSemanticCorpusOffline(directory,{plan,release=false,signal,executionRoot=root,pair}={}){
+export async function inspectSemanticCorpusOffline(directory,{plan,release=false,signal,executionRoot=root,pair,realtime=false}={}){
   let scratch,server;
   try {
-    executionRoot=await harness(executionRoot);plan=validateSemanticCorpusPlan(plan);directory=await realpath(directory);const source=await qualitySources();if(release)assert.equal(source.dirty,false);
+    assert.equal(typeof realtime,'boolean','CORPUS_REALTIME_INVALID');executionRoot=await harness(executionRoot);plan=validateSemanticCorpusPlan(plan);directory=await realpath(directory);const source=await qualitySources();if(release)assert.equal(source.dirty,false);
     if(pair!==undefined)pair=validateSemanticCorpusPair(pair,plan,{directory,source});
-    const frozen=await json(path.join(directory,'freeze.json'));same(frozen,{schemaVersion:1,kind:'offline-semantic-corpus-freeze',plan,source,...(pair?{pair:pairBinding(pair)}:{}),...boundary});
+    const frozen=await json(path.join(directory,'freeze.json'));same(frozen,{schemaVersion:1,kind:'offline-semantic-corpus-freeze',plan,source,...(realtime?{realtime:true}:{}),...(pair?{pair:pairBinding(pair)}:{}),...boundary});
     const freezeDigest=contractDigest(frozen),run=await json(path.join(directory,'run.json'));same(run,{schemaVersion:1,freezeDigest,complete:true,...boundary});
     const capture=await json(path.join(directory,'capture/capture.json'));same(capture.sourceStart,source);same(capture.sourceEnd,source);same(capture.sample,plan.sample);assert.equal(capture.corpusPlanDigest,contractDigest(plan));
     assert.equal(capture.complete,true);assert.equal(capture.cleanup,true);same(capture.artifacts.map(x=>x.path),['store.sqlite']);
@@ -155,7 +157,7 @@ export async function inspectSemanticCorpusOffline(directory,{plan,release=false
         response.writeHead(call.http.status,{'content-type':'application/json',...(call.http.retryAfter?{'retry-after':call.http.retryAfter}:{})});response.end(call.http.body);
       }catch{protocolError=true;response.writeHead(400);response.end('{}');}
     });server.listen(0,'127.0.0.1');await once(server,'listening');
-    await execute(scratch,plan,`http://127.0.0.1:${server.address().port}/`,freezeDigest,runtime,signal,executionRoot,replayPair,directory);
+    await execute(scratch,plan,`http://127.0.0.1:${server.address().port}/`,freezeDigest,runtime,signal,executionRoot,replayPair,directory,realtime);
     assert.equal(protocolError,false);assert.equal(position,capture.calls.length);
     const replay=await json(path.join(scratch,'capture/capture.json'));same(normalized(replay),normalized(capture));
     if(pair)same(await json(path.join(scratch,'worker.json')),worker);

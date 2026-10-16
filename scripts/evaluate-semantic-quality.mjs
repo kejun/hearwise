@@ -6,30 +6,62 @@ import { writeJson } from './lib/verification-evidence.mjs';
 import { readSemanticCapture } from './lib/semantic-quality-evidence.mjs';
 import { runSemanticOffline, inspectSemanticOffline } from './lib/semantic-quality-offline.mjs';
 import { runSemanticPairedOffline, inspectSemanticPairedOffline } from './lib/semantic-quality-paired.mjs';
-import { runSemanticDistinctOffline, inspectSemanticDistinctOffline } from './lib/semantic-quality-distinct.mjs';
+import { runSemanticDistinctOffline, inspectSemanticDistinctOffline, planSemanticProviderPair, collectSemanticProviderPair, inspectSemanticProviderPair } from './lib/semantic-quality-distinct.mjs';
 import { collectSemanticCorpusOffline, inspectSemanticCorpusOffline } from './lib/semantic-quality-corpus.mjs';
 import { createSemanticReviewTemplate, assessSemanticReview } from './lib/semantic-quality-review.mjs';
 import { createSemanticFailureCases } from './lib/semantic-quality-failures.mjs';
-const help = `Knowledge / relation semantic evaluation preparation, OFFLINE ONLY.
+const help = `Knowledge / relation semantic evaluation; real quality remains unapproved.
 Commands: corpus-offline | check-corpus-offline | assess-corpus-offline | plan | offline | check-offline | paired-offline | check-paired-offline | distinct-offline | check-distinct-offline | assess-distinct-offline | prepare-review | assess | failure-cases
 --plan FILE      exact caller-supplied offline corpus/budget/reviewer plan
 --provider URL   loopback-only HTTP fixture provider, no credential arguments
+--approve SHA    fresh approval of the exact provider plan digest, only with collect --live
+--provider-evidence  credential-free offline readback of a prior provider collection
 --out PATH       output root for offline; existing run for check-offline; fresh JSON for review/assessment
 --baseline DIR / --candidate DIR  explicit trusted independent clean checkouts (distinct commands)
 --capture DIR    exact-source offline capture with store.sqlite and capture.json
 --reviewers FILE JSON array of declared reviewer labels; no identity authentication is claimed
 --review FILE    completed offline review (assess / failure-cases)
 --release        require the exact clean current source
-collect / --live always rejects: paid-domain adapter and actual quality acceptance are not implemented.
+plan with explicit corpus/checkouts/output previews the bounded provider plan, without network or credentials.
+collect --live requires --approve SHA and an operator-supplied HEARWISE_SEMANTIC_API_KEY.
+No default spending limit or approval is supplied. Whole-model conservative reservations can greatly exceed actual usage.
+A collection is technical evidence only; it does not certify real semantic quality.
 A successful offline exit verifies plumbing only; HW-05-04 and all real quality remain not_run.
 `;
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: { help: { type: 'boolean' }, out: { type: 'string' },
-    capture: { type: 'string' }, reviewers: { type: 'string' }, review: { type: 'string' }, release: { type: 'boolean' }, baseline: { type: 'string' }, candidate: { type: 'string' }, live: { type: 'boolean' }, plan: { type: 'string' }, provider: { type: 'string' } } });
+    capture: { type: 'string' }, reviewers: { type: 'string' }, review: { type: 'string' }, release: { type: 'boolean' }, baseline: { type: 'string' }, candidate: { type: 'string' }, live: { type: 'boolean' }, plan: { type: 'string' }, provider: { type: 'string' }, approve: { type: 'string' }, 'provider-evidence': { type: 'boolean' } } });
   if (values.help) { console.log(help); return; }
-  if (values.live || positionals[0] === 'collect') throw new Error('LIVE_SEMANTIC_ADAPTER_NOT_IMPLEMENTED_OR_AUTHORIZED');
   if (positionals.length > 1) throw new Error('ONE_COMMAND_REQUIRED');
   const command = positionals[0] || 'plan';
+  const providerPreview = command === 'plan' && !!values.plan;
+  const providerCapture = command === 'collect';
+  const providerRead = values['provider-evidence'] && ['check-distinct-offline','assess-distinct-offline'].includes(command);
+  if (values.live && !providerCapture || values.approve && !providerCapture || values['provider-evidence'] && !providerRead)
+    throw new Error('LIVE_SEMANTIC_ADAPTER_NOT_IMPLEMENTED_OR_AUTHORIZED');
+  if (providerCapture && (!values.live || !values.approve)) throw new Error('LIVE_SEMANTIC_ADAPTER_NOT_IMPLEMENTED_OR_AUTHORIZED');
+  if (providerPreview || providerCapture || providerRead) {
+    if (!values.plan || !values.baseline || !values.candidate || !values.reviewers || !values.out || values.provider)
+      throw new Error('EXPLICIT_PROVIDER_PLAN_CHECKOUTS_OUTPUT_REQUIRED');
+    if (providerCapture && (!values.live || !values.approve)) throw new Error('FRESH_PROVIDER_APPROVAL_REQUIRED');
+    const corpusPlan = JSON.parse(await readFile(values.plan, 'utf8'));
+    const options = { checkouts: { baseline: values.baseline, candidate: values.candidate }, corpusPlan,
+      reviewers: JSON.parse(await readFile(values.reviewers, 'utf8')), release: values.release };
+    const abort = new AbortController(), stop = () => abort.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
+    options.signal = abort.signal;
+    try {
+      if (providerPreview) { console.log(JSON.stringify(await planSemanticProviderPair(values.out, options), null, 2)); return; }
+      if (providerCapture) {
+        const approval = { approved: true, planDigest: values.approve, expiresAt: corpusPlan.budget.expiresAt };
+        const result = await collectSemanticProviderPair(values.out, { ...options, approval, key: process.env.HEARWISE_SEMANTIC_API_KEY });
+        console.log(JSON.stringify(result, null, 2)); process.exitCode = result.complete ? 0 : 1; return;
+      }
+      const result = await inspectSemanticProviderPair(values.out, options);
+      console.log(JSON.stringify(result, null, 2));
+      process.exitCode = result.infrastructurePassed && (command !== 'assess-distinct-offline' || result.reviewComplete && result.offlineReviewPassed) ? 0 : 1;
+    } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+    return;
+  }
   if (['corpus-offline','check-corpus-offline','assess-corpus-offline'].includes(command)) {
     if (!values.plan || !values.out || command === 'corpus-offline' && !values.provider) throw new Error('CORPUS_PLAN_OUTPUT_PROVIDER_REQUIRED');
     const plan = JSON.parse(await readFile(values.plan, 'utf8'));

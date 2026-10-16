@@ -8,11 +8,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { mkdir, realpath, readFile, writeFile } from 'node:fs/promises';
 import { qualitySources } from './quality-collector.mjs';
-import { contractDigest } from './quality-contract.mjs';
+import { contractDigest, hashBytes } from './quality-contract.mjs';
 import { openSemanticQualityBudget } from './quality-budget.mjs';
 import { frozenSemanticPairPlan, inspectSemanticPairEvidence, semanticPairBoundary as boundary, semanticPairSpecs as specs } from './semantic-quality-paired.mjs';
 import { createSemanticReviewTemplate, assessSemanticReview } from './semantic-quality-review.mjs';
 import { semanticFixtureSample } from '../../test-support/semantic-quality-fixture.mjs';
+import { SEMANTIC_PROVIDER_PROFILE, semanticProviderBudget, assertSemanticProviderApproval, validateSemanticProviderApprovalBinding } from './semantic-quality-provider-policy.mjs';
+import { createSemanticProviderBridge, assertSemanticProviderSafeInput } from './semantic-quality-provider-bridge.mjs';
 const worker = fileURLToPath(new URL('./semantic-quality-source-worker.mjs', import.meta.url));
 const same = (a,b) => assert.equal(contractDigest(a), contractDigest(b));
 const json = async file => {const bytes=await readFile(file);assert.ok(bytes.length<=64*1024*1024,'EVIDENCE_FILE_TOO_LARGE');return JSON.parse(bytes);};
@@ -182,21 +184,28 @@ function prefixFor(snapshot,index,claimRunning=false) {
   if(claimRunning) {value.attempts=value.attempts.filter(row=>!row.trial_id.startsWith(roles[index]+':'));const row=value.runs[index];row.state='running';row.finished_at=null;}
   value.reservedMicros=value.attempts.reduce((sum,row)=>sum+row.reserved_micros,0);return value;
 }
-async function runCorpusPair(directory,{checkouts,reviewers,corpusPlan,providerEndpoint,signal}) {
+async function runCorpusPair(directory,{checkouts,reviewers,corpusPlan,providerEndpoint,signal,provider,release=false}) {
   await assertHarnessRoot();corpusPlan=validateSemanticCorpusPlan(corpusPlan);same(reviewers,corpusPlan.reviewers);
   assert.ok(corpusPlan.limits.totalTimeoutMs<=15000,'CORPUS_PAIR_WORKER_BUDGET');
-  const endpoint=corpusEndpoint(providerEndpoint);assert.ok(Date.now()<Date.parse(corpusPlan.budget.expiresAt),'BUDGET_APPROVAL_EXPIRED');
-  directory=await corpusPairOutput(directory);const sourceStart=await qualitySources(),sources=await manifests(checkouts,signal);
-  const plan=corpusPairPlan(directory,sourceStart,sources,corpusPlan,reviewers),freezeDigest=contractDigest(plan),startedAt=new Date().toISOString();
+  const endpoint=provider?null:corpusEndpoint(providerEndpoint);assert.ok(Date.now()<Date.parse(corpusPlan.budget.expiresAt),'BUDGET_APPROVAL_EXPIRED');
+  directory=await corpusPairOutput(directory);const sourceStart=await qualitySources();
+  if(provider&&release)assert.equal(sourceStart.dirty,false,'RELEASE_SOURCE_DIRTY');
+  const sources=await manifests(checkouts,signal);
+  const base=corpusPairPlan(directory,sourceStart,sources,corpusPlan,reviewers);
+  if(provider)same(provider.proposal,providerProposal(base,provider.testTransport));
+  const plan=provider?{...base,kind:'semantic-provider-corpus-pair',mode:'provider',provider:{...provider.proposal,requestDigest:provider.requestDigest,approval:provider.approval}}:base,freezeDigest=contractDigest(plan),startedAt=new Date().toISOString();
   await mkdir(directory,{recursive:false,mode:0o700});await write(path.join(directory,'freeze.json'),plan);
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),150000),combined=signal?AbortSignal.any([signal,abort.signal]):abort.signal;
-  let ledger,activeRole,errorCode;const roleSnapshots=[];
+  let ledger,activeRole,errorCode,bridge;const roleSnapshots=[],providerRows=[];
   try {
     for(const role of roles) {
       combined.throwIfAborted();ledger=openSemanticQualityBudget(path.join(directory,'budget.sqlite'),plan.budget,freezeDigest);
       const roleDirectory=path.join(directory,role);ledger.claimRun({role,sourceSha:sources[role].source.sha,directory:roleDirectory,expectedSnapshot:ledger.snapshot()});activeRole=role;
       const pair={role,ledgerPath:path.join(directory,'budget.sqlite'),budget:plan.budget,freezeDigest,before:ledger.snapshot()};
-      await execute(sources[role].root,{mode:'corpus-capture',manifest:sources[role],directory:roleDirectory,corpusPlan,providerEndpoint:endpoint,pair},combined);
+      if(provider&&release){const current=await qualitySources();assert.equal(current.dirty,false,'RELEASE_SOURCE_DIRTY');same(current,sourceStart);}
+      if(provider)bridge=await createSemanticProviderBridge({approval:provider.approval,requestDigest:provider.requestDigest,expiresAt:corpusPlan.budget.expiresAt,key:provider.key,plan:corpusPlan,source:sources[role],role,snapshot:()=>ledger.snapshot(),signal:combined,testTransport:provider.testTransport});
+      try{await execute(sources[role].root,{mode:'corpus-capture',manifest:sources[role],directory:roleDirectory,corpusPlan,providerEndpoint:bridge?.endpoint||endpoint,pair,...(provider?{realtime:true,providerCapability:bridge.capability}:{})},combined);}
+      finally{if(bridge){await bridge.close();providerRows.push(...bridge.rows);bridge=null;}}
       const worker=await json(path.join(roleDirectory,'worker.json'));assert.equal(worker.complete,true);same(worker.snapshot,ledger.snapshot());
       ledger.finishRun(role,true);activeRole=null;roleSnapshots.push({role,snapshot:ledger.snapshot()});ledger.close();ledger=null;
     }
@@ -206,17 +215,21 @@ async function runCorpusPair(directory,{checkouts,reviewers,corpusPlan,providerE
   let sourceEnd=null;try{sourceEnd=await qualitySources();same(sourceStart,sourceEnd);}catch{errorCode='SEMANTIC_SOURCE_CHANGED_OR_UNREADABLE';}
   const report={schemaVersion:1,kind:'offline-semantic-corpus-pair-run',mode:'offline',comparison:plan.comparison,...boundary,
     sourceStart,sourceEnd,startedAt,finishedAt:new Date().toISOString(),freezeDigest,complete:!errorCode,errorCode,roleSnapshots};
+  if(provider){report.kind='semantic-provider-corpus-pair-run';report.mode='provider';report.provider={requestDigest:provider.requestDigest,evidenceKind:provider.proposal.evidenceKind};report.liveCalls=provider.testTransport?0:providerRows.filter(row=>row.forwarded).length;report.testTransportCalls=provider.testTransport?providerRows.filter(row=>row.forwarded).length:0;await write(path.join(directory,'provider.json'),{schemaVersion:1,requestDigest:provider.requestDigest,evidenceKind:provider.proposal.evidenceKind,rows:providerRows});}
   await write(path.join(directory,'paired.json'),report);return report;
 }
-async function inspectCorpusPair(directory,{checkouts,reviewers,corpusPlan,release,signal}) {
+async function inspectCorpusPair(directory,{checkouts,reviewers,corpusPlan,release,signal,providerEvidence=false,testTransport}) {
   try {
     await assertHarnessRoot();corpusPlan=validateSemanticCorpusPlan(corpusPlan);same(reviewers,corpusPlan.reviewers);
     directory=await realpath(directory);const source=await qualitySources();if(release)assert.equal(source.dirty,false);
     const saved=await json(path.join(directory,'freeze.json'));same(saved.corpusPlan,corpusPlan);same(saved.reviewers,reviewers);
-    const sources=await manifests(checkouts,signal),plan=corpusPairPlan(directory,source,sources,corpusPlan,reviewers),freezeDigest=contractDigest(plan);
+    const sources=await manifests(checkouts,signal),base=corpusPairPlan(directory,source,sources,corpusPlan,reviewers);
+    let provider;
+    if(providerEvidence){provider=saved.provider;assert.ok(provider);const proposal=providerProposal(base,testTransport);const requestDigest=contractDigest(proposal);same({...provider,approval:undefined,requestDigest:undefined},{...proposal,approval:undefined,requestDigest:undefined});assert.equal(provider.requestDigest,requestDigest);validateSemanticProviderApprovalBinding({approval:provider.approval,requestDigest,expiresAt:corpusPlan.budget.expiresAt});}
+    const plan=provider?{...base,kind:'semantic-provider-corpus-pair',mode:'provider',provider}:base,freezeDigest=contractDigest(plan);
     same(saved,plan);const run=await json(path.join(directory,'paired.json'));
-    for(const [key,value] of Object.entries(boundary))same(run[key],value);
-    assert.equal(run.schemaVersion,1);assert.equal(run.kind,'offline-semantic-corpus-pair-run');assert.equal(run.mode,'offline');assert.equal(run.comparison,plan.comparison);
+    for(const [key,value] of Object.entries(boundary))if(!provider||key!=='liveCalls')same(run[key],value);
+    assert.equal(run.schemaVersion,1);assert.equal(run.kind,provider?'semantic-provider-corpus-pair-run':'offline-semantic-corpus-pair-run');assert.equal(run.mode,provider?'provider':'offline');assert.equal(run.comparison,plan.comparison);
     same(run.sourceStart,source);same(run.sourceEnd,source);assert.equal(run.freezeDigest,freezeDigest);assert.equal(run.complete,true);assert.equal(run.errorCode,undefined);
     assert.ok(Date.parse(run.startedAt)<=Date.parse(run.finishedAt)&&Date.parse(run.finishedAt)<=Date.now());
     const snapshot=corpusLedger(directory,plan.budget,freezeDigest);
@@ -227,13 +240,14 @@ async function inspectCorpusPair(directory,{checkouts,reviewers,corpusPlan,relea
     snapshot.attempts.forEach((row,index)=>{assert.equal(row.id,index+1);assert.ok(['knowledge','relation'].includes(row.kind));assert.ok(roles.some(role=>row.trial_id===`${role}:${corpusPlan.sample.id}:0`));assert.equal(row.reserved_micros,plan.budget.attemptMicros[row.kind]);assert.equal(row.observation_json,null);});
     for(const kind of ['knowledge','relation'])assert.ok(snapshot.attempts.filter(x=>x.kind===kind).length<=plan.budget.maxAttempts[kind]);
     same(run.roleSnapshots,roles.map((role,index)=>({role,snapshot:prefixFor(snapshot,index)})));
-    const assessments={};
+    const assessments={},providerCaptures={};
     for(const [index,role] of roles.entries()) {
       const roleDirectory=path.join(directory,role),before=prefixFor(snapshot,index,true),pair={role,ledgerPath:path.join(directory,'budget.sqlite'),budget:plan.budget,freezeDigest,before};
       const worker=await json(path.join(roleDirectory,'worker.json')),after=prefixFor(snapshot,index);after.runs[index].state='running';after.runs[index].finished_at=null;
       same(worker.snapshot,after);
-      const result=await execute(sources[role].root,{mode:'corpus-read',manifest:sources[role],directory:roleDirectory,corpusPlan,pair},signal);assert.equal(result.infrastructurePassed,true);same(result.pair,{role,before,after});
+      const result=await execute(sources[role].root,{mode:'corpus-read',manifest:sources[role],directory:roleDirectory,corpusPlan,pair,...(provider?{realtime:true}:{})},signal);assert.equal(result.infrastructurePassed,true);same(result.pair,{role,before,after});
       const capture=await json(path.join(roleDirectory,'capture/capture.json'));same(capture.sourceStart,sources[role].source);same(capture.sourceEnd,sources[role].source);same(capture.sample,corpusPlan.sample);
+      providerCaptures[role]=capture;
       const owner=snapshot.runs[index];assert.ok(Date.parse(capture.startedAt)>=Date.parse(owner.started_at)&&Date.parse(capture.finishedAt)<=Date.parse(owner.finished_at));
       const ids=capture.transport.budgetBindings.map(x=>Number(x.attemptId));same(ids,snapshot.attempts.filter(x=>x.trial_id===`${role}:${corpusPlan.sample.id}:0`).map(x=>x.id));
       try{assessments[role]=assessSemanticReview(capture,await json(path.join(roleDirectory,'review.json')),{reviewers});}catch{assessments[role]={complete:false,contractValid:false,offlineReviewPassed:false};}
@@ -241,9 +255,58 @@ async function inspectCorpusPair(directory,{checkouts,reviewers,corpusPlan,relea
     let metricDeltas=null;
     if(roles.every(role=>assessments[role].contractValid)) {assert.equal(assessments.baseline.selectedVariantId,assessments.candidate.selectedVariantId);
       metricDeltas=Object.fromEntries(['entity','fact','relation'].map(kind=>[kind,Object.fromEntries(['precision','recall','falsePositives','falseNegatives'].map(key=>{const a=assessments.baseline.metrics[kind][key],b=assessments.candidate.metrics[kind][key];return [key,a===null||b===null?null:b-a];}))]));}
+    if(provider)await inspectProviderTranscript(directory,provider,providerCaptures,snapshot,run);
     same(await manifests(checkouts,signal),sources);same(await qualitySources(),source);
-    return {schemaVersion:1,kind:'semantic-paired-offline-summary',...boundary,complete:true,infrastructurePassed:true,comparison:plan.comparison,sources,
+    return {schemaVersion:1,...(provider?{provider:{requestDigest:provider.requestDigest,evidenceKind:provider.evidenceKind}}:{}),kind:'semantic-paired-offline-summary',...boundary,complete:true,infrastructurePassed:true,comparison:plan.comparison,sources,
       reviewComplete:roles.every(role=>assessments[role].contractValid),offlineReviewPassed:roles.every(role=>assessments[role].offlineReviewPassed),
-      pairs:[{sample:corpusPlan.sample.id,repetition:0,roles:assessments,metricDeltas}],scope:{pairs:1,captures:2,attempts:snapshot.attempts.length,reservedMicros:snapshot.reservedMicros}};
+      pairs:[{sample:corpusPlan.sample.id,repetition:0,roles:assessments,metricDeltas}],scope:{pairs:1,captures:2,attempts:snapshot.attempts.length,reservedMicros:snapshot.reservedMicros},...(provider?{liveCalls:run.liveCalls,testTransportCalls:run.testTransportCalls}:{})};
   } catch {return {...boundary,complete:false,infrastructurePassed:false,errorCode:'SEMANTIC_CORPUS_PAIR_EVIDENCE_REJECTED'};}
+}
+
+
+function providerProposal(base,testTransport) {
+  if(testTransport)assert.equal(testTransport.profile,'semantic-provider-test-only-v1','TEST_TRANSPORT_INVALID');
+  semanticProviderBudget(base.corpusPlan);
+  for(const role of roles)for(const kind of ['knowledge','relation'])assert.equal(base.sources[role].models[kind],SEMANTIC_PROVIDER_PROFILE.model,'PROVIDER_SOURCE_MODEL_MISMATCH');
+  return {schemaVersion:1,kind:'semantic-provider-pair-proposal',evidenceKind:testTransport?'test-only':'actual-upstream',
+    profile:SEMANTIC_PROVIDER_PROFILE,directory:base.directory,source:base.source,sources:base.sources,corpusPlan:base.corpusPlan,sharedBudget:base.budget,reviewers:base.reviewers};
+}
+export async function planSemanticProviderPair(directory,{checkouts,reviewers,corpusPlan,signal,testTransport,release=false}={}) {
+  await assertHarnessRoot();directory=await corpusPairOutput(directory);
+  const source=await qualitySources();
+  if(release)assert.equal(source.dirty,false,'RELEASE_SOURCE_DIRTY');
+  const sources=await manifests(checkouts,signal);
+  const proposal=providerProposal(corpusPairPlan(directory,source,sources,corpusPlan,reviewers),testTransport);
+  return {requestDigest:contractDigest(proposal),proposal,qualityStatus:'not_run',qualityEvaluated:false,releaseEligible:false,liveCalls:0,invoiceGuarantee:false};
+}
+export async function collectSemanticProviderPair(directory,options={}) {
+  // Fail before probes, directories, bridges, or requests when authority is absent.
+  assert.ok(options.approval&&options.approval.approved===true,'PROVIDER_APPROVAL_REQUIRED');
+  assert.ok(!process.env.CI||options.testTransport,'LIVE_PROVIDER_DISABLED_IN_CI');
+  assertSemanticProviderSafeInput(options.key,{});
+  const {requestDigest,proposal}=await planSemanticProviderPair(directory,options);
+  assertSemanticProviderSafeInput(options.key,proposal);
+  assertSemanticProviderApproval({approval:options.approval,requestDigest,expiresAt:proposal.corpusPlan.budget.expiresAt});
+  const approval=validateSemanticProviderApprovalBinding({approval:options.approval,requestDigest,expiresAt:proposal.corpusPlan.budget.expiresAt});
+  return runCorpusPair(directory,{...options,provider:{proposal,requestDigest,approval,key:options.key,testTransport:options.testTransport}});
+}
+export async function inspectSemanticProviderPair(directory,options={}) {
+  return inspectCorpusPair(directory,{...options,providerEvidence:true});
+}
+async function inspectProviderTranscript(directory,provider,captures,snapshot,run) {
+  const tape=await json(path.join(directory,'provider.json'));
+  same({schemaVersion:tape.schemaVersion,requestDigest:tape.requestDigest,evidenceKind:tape.evidenceKind},{schemaVersion:1,requestDigest:provider.requestDigest,evidenceKind:provider.evidenceKind});
+  same(run.provider,{requestDigest:provider.requestDigest,evidenceKind:provider.evidenceKind});
+  const calls=roles.flatMap(role=>captures[role].calls.map((call,index)=>({role,call,binding:captures[role].transport.budgetBindings[index]})));
+  assert.equal(tape.rows.length,calls.length);assert.equal(tape.rows.length,snapshot.attempts.length);
+  for(const [index,row]of tape.rows.entries()){
+    const {role,call,binding}=calls[index],attempt=snapshot.attempts[index];
+    assert.equal(row.role,role);assert.equal(row.kind,call.kind==='relation'?'relation':'knowledge');
+    assert.equal(row.attemptId,String(attempt.id));assert.equal(row.attemptId,binding.attemptId);assert.equal(row.trialId,attempt.trial_id);
+    assert.equal(row.requestWire,call.requestWire);assert.equal(row.requestSha256,hashBytes(call.requestWire));assert.equal(row.requestSha256,binding.requestSha256);
+    assert.equal(row.forwarded,true);assert.ok(['delivered','failed'].includes(row.status));same(row.http,call.http);assert.equal(row.responseSha256,hashBytes(call.http.body));
+    assert.ok(Date.parse(row.startedAt)>=Date.parse(attempt.reserved_at)&&Date.parse(row.finishedAt)>=Date.parse(row.startedAt));
+  }
+  assert.equal(run.liveCalls,provider.evidenceKind==='actual-upstream'?tape.rows.length:0);
+  assert.equal(run.testTransportCalls,provider.evidenceKind==='test-only'?tape.rows.length:0);
 }

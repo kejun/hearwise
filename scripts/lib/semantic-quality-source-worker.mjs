@@ -61,7 +61,7 @@ async function manifest() {
   const source = await qualitySources(), build = await sourceSnapshot();
   assert.equal(source.dirty, false, 'CLEAN_SOURCE_REQUIRED'); assert.ok(validBuildSource(build), 'EXACT_BUILD_REQUIRED');
   const k = await local('knowledge.mjs'), r = await local('relations.mjs');
-  return { root, source, build, dependencies, dependencyDigest: await dependencyDigest(), profile: { knowledgeModel: k.KNOWLEDGE_MODEL, relationModel: r.RELATION_MODEL, knowledgePrompt: k.SYSTEM_PROMPT_V2, relationPrompt: r.RELATION_SYSTEM_PROMPT }, models: { knowledge: k.KNOWLEDGE_MODEL, relation: r.RELATION_MODEL,
+  return { root, source, build, dependencies, dependencyDigest: await dependencyDigest(), profile: { knowledgeModel: k.KNOWLEDGE_MODEL, relationModel: r.RELATION_MODEL, knowledgePrompt: k.SYSTEM_PROMPT_V2, knowledgeRepairPrompt: k.knowledgeRepairRequestMessages({},[])[0].content, relationPrompt: r.RELATION_SYSTEM_PROMPT }, models: { knowledge: k.KNOWLEDGE_MODEL, relation: r.RELATION_MODEL,
     knowledgeContract: k.CONTRACT_REVISION, relationContract: r.RELATION_CONTRACT_VERSION } };
 }
 process.once('message', async input => {
@@ -72,7 +72,7 @@ process.once('message', async input => {
     if (['corpus-capture','corpus-read'].includes(input.mode)) {
       const targetPlan = await local('scripts/lib/semantic-quality-corpus-plan.mjs');
       same(targetPlan.semanticCorpusBudget(input.corpusPlan), semanticCorpusBudget(input.corpusPlan));
-      const options = { plan: input.corpusPlan, pair: input.pair, executionRoot: root, signal: abort.signal, release: true };
+      const options = { plan: input.corpusPlan, pair: input.pair, executionRoot: root, signal: abort.signal, release: true, realtime: input.realtime === true, providerCapability: input.providerCapability };
       const result = input.mode === 'corpus-capture'
         ? await collectSemanticCorpusOffline(input.directory, { ...options, providerEndpoint: input.providerEndpoint })
         : await inspectSemanticCorpusOffline(input.directory, options);
