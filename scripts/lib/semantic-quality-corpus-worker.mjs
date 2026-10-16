@@ -3,16 +3,21 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-const root=fileURLToPath(new URL('../../',import.meta.url));
-assert.equal(path.resolve(process.cwd())+path.sep,root);
+import { pathToFileURL } from 'node:url';
+import { qualitySources } from './quality-collector.mjs';
+import { contractDigest } from './quality-contract.mjs';
+import { validateSemanticCorpusPair } from './semantic-quality-corpus.mjs';
+const root=await realpath(process.cwd());
+const local=async name=>{const file=await realpath(path.join(root,name));assert.ok(file.startsWith(root+path.sep),'ESCAPING_CORPUS_SOURCE');return import(pathToFileURL(file).href);};
 const input=JSON.parse(await readFile(process.argv[2]));
 const url=new URL(input.endpoint);
 assert.ok(url.protocol==='http:' && url.hostname==='127.0.0.1' && url.port && url.pathname==='/' && !url.username && !url.password && !url.search && !url.hash);
 const {validateSemanticCorpusPlan,semanticCorpusBudget}=await import('./semantic-quality-corpus-plan.mjs');
-const plan=validateSemanticCorpusPlan(input.plan), budget=semanticCorpusBudget(plan);
+const plan=validateSemanticCorpusPlan(input.plan),source=await qualitySources();
+const pair=input.pair===undefined?undefined:validateSemanticCorpusPair(input.pair,plan,{directory:input.claimedDirectory,source});
+const budget=pair?.budget||semanticCorpusBudget(plan);
 const originalDate=Date, originalUUID=crypto.randomUUID, replay=input.runtime!==undefined;
 const tape=replay?input.runtime:[], identifiers=new Set();let cursor=0,lastTime=0;
 assert.ok(Array.isArray(tape)&&tape.length<=50000);
@@ -33,15 +38,15 @@ crypto.randomUUID=(...args)=>{
     ?tick('uuid',()=>originalUUID(...args)):originalUUID(...args);
 };
 syncBuiltinESMExports();
-const {captureSemanticOffline}=await import('./semantic-quality-capture.mjs');
-const {qualitySources}=await import('./quality-collector.mjs');
+const {captureSemanticOffline}=await local('scripts/lib/semantic-quality-capture.mjs');
 const {openSemanticQualityBudget}=await import('./quality-budget.mjs');
-const source=await qualitySources(),ledger=openSemanticQualityBudget(path.join(input.directory,'budget.sqlite'),budget,input.freezeDigest);
+const ledger=openSemanticQualityBudget(pair?.ledgerPath||path.join(input.directory,'budget.sqlite'),budget,pair?.freezeDigest||input.freezeDigest);
 let report;
 try {
-  ledger.claimRun({role:'baseline',sourceSha:source.sha,directory:input.directory,expectedSnapshot:ledger.snapshot()});
+  if(pair)assert.equal(contractDigest(ledger.snapshot()),contractDigest(pair.before),'CORPUS_PAIR_SNAPSHOT_CHANGED');
+  else ledger.claimRun({role:'baseline',sourceSha:source.sha,directory:input.directory,expectedSnapshot:ledger.snapshot()});
   report=await captureSemanticOffline({directory:path.join(input.directory,'capture'),sample:plan.sample,corpusPlan:plan,
-    pairedBudget:{ledger,trialId:`baseline:${plan.sample.id}:0`,expiresAt:budget.expiresAt,maxCalls:budget.maxAttempts.knowledge+budget.maxAttempts.relation},
+    pairedBudget:{ledger,trialId:`${pair?.role||'baseline'}:${plan.sample.id}:0`,expiresAt:budget.expiresAt,maxCalls:budget.maxTrialAttempts.knowledge+budget.maxTrialAttempts.relation},
     response:async ({requestWire,signal})=>{
       const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:requestWire,redirect:'manual',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(plan.limits.requestTimeoutMs)]):AbortSignal.timeout(plan.limits.requestTimeoutMs)});
       assert.ok(response.status<300||response.status>=400,'REDIRECT_DENIED');
@@ -50,7 +55,7 @@ try {
       const retryAfter=response.headers.get('retry-after');
       return {status:response.status,body,...(retryAfter?{retryAfter}: {})};
     }});
-  ledger.finishRun('baseline',report.complete);
+  if(!pair)ledger.finishRun('baseline',report.complete);
   const snapshot=ledger.snapshot();ledger.close();
   if(replay)assert.equal(cursor,tape.length,'RUNTIME_TAPE_NOT_CONSUMED');
   globalThis.Date=originalDate;crypto.randomUUID=originalUUID;syncBuiltinESMExports();

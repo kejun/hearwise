@@ -50,7 +50,10 @@ async function main() {
   if (['distinct-offline','check-distinct-offline','assess-distinct-offline'].includes(command)) {
     if (!values.baseline || !values.candidate || !values.reviewers || !values.out) throw new Error('CHECKOUTS_REVIEWERS_OUTPUT_REQUIRED');
     const options = { checkouts: { baseline: values.baseline, candidate: values.candidate },
-      reviewers: JSON.parse(await readFile(values.reviewers, 'utf8')), release: values.release };
+      reviewers: JSON.parse(await readFile(values.reviewers, 'utf8')), release: values.release,
+      ...(values.plan ? { corpusPlan: JSON.parse(await readFile(values.plan, 'utf8')), providerEndpoint: values.provider } : {}) };
+    if (values.provider && !values.plan) throw new Error('CORPUS_PLAN_REQUIRED');
+    if (values.plan && command === 'distinct-offline' && !values.provider) throw new Error('CORPUS_PROVIDER_REQUIRED');
     const abort = new AbortController(), stop = () => abort.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
     options.signal = abort.signal;
     try {
