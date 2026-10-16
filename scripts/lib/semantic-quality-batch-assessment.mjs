@@ -76,7 +76,9 @@ function comparison(baseline, candidate, thresholds) {
   const failures = [], metrics = {};
   for (const kind of kinds) {
     const before = baseline[kind], after = candidate[kind];
-    const validEmpty = before.status === 'valid_empty' && after.status === 'valid_empty';
+    // A correct empty candidate can remove baseline false positives. Its
+    // null rates are explicit valid-empty evidence, not missing measurements.
+    const validEmpty = after.status === 'valid_empty';
     const delta = Object.fromEntries(measures.map(measure => [measure,
       before[measure] === null || after[measure] === null ? null : after[measure] - before[measure]]));
     metrics[kind] = { baseline: before, candidate: after, delta, status: validEmpty ? 'valid_empty' : 'scored' };

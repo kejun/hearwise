@@ -589,8 +589,8 @@ operator approval without rewriting captured source text.
 Rules apply both to each pair and micro-aggregated counts across the batch.
 Precision/recall minima and maximum regressions are frozen per entity, fact and
 relation kind. Counts are summed before division; nullable rates are not
-averaged or converted into perfect scores. Reasonable double-empty results stay
-`valid_empty`. Repetition variation reports observed metric ranges, not random
+averaged or converted into perfect scores. Correct candidate-empty results against empty gold stay `valid_empty`,
+including when the baseline had false positives. Repetition variation reports observed metric ranges, not random
 persisted-ID differences. Candidate severe errors and omission of frozen
 `criticalGoldIds` veto a pass independently of averages. A weaker baseline does
 not itself veto an improved candidate that meets the frozen rules.

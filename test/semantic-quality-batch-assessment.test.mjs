@@ -11,9 +11,9 @@ import { semanticBatchPlanFixture, refreshSemanticBatchFixtureDigests } from '..
 // calls, authenticated reviewer, or actual quality acceptance is represented.
 const frozenAt = '2020-01-01T00:00:00.000Z';
 const options = { frozenAt, evidenceKind: 'offline-corpus-provider-output', infrastructurePassed: true };
-function assessmentFor(sample, reviewers, { omit = [], extras = 0, severe = null, variantId = 'expected' } = {}) {
+function assessmentFor(sample, reviewers, { omit = [], extras = 0, severe = null, variantId = 'expected', outputUnits = null } = {}) {
   const variant = sample.gold.variants.find(variant => variant.id === variantId), missing = new Set(omit);
-  const gold = variant.units.filter(unit => !missing.has(unit.id));
+  const gold = (outputUnits ?? variant.units).filter(unit => !missing.has(unit.id));
   const entities = gold.filter(unit => unit.kind === 'entity');
   const entityIds = new Set(entities.map(unit => unit.id));
   const facts = gold.filter(unit => unit.kind === 'fact' && entityIds.has(unit.owner));
@@ -34,7 +34,7 @@ function assessmentFor(sample, reviewers, { omit = [], extras = 0, severe = null
   const review = createSemanticReviewTemplate(capture, { reviewers });
   review.reviewer = reviewers[0]; review.reviewedAt = '2020-01-01T00:00:03.000Z'; review.selectedVariantId = variantId;
   for (const row of review.rows) {
-    row.goldId = row.output.value.id.startsWith('extra-') ? null : row.output.value.id;
+    row.goldId = variant.units.some(unit => unit.id === row.output.value.id && unit.kind === row.output.kind) ? row.output.value.id : null;
     row.severe = Object.fromEntries(semanticSevereErrorTypes.map(type => [type, false]));
     row.reviewer = review.reviewer; row.reviewedAt = review.reviewedAt; row.notes = 'Predetermined synthetic annotation; not a real reviewer.';
   }
@@ -206,4 +206,56 @@ test('baseline severe annotations do not falsely veto an improved clean candidat
   const rows = rowsFor(plan, trial => trial.role === 'baseline' ? { severe: 'number' } : {});
   assert.equal(rows[0].assessment.offlineReviewPassed, false);
   assert.equal(assessSemanticBatch(plan, rows, options).ruleDecision, 'passed');
+});
+
+
+test('a valid-empty candidate corrects baseline false positives in every pair and micro aggregate', () => {
+  const plan = semanticBatchPlanFixture({ sampleIds: ['empty'], repetitions: 2, thresholds: 1 });
+  const outputUnits = semanticBatchPlanFixture({ sampleIds: ['qualified'] }).samples[0].gold.variants[0].units;
+  const rows = rowsFor(plan, trial => trial.role === 'baseline' ? { outputUnits } : {});
+  const result = assessSemanticBatch(plan, rows, options);
+  assert.equal(result.contractValid, true); assert.equal(result.ruleDecision, 'passed');
+  assert.deepEqual(result.failures, []);
+  for (const compared of [...result.pairs, result.micro]) for (const metric of Object.values(compared.metrics)) {
+    assert.equal(metric.baseline.goldCount, 0); assert.ok(metric.baseline.outputCount > 0);
+    assert.equal(metric.baseline.status, 'scored'); assert.equal(metric.baseline.precision, 0);
+    assert.equal(metric.candidate.status, 'valid_empty'); assert.equal(metric.status, 'valid_empty');
+    assert.equal(metric.candidate.precision, null); assert.equal(metric.candidate.recall, null);
+    assert.equal(metric.candidate.precisionDenominator, null); assert.equal(metric.candidate.recallDenominator, null);
+    assert.deepEqual(metric.delta, { precision: null, recall: null });
+    assert.deepEqual(compared.failures, []);
+  }
+  assert.equal(result.qualityStatus, 'not_run'); boundary(result);
+});
+
+test('candidate false positives against empty gold remain failures in every pair and micro aggregate', () => {
+  const plan = semanticBatchPlanFixture({ sampleIds: ['empty'], repetitions: 2, thresholds: 1 });
+  const outputUnits = semanticBatchPlanFixture({ sampleIds: ['qualified'] }).samples[0].gold.variants[0].units;
+  const rows = rowsFor(plan, trial => trial.role === 'candidate' ? { outputUnits } : {});
+  const result = assessSemanticBatch(plan, rows, options);
+  assert.equal(result.contractValid, true); assert.equal(result.ruleDecision, 'failed');
+  for (const compared of [...result.pairs, result.micro]) for (const [kind, metric] of Object.entries(compared.metrics)) {
+    assert.equal(metric.candidate.goldCount, 0); assert.ok(metric.candidate.outputCount > 0);
+    assert.equal(metric.candidate.status, 'scored'); assert.equal(metric.status, 'scored');
+    assert.equal(metric.candidate.precision, 0); assert.equal(metric.candidate.recall, null);
+    assert.ok(compared.failures.some(failure => failure.kind === kind && failure.reason === 'metric_unavailable'));
+  }
+  assert.equal(result.qualityStatus, 'not_run'); boundary(result);
+});
+
+test('unavailable precision for either role with nonempty gold remains a comparison failure', () => {
+  const plan = lenient(semanticBatchPlanFixture({ sampleIds: ['qualified'], repetitions: 1 }));
+  const omit = plan.samples[0].gold.variants[0].units.map(unit => unit.id);
+  for (const missingRole of ['baseline', 'candidate']) {
+    const rows = rowsFor(plan, trial => trial.role === missingRole ? { omit } : {});
+    const result = assessSemanticBatch(plan, rows, options);
+    assert.equal(result.contractValid, true); assert.equal(result.ruleDecision, 'failed');
+    for (const compared of [...result.pairs, result.micro]) for (const [kind, metric] of Object.entries(compared.metrics)) {
+      assert.ok(metric[missingRole].goldCount > 0); assert.equal(metric[missingRole].outputCount, 0);
+      assert.equal(metric[missingRole].precision, null); assert.equal(metric[missingRole].recall, 0);
+      assert.equal(metric[missingRole].status, 'scored'); assert.equal(metric.status, 'scored');
+      assert.ok(compared.failures.some(failure => failure.kind === kind && failure.measure === 'precision' && failure.reason === 'metric_unavailable'));
+    }
+    assert.equal(result.qualityStatus, 'not_run'); boundary(result);
+  }
 });
