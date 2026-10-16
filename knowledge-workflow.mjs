@@ -36,7 +36,7 @@ function focusFor(part, input) {
   });
 }
 
-function repairInput(fresh, snapshot, targets, liveIds) {
+export function repairInput(fresh, snapshot, targets, liveIds) {
   const pin = (field, old, current, limit) => {
     const ids = new Set(targets.map(target => target.rawItem?.[field]).filter(Boolean));
     const currentById = new Map(current.map(candidate => [candidate.id, candidate]));

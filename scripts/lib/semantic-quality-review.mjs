@@ -25,7 +25,7 @@ function validateReviewers(reviewers) {
 
 function validateCapture(capture) {
   check(object(capture) && capture.schemaVersion === 1 && capture.kind === 'offline-semantic-capture' &&
-    capture.mode === 'offline' && capture.evidenceKind === 'synthetic-provider-output' &&
+    capture.mode === 'offline' && ['synthetic-provider-output','offline-corpus-provider-output'].includes(capture.evidenceKind) &&
     capture.pipeline === 'knowledge-then-relation-cascade' && capture.liveCalls === 0 &&
     capture.qualityStatus === 'not_run' && capture.qualityEvaluated === false &&
     (capture.fullQualityAcceptance === undefined || capture.fullQualityAcceptance === false), 'OFFLINE_CAPTURE_REQUIRED');
@@ -42,7 +42,7 @@ function validateCapture(capture) {
     } catch { return false; }
   }), 'OFFLINE_CALLS_REQUIRED');
   const sample = capture.sample;
-  check(object(sample) && text(sample.id) && sample.kind === 'synthetic-contract-fixture' &&
+  check(object(sample) && text(sample.id) && sample.kind === (capture.evidenceKind === 'offline-corpus-provider-output' ? 'offline-text-corpus' : 'synthetic-contract-fixture') &&
     Array.isArray(sample.segments) && sample.segments.length > 0 && sample.segments.every(text), 'SYNTHETIC_SAMPLE_REQUIRED');
   check(capture.sampleDigest === contractDigest(sample), 'SAMPLE_DIGEST_MISMATCH');
   // This rehearsal cannot turn hand-authored fixture gold into human approval.

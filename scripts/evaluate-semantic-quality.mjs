@@ -7,10 +7,13 @@ import { readSemanticCapture } from './lib/semantic-quality-evidence.mjs';
 import { runSemanticOffline, inspectSemanticOffline } from './lib/semantic-quality-offline.mjs';
 import { runSemanticPairedOffline, inspectSemanticPairedOffline } from './lib/semantic-quality-paired.mjs';
 import { runSemanticDistinctOffline, inspectSemanticDistinctOffline } from './lib/semantic-quality-distinct.mjs';
+import { collectSemanticCorpusOffline, inspectSemanticCorpusOffline } from './lib/semantic-quality-corpus.mjs';
 import { createSemanticReviewTemplate, assessSemanticReview } from './lib/semantic-quality-review.mjs';
 import { createSemanticFailureCases } from './lib/semantic-quality-failures.mjs';
 const help = `Knowledge / relation semantic evaluation preparation, OFFLINE ONLY.
-Commands: plan | offline | check-offline | paired-offline | check-paired-offline | distinct-offline | check-distinct-offline | assess-distinct-offline | prepare-review | assess | failure-cases
+Commands: corpus-offline | check-corpus-offline | assess-corpus-offline | plan | offline | check-offline | paired-offline | check-paired-offline | distinct-offline | check-distinct-offline | assess-distinct-offline | prepare-review | assess | failure-cases
+--plan FILE      exact caller-supplied offline corpus/budget/reviewer plan
+--provider URL   loopback-only HTTP fixture provider, no credential arguments
 --out PATH       output root for offline; existing run for check-offline; fresh JSON for review/assessment
 --baseline DIR / --candidate DIR  explicit trusted independent clean checkouts (distinct commands)
 --capture DIR    exact-source offline capture with store.sqlite and capture.json
@@ -22,11 +25,23 @@ A successful offline exit verifies plumbing only; HW-05-04 and all real quality 
 `;
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: { help: { type: 'boolean' }, out: { type: 'string' },
-    capture: { type: 'string' }, reviewers: { type: 'string' }, review: { type: 'string' }, release: { type: 'boolean' }, baseline: { type: 'string' }, candidate: { type: 'string' }, live: { type: 'boolean' } } });
+    capture: { type: 'string' }, reviewers: { type: 'string' }, review: { type: 'string' }, release: { type: 'boolean' }, baseline: { type: 'string' }, candidate: { type: 'string' }, live: { type: 'boolean' }, plan: { type: 'string' }, provider: { type: 'string' } } });
   if (values.help) { console.log(help); return; }
   if (values.live || positionals[0] === 'collect') throw new Error('LIVE_SEMANTIC_ADAPTER_NOT_IMPLEMENTED_OR_AUTHORIZED');
   if (positionals.length > 1) throw new Error('ONE_COMMAND_REQUIRED');
   const command = positionals[0] || 'plan';
+  if (['corpus-offline','check-corpus-offline','assess-corpus-offline'].includes(command)) {
+    if (!values.plan || !values.out || command === 'corpus-offline' && !values.provider) throw new Error('CORPUS_PLAN_OUTPUT_PROVIDER_REQUIRED');
+    const plan = JSON.parse(await readFile(values.plan, 'utf8'));
+    const abort = new AbortController(), stop = () => abort.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
+    try {
+      if (command === 'corpus-offline') await collectSemanticCorpusOffline(values.out, { plan, providerEndpoint: values.provider, signal: abort.signal });
+      const result = await inspectSemanticCorpusOffline(values.out, { plan, release: values.release, signal: abort.signal });
+      console.log(JSON.stringify(result, null, 2));
+      process.exitCode = result.infrastructurePassed && (command !== 'assess-corpus-offline' || result.review?.offlineReviewPassed) ? 0 : 1;
+    } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+    return;
+  }
   if (command === 'plan') {
     const plan = JSON.parse(await readFile('verification/semantic-quality/plan.template.json', 'utf8'));
     console.log(JSON.stringify({ complete: true, mode: 'offline-preparation', qualityStatus: 'not_run', qualityEvaluated: false,
