@@ -184,11 +184,13 @@ function prefixFor(snapshot,index,claimRunning=false) {
   if(claimRunning) {value.attempts=value.attempts.filter(row=>!row.trial_id.startsWith(roles[index]+':'));const row=value.runs[index];row.state='running';row.finished_at=null;}
   value.reservedMicros=value.attempts.reduce((sum,row)=>sum+row.reserved_micros,0);return value;
 }
-async function runCorpusPair(directory,{checkouts,reviewers,corpusPlan,providerEndpoint,signal,provider}) {
+async function runCorpusPair(directory,{checkouts,reviewers,corpusPlan,providerEndpoint,signal,provider,release=false}) {
   await assertHarnessRoot();corpusPlan=validateSemanticCorpusPlan(corpusPlan);same(reviewers,corpusPlan.reviewers);
   assert.ok(corpusPlan.limits.totalTimeoutMs<=15000,'CORPUS_PAIR_WORKER_BUDGET');
   const endpoint=provider?null:corpusEndpoint(providerEndpoint);assert.ok(Date.now()<Date.parse(corpusPlan.budget.expiresAt),'BUDGET_APPROVAL_EXPIRED');
-  directory=await corpusPairOutput(directory);const sourceStart=await qualitySources(),sources=await manifests(checkouts,signal);
+  directory=await corpusPairOutput(directory);const sourceStart=await qualitySources();
+  if(provider&&release)assert.equal(sourceStart.dirty,false,'RELEASE_SOURCE_DIRTY');
+  const sources=await manifests(checkouts,signal);
   const base=corpusPairPlan(directory,sourceStart,sources,corpusPlan,reviewers);
   if(provider)same(provider.proposal,providerProposal(base,provider.testTransport));
   const plan=provider?{...base,kind:'semantic-provider-corpus-pair',mode:'provider',provider:{...provider.proposal,requestDigest:provider.requestDigest,approval:provider.approval}}:base,freezeDigest=contractDigest(plan),startedAt=new Date().toISOString();
@@ -200,6 +202,7 @@ async function runCorpusPair(directory,{checkouts,reviewers,corpusPlan,providerE
       combined.throwIfAborted();ledger=openSemanticQualityBudget(path.join(directory,'budget.sqlite'),plan.budget,freezeDigest);
       const roleDirectory=path.join(directory,role);ledger.claimRun({role,sourceSha:sources[role].source.sha,directory:roleDirectory,expectedSnapshot:ledger.snapshot()});activeRole=role;
       const pair={role,ledgerPath:path.join(directory,'budget.sqlite'),budget:plan.budget,freezeDigest,before:ledger.snapshot()};
+      if(provider&&release){const current=await qualitySources();assert.equal(current.dirty,false,'RELEASE_SOURCE_DIRTY');same(current,sourceStart);}
       if(provider)bridge=await createSemanticProviderBridge({approval:provider.approval,requestDigest:provider.requestDigest,expiresAt:corpusPlan.budget.expiresAt,key:provider.key,plan:corpusPlan,source:sources[role],role,snapshot:()=>ledger.snapshot(),signal:combined,testTransport:provider.testTransport});
       try{await execute(sources[role].root,{mode:'corpus-capture',manifest:sources[role],directory:roleDirectory,corpusPlan,providerEndpoint:bridge?.endpoint||endpoint,pair,...(provider?{realtime:true,providerCapability:bridge.capability}:{})},combined);}
       finally{if(bridge){await bridge.close();providerRows.push(...bridge.rows);bridge=null;}}
@@ -268,9 +271,11 @@ function providerProposal(base,testTransport) {
   return {schemaVersion:1,kind:'semantic-provider-pair-proposal',evidenceKind:testTransport?'test-only':'actual-upstream',
     profile:SEMANTIC_PROVIDER_PROFILE,directory:base.directory,source:base.source,sources:base.sources,corpusPlan:base.corpusPlan,sharedBudget:base.budget,reviewers:base.reviewers};
 }
-export async function planSemanticProviderPair(directory,{checkouts,reviewers,corpusPlan,signal,testTransport}={}) {
+export async function planSemanticProviderPair(directory,{checkouts,reviewers,corpusPlan,signal,testTransport,release=false}={}) {
   await assertHarnessRoot();directory=await corpusPairOutput(directory);
-  const source=await qualitySources(),sources=await manifests(checkouts,signal);
+  const source=await qualitySources();
+  if(release)assert.equal(source.dirty,false,'RELEASE_SOURCE_DIRTY');
+  const sources=await manifests(checkouts,signal);
   const proposal=providerProposal(corpusPairPlan(directory,source,sources,corpusPlan,reviewers),testTransport);
   return {requestDigest:contractDigest(proposal),proposal,qualityStatus:'not_run',qualityEvaluated:false,releaseEligible:false,liveCalls:0,invoiceGuarantee:false};
 }

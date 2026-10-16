@@ -24,7 +24,7 @@ test('private capability, durable reservation and unique last attempt gate exact
   const bridge=await createSemanticProviderBridge(options);
   try{
     assert.equal((await post(bridge,request(),'incorrect')).status,502);assert.equal(calls.length,0);
-    const response=await post(bridge);assert.equal(response.status,503);assert.equal(await response.text(),'{"provider":"retry"}');assert.equal(response.headers.get('retry-after'),'0');
+    const response=await post(bridge);assert.equal(response.status,503);assert.equal(await response.text(),'{}');assert.equal(response.headers.get('retry-after'),'0');
     assert.equal((await post(bridge)).status,502);assert.deepEqual(calls,[request()]);
     assert.equal(bridge.rows[0].requestSha256,hashBytes(request()));assert.equal(bridge.rows[0].attemptId,'1');
     assert.ok(!JSON.stringify(bridge.rows).includes(key));assert.ok(!JSON.stringify(bridge.rows).includes(bridge.capability));
@@ -70,3 +70,21 @@ test('close aborts a noncooperative active transport without waiting for its pro
   const bridge=await createSemanticProviderBridge(options),request=post(bridge).then(()=>{},()=>{});
   await ready;await bridge.close();await request;assert.equal(bridge.rows[0].status,'failed');
 },{timeout:5000});
+
+test('provider errors retain only status and safe retry hint, never echoed diagnostics',async()=>{
+  for(const status of [400,401,429,500,503]){
+    const diagnostic='private echoed corpus '+key;
+    const bridge=await createSemanticProviderBridge(fixture(async()=>new Response(diagnostic,{status,headers:{'retry-after':'2'}})));
+    try{
+      const response=await post(bridge);assert.equal(response.status,status);assert.equal(await response.text(),'{}');assert.equal(response.headers.get('retry-after'),'2');
+      assert.deepEqual(bridge.rows[0].http,{status,body:'{}',retryAfter:'2'});assert.equal(bridge.rows[0].responseSha256,hashBytes('{}'));
+      assert.ok(!JSON.stringify(bridge.rows).includes(diagnostic));assert.ok(!JSON.stringify(bridge.rows).includes(key));
+    }finally{await bridge.close();}
+  }
+});
+
+test('numeric credential echoed as retry hint is omitted from response and evidence',async()=>{
+  const options=fixture(async()=>new Response('error',{status:429,headers:{'retry-after':'12345678'}}));options.key='12345678';
+  const bridge=await createSemanticProviderBridge(options);
+  try{const response=await post(bridge);assert.equal(response.status,429);assert.equal(response.headers.get('retry-after'),null);assert.deepEqual(bridge.rows[0].http,{status:429,body:'{}'});assert.ok(!JSON.stringify(bridge.rows).includes(options.key));}finally{await bridge.close();}
+});

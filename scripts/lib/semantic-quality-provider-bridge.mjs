@@ -94,9 +94,13 @@ export async function createSemanticProviderBridge({ approval, requestDigest, ex
       }).then(response=>{if(combined.aborted){cancelBody(response.body);combined.throwIfAborted();}return response;});
       const response=await abortable(operation,combined);
       if(response.status>=300&&response.status<400){cancelBody(response.body);throw new Error('PROVIDER_REDIRECT_DENIED');}
-      const output=await boundedBody(response.body,plan.limits.maxResponseBytes,combined);
-      combined.throwIfAborted();const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(output);assert.ok(!secret(text),'PROVIDER_SECRET_RESPONSE');
-      const retry=response.headers.get('retry-after'),retryAfter=typeof retry==='string'&&/^\d+(?:\.\d+)?$/.test(retry)&&retry.length<=10?retry:undefined;
+      let text='{}';
+      if(response.status>=200&&response.status<300){
+        const output=await boundedBody(response.body,plan.limits.maxResponseBytes,combined);
+        text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(output);assert.ok(!secret(text),'PROVIDER_SECRET_RESPONSE');
+      }else cancelBody(response.body); // Error diagnostics may echo private input; never retain or relay them.
+      combined.throwIfAborted();
+      const retry=response.headers.get('retry-after'),retryAfter=typeof retry==='string'&&/^\d+(?:\.\d+)?$/.test(retry)&&retry.length<=10&&!secret(retry)?retry:undefined;
       row.http={status:response.status,body:text,...(retryAfter?{retryAfter}:{})};row.responseSha256=hashBytes(text);row.status='delivered';send(response.status,text,retryAfter);
     }catch{
       if(row){row.status='failed';row.errorCode='PROVIDER_TRANSPORT_FAILED';row.http={status:502,body:'{}'};row.responseSha256=hashBytes('{}');}
