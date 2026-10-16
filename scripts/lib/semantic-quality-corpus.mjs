@@ -33,8 +33,8 @@ async function execute(directory,plan,url,freezeDigest,runtime,signal){
   finally {clearTimeout(timeout);clearInterval(kill);signal?.removeEventListener('abort',stop);await stopChild(child);}
 }
 function normalized(report){const value=structuredClone(report);delete value.artifacts;
-  for(const call of value.calls)call.endpoint='http://127.0.0.1:1/';
-  for(const row of value.transport?.observations||[])row.endpoint='http://127.0.0.1:1/';
+  for(const call of value.calls){endpoint(call.endpoint);call.endpoint='http://127.0.0.1:1/';}
+  for(const row of value.transport?.observations||[]){endpoint(row.endpoint);row.endpoint='http://127.0.0.1:1/';}
   return value;
 }
 function normalizedLedger(value,directory){value=structuredClone(value);for(const row of value.runs)if(row.directory===directory)row.directory='<capture-root>';return value;}
@@ -63,6 +63,7 @@ export async function inspectSemanticCorpusOffline(directory,{plan,release=false
     same(semanticDatabase(path.join(directory,'capture/store.sqlite')),capture.after);same(semanticUnits(capture.after),capture.units);
     const runtime=await json(path.join(directory,'runtime.json')),worker=await json(path.join(directory,'worker.json')),rows=ledgerRows(path.join(directory,'budget.sqlite'));
     assert.equal(worker.complete,true);const budget=semanticCorpusBudget(plan);
+    same(rows.runs.map(({role,source_sha,directory,state})=>({role,source_sha,directory,state})),[{role:'baseline',source_sha:source.sha,directory,state:'complete'}]);
     same(worker.snapshot,{id:budget.id,currency:budget.currency,binding:rows.binding,freezeDigest,ceilingMicros:budget.ceilingMicros,
       reservedMicros:rows.attempts.reduce((sum,row)=>sum+row.reserved_micros,0),attempts:rows.attempts,runs:rows.runs});
     scratch=await mkdtemp(path.join(os.tmpdir(),'semantic-corpus-replay-'));let position=0,protocolError=false;

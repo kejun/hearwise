@@ -121,3 +121,16 @@ test('actual corpus collection CLI reaches independent readback',async()=>{
   const {stdout}=await promisify(execFile)(process.execPath,['scripts/evaluate-semantic-quality.mjs','corpus-offline','--plan',file,'--provider',upstream.url,'--out',dir],{timeout:15000,maxBuffer:1024*1024});assert.equal(JSON.parse(stdout).infrastructurePassed,true);
  }finally{await upstream.close();}
 });
+
+test('endpoint labels cannot bypass the loopback boundary through normalization',async()=>{
+ const file=path.join(run,'capture/capture.json'),bytes=await readFile(file);
+ for(const target of ['calls','observations']){
+  const value=JSON.parse(bytes);(target==='calls'?value.calls:value.transport.observations)[0].endpoint='https://example.com/';
+  await writeFile(file,JSON.stringify(value));try{assert.equal((await inspectSemanticCorpusOffline(run,{plan})).infrastructurePassed,false);}finally{await writeFile(file,bytes);}
+ }
+});
+test('ledger directory must bind the original capture before scratch normalization',async()=>{
+ const file=path.join(run,'worker.json'),dbfile=path.join(run,'budget.sqlite'),bytes=await readFile(file),dbbytes=await readFile(dbfile),value=JSON.parse(bytes);
+ const db=new DatabaseSync(dbfile);db.prepare('UPDATE runs SET directory=?').run('<capture-root>');db.close();value.snapshot.runs[0].directory='<capture-root>';await writeFile(file,JSON.stringify(value));
+ try{assert.equal((await inspectSemanticCorpusOffline(run,{plan})).infrastructurePassed,false);}finally{await writeFile(file,bytes);await writeFile(dbfile,dbbytes);}
+});
