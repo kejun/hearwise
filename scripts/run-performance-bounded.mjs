@@ -63,6 +63,6 @@ finally {
   process.removeListener('SIGTERM', interrupt); process.removeListener('SIGINT', interrupt);
   report.interrupted = interrupted; report.finishedAt = new Date().toISOString();
   if (interrupted || Date.now() > deadline) report.complete = false;
-  report.exitCode = !report.complete ? 3 : report.performanceEvaluated && !report.performancePassed ? 1 : 0;
+  report.exitCode = !report.complete || report.comparison?.targetsApproved && !report.comparison.comparable ? 3 : report.performanceEvaluated && !report.performancePassed ? 1 : 0;
   await save(); console.log(JSON.stringify({ directory, ...report }, null, 2)); process.exitCode = report.exitCode;
 }

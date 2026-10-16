@@ -33,10 +33,10 @@ try {
     assert.deepEqual(report.comparison, result, 'Pair summary differs from independent raw evidence comparison');
     assert.equal(report.performanceEvaluated, result.performanceEvaluated);
     assert.equal(report.performancePassed, result.passed);
-    assert.equal(report.exitCode, result.performanceEvaluated && !result.passed ? 1 : 0);
+    assert.equal(report.exitCode, result.targetsApproved && !result.comparable ? 3 : result.performanceEvaluated && !result.passed ? 1 : 0);
   }
 } catch (error) { result = { evidenceValid: false, comparable: false, performanceEvaluated: false, passed: false, reason: 'invalid_pair_evidence', detail: error.message }; }
 console.log(JSON.stringify(result));
 // Internal collecting mode returns evidence validity, not a performance verdict.
 // Default independently checks the completed pair and fails approved regressions.
-process.exitCode = !result.evidenceValid ? 3 : !flag && result.performanceEvaluated && !result.passed ? 1 : 0;
+process.exitCode = !result.evidenceValid || !flag && result.targetsApproved && !result.comparable ? 3 : !flag && result.performanceEvaluated && !result.passed ? 1 : 0;

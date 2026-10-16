@@ -67,7 +67,7 @@ export async function compareBoundedDirectories(baselineDirectory, candidateDire
           ratio: baselineMax > 0 ? candidateMax / baselineMax : candidateMax === 0 ? 1 : null };
       });
     });
-    return { evidenceValid: true, observations, ...comparePerformance({ baseline, candidate, policy }),
+    return { evidenceValid: true, targetsApproved: policy.status === 'frozen', observations, ...comparePerformance({ baseline, candidate, policy }),
       scope: 'bounded-three-sample-observed-max', sampleCount: 3, excluded: boundedExclusions,
       sameSourceCalibration: baseline.source.sha === candidate.source.sha,
       baselineSourceSha: baseline.source.sha, candidateSourceSha: candidate.source.sha,
