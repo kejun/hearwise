@@ -8,7 +8,7 @@ import { runProcess } from './lib/process.mjs';
 import { validateBaselineRun } from './lib/realtime-baseline.mjs';
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0].startsWith('--report=')) { console.log(await readbackBaseline(path.resolve(args[0].slice(9)))); process.exit(0); }
-if (args.some(arg => !/^--profile=(smoke|baseline)$/.test(arg) && arg !== '--negative=retain-asr-socket' && !arg.startsWith('--policy='))) throw new Error('Usage: npm run verify:realtime-baseline -- [--profile=smoke|baseline] [--negative=retain-asr-socket]');
+if (args.some(arg => !/^--profile=(smoke|baseline)$/.test(arg) && arg !== '--negative=retain-asr-socket' && !/^--policy=.+$/.test(arg))) throw new Error('Usage: npm run verify:realtime-baseline -- [--profile=smoke|baseline] [--negative=retain-asr-socket] [--policy=/absolute/POLICY.json]');
 const profile = args.find(arg => arg.startsWith('--profile='))?.split('=')[1] || 'baseline';
 const negative = args.includes('--negative=retain-asr-socket') ? 'retain-asr-socket' : 'none';
 const planBytes = await readFile('verification/realtime-baseline.json'), plan = JSON.parse(planBytes), config = plan.profiles[profile];

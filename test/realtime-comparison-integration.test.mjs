@@ -25,6 +25,9 @@ test('real bounded captures bind frozen policy and comparison independently read
     const name = (await readdir(root)).find(name => name.startsWith('smoke-') && !before.has(name));
     return path.join(root, name);
   };
+  const rejectedOperand = await runProcess(process.execPath, ['scripts/verify-realtime-baseline.mjs', '--profile=smoke', '--policy='], { timeoutMs: 3000, logFile: path.join(root, 'empty-policy.log') });
+  assert.equal(rejectedOperand.code, 1); assert.match(rejectedOperand.tail, /Usage:.*--policy=/);
+  assert.equal((await readdir(root)).filter(name => name.startsWith('smoke-')).length, 0);
   const baseline = await capture(), original = JSON.parse(await readFile(path.join(baseline, 'report.json'), 'utf8'));
   // Deliberately broad synthetic regression-test budgets, NOT product SLOs.
   const limits = Object.fromEntries(Object.keys(realtimeMetrics(original)).map(key => [key, { maxAbsolute: 1e15, maxIncrease: 1e15 }]));
@@ -36,6 +39,8 @@ test('real bounded captures bind frozen policy and comparison independently read
   assert.equal(result.passed, true, JSON.stringify(result)); assert.equal(result.fullProjectAcceptance, false);
   await writeFile(path.join(root, 'comparison.json'), JSON.stringify(result));
   assert.equal((await auditRealtimeComparison(baseline, candidate, policy, result)).ok, true);
+  const auditCli = await runProcess(process.execPath, ['scripts/compare-realtime.mjs', 'audit', baseline, candidate, policyPath, path.join(root, 'comparison.json')], { timeoutMs: 5000, logFile: path.join(root, 'audit-cli.log') });
+  assert.equal(auditCli.code, 0, auditCli.tail); assert.equal(JSON.parse(auditCli.tail.trim()).ok, true);
   const forged = structuredClone(result); forged.results[0].candidate = -1;
   await assert.rejects(auditRealtimeComparison(baseline, candidate, policy, forged));
   const file = path.join(candidate, 'report.json'), bytes = await readFile(file), report = JSON.parse(bytes);
