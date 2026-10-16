@@ -82,7 +82,7 @@ test('provider budget preserves corpus bounds and explicit ceiling with exact pr
     assert.throws(() => semanticProviderBudget(invalid), /CORPUS_BUDGET_INVALID/);
   }
   for (const kind of ['knowledge', 'relation']) {
-    for (const value of [1, 1147367, 1147369, Number.MAX_SAFE_INTEGER]) {
+    for (const value of [1, profile.attemptMicros - 1, profile.attemptMicros + 1, Number.MAX_SAFE_INTEGER]) {
       const invalid = plan(); invalid.budget.attemptMicros[kind] = value;
       assert.throws(() => semanticProviderBudget(invalid), /PROVIDER_BUDGET_PRICE_INVALID|CORPUS_BUDGET_OVERFLOW/);
     }
