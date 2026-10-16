@@ -141,7 +141,9 @@ export function validateSemanticCorpusPlan(value) {
   check(integer(limits.maxRequestBytes, 256, 1024 * 1024) && integer(limits.maxResponseBytes, 256, 1024 * 1024) &&
     integer(limits.requestTimeoutMs, 1, 60000) && integer(limits.totalTimeoutMs, 1, 60000) &&
     limits.requestTimeoutMs <= limits.totalTimeoutMs, 'CORPUS_LIMITS_INVALID');
-  check((attempts.knowledge + attempts.relation) * (limits.maxRequestBytes + 3 * limits.maxResponseBytes) <= 32 * 1024 * 1024, 'CORPUS_EVIDENCE_BYTE_BUDGET');
+  // JSON string encoding can expand each control byte to six characters.
+  // Reserve half the reader cap for snapshots, metadata and review context.
+  check(6 * (attempts.knowledge + attempts.relation) * (limits.maxRequestBytes + 3 * limits.maxResponseBytes) <= 32 * 1024 * 1024, 'CORPUS_EVIDENCE_BYTE_BUDGET');
   return freeze({ schemaVersion: 1, kind: 'offline-semantic-corpus-plan', mode: 'offline', sample, reviewers,
     budget: { id: id(budget.id), currency: budget.currency, ceilingMicros: budget.ceilingMicros,
       attemptMicros: { knowledge: budget.attemptMicros.knowledge, relation: budget.attemptMicros.relation }, expiresAt: timestamp(budget.expiresAt) },

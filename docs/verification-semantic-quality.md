@@ -416,3 +416,5 @@ integration. This configurable corpus path is not yet joined to the earlier
 distinct-source paired CLI; that command still uses its fixed synthetic corpus.
 Real quality additionally needs lawful split corpus, human adjudicated gold,
 calibrated frozen rules and an approved finite provider budget.
+
+Corpus output must be outside the checkout or covered by Git ignore rules, checked before any artifacts are created (including parent symlink resolution). The aggregate plan budget includes sixfold worst-case JSON string expansion, with a final 64 MiB serialized capture guard. Exceeding that guard leaves the run incomplete and retains durable charges; it never reports a completed collection whose evidence cannot be reopened.

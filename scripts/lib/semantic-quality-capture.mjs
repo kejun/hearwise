@@ -194,5 +194,6 @@ export async function captureSemanticOffline({ directory, sample, response, sign
     clock: 'offline workflow logical time; no latency measurement', sourceStart, sourceEnd, run, calls, results, errors, visible, before, after,
     units: after ? semanticUnits(after) : [], artifacts,
     ...(pairedBudget ? { transport: { trialId: pairedBudget.trialId, budgetBindings, observations: gateway?.observations() || [] } } : {}) };
+  if (corpusPlan) assert.ok(Buffer.byteLength(JSON.stringify(report, null, 2) + '\n') <= 64 * 1024 * 1024, 'CORPUS_SERIALIZED_EVIDENCE_LIMIT');
   await writeJson(path.join(directory, 'capture.json'), report); return report;
 }

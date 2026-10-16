@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, writeFile, rm, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -22,6 +22,13 @@ const json=async file=>{const bytes=await readFile(file);assert.ok(bytes.length<
 const write=(file,value)=>writeFile(file,JSON.stringify(value,null,2)+'\n',{flag:'wx',mode:0o600});
 async function harness(){assert.equal(await realpath(process.cwd()),await realpath(root));}
 function endpoint(value){const url=new URL(value);assert.ok(url.protocol==='http:'&&url.hostname==='127.0.0.1'&&url.port&&url.pathname==='/'&&!url.username&&!url.password&&!url.search&&!url.hash,'LOOPBACK_ONLY');return url.href;}
+async function outputDirectory(value){
+  const directory=path.join(await realpath(path.dirname(path.resolve(value))),path.basename(value)),relative=path.relative(await realpath(root),directory);
+  if(relative===''||!relative.startsWith('..'+path.sep)&&relative!=='..'&&!path.isAbsolute(relative)){
+    let ignored=false;try{execFileSync('git',['check-ignore','--quiet','--no-index','--',directory],{cwd:root,stdio:'ignore',timeout:10000});ignored=true;}catch{}
+    assert.ok(ignored,'CORPUS_OUTPUT_MUST_BE_OUTSIDE_SOURCE_OR_GIT_IGNORED');
+  }return directory;
+}
 function ledgerRows(file){const db=new DatabaseSync(file,{readOnly:true});try{same(db.prepare('PRAGMA integrity_check').all().map(x=>x.integrity_check),['ok']);return {binding:db.prepare('SELECT digest FROM binding WHERE id=1').get().digest,attempts:db.prepare('SELECT * FROM attempts ORDER BY id').all().map(x=>({...x})),runs:db.prepare('SELECT * FROM runs ORDER BY role').all().map(x=>({...x}))};}finally{db.close();}}
 async function execute(directory,plan,url,freezeDigest,runtime,signal){
   await write(path.join(directory,'input.json'),{directory,plan,endpoint:url,freezeDigest,...(runtime?{runtime}:{})});
@@ -39,16 +46,16 @@ function normalized(report){const value=structuredClone(report);delete value.art
 }
 function normalizedLedger(value,directory){value=structuredClone(value);for(const row of value.runs)if(row.directory===directory)row.directory='<capture-root>';return value;}
 export async function collectSemanticCorpusOffline(directory,{plan,providerEndpoint,signal}={}){
-  await harness();plan=validateSemanticCorpusPlan(plan);const url=endpoint(providerEndpoint);directory=path.resolve(directory);
+  await harness();plan=validateSemanticCorpusPlan(plan);const url=endpoint(providerEndpoint);directory=await outputDirectory(directory);
   assert.ok(Date.now()<Date.parse(plan.budget.expiresAt),'BUDGET_APPROVAL_EXPIRED');signal?.throwIfAborted();
   const source=await qualitySources();await mkdir(directory,{recursive:false,mode:0o700});
   const frozen={schemaVersion:1,kind:'offline-semantic-corpus-freeze',plan,source,...boundary},freezeDigest=contractDigest(frozen);
   await write(path.join(directory,'freeze.json'),frozen);
   let errorCode;
-  try {await execute(directory,plan,url,freezeDigest,undefined,signal);same(await qualitySources(),source);}
+  try {await execute(directory,plan,url,freezeDigest,undefined,signal);same(await qualitySources(),source);
+    const capture=await json(path.join(directory,'capture/capture.json'));await write(path.join(directory,'review.json'),createSemanticReviewTemplate(capture,{reviewers:plan.reviewers}));}
   catch {errorCode=signal?.aborted?'CORPUS_CANCELLED':'CORPUS_INCOMPLETE';}
   await write(path.join(directory,'run.json'),{schemaVersion:1,freezeDigest,complete:!errorCode,errorCode,...boundary});
-  if(!errorCode){const capture=await json(path.join(directory,'capture/capture.json'));await write(path.join(directory,'review.json'),createSemanticReviewTemplate(capture,{reviewers:plan.reviewers}));}
   return {complete:!errorCode,errorCode,...boundary};
 }
 export async function inspectSemanticCorpusOffline(directory,{plan,release=false,signal}={}){

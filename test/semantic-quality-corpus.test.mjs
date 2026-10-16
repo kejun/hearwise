@@ -13,7 +13,7 @@ import {semanticDatabase,semanticUnits} from '../scripts/lib/semantic-quality-ca
 import {hashBytes} from '../scripts/lib/quality-contract.mjs';
 const json=async file=>JSON.parse(await readFile(file));let root,plan,run,capture;
 const text='Atlas also called AtlasCo, Nova, Orion and Vale are independent organizations. Skip is merely mentioned. Atlas did not acquire Nova for 15 dollars. If approved, Atlas plans to acquire Nova for 20 dollars.';
-function makePlan(segments=Array(14).fill(text),batch=3){return {schemaVersion:1,kind:'offline-semantic-corpus-plan',mode:'offline',sample:{id:'qualified',kind:'offline-text-corpus',segments,ingestionBatchSize:batch,gold:{approved:false,variants:[{id:'unreviewed',units:[]}]}},reviewers:['synthetic test label'],budget:{id:'synthetic-only',currency:'USD',ceilingMicros:100000,attemptMicros:{knowledge:2,relation:3},expiresAt:new Date(Date.now()+600000).toISOString()},limits:{maxRequestBytes:128000,maxResponseBytes:128000,requestTimeoutMs:3000,totalTimeoutMs:30000}};}
+function makePlan(segments=Array(14).fill(text),batch=3){return {schemaVersion:1,kind:'offline-semantic-corpus-plan',mode:'offline',sample:{id:'qualified',kind:'offline-text-corpus',segments,ingestionBatchSize:batch,gold:{approved:false,variants:[{id:'unreviewed',units:[]}]}},reviewers:['synthetic test label'],budget:{id:'synthetic-only',currency:'USD',ceilingMicros:100000,attemptMicros:{knowledge:2,relation:3},expiresAt:new Date(Date.now()+600000).toISOString()},limits:{maxRequestBytes:32768,maxResponseBytes:16384,requestTimeoutMs:3000,totalTimeoutMs:30000}};}
 async function provider(fn){const server=http.createServer(async(req,res)=>{try{const chunks=[];for await(const c of req)chunks.push(c);const body=JSON.parse(Buffer.concat(chunks));const input=JSON.parse(body.messages[1].content),kind=input.candidates?'relation':input.rejected?'repair':'knowledge';const value=await fn({input,kind,body});if(value.status){res.writeHead(value.status,{'content-type':'application/json',...(value.retryAfter?{'retry-after':value.retryAfter}:{})});res.end(value.body);}else{res.end(JSON.stringify({choices:[{message:{content:JSON.stringify(value)}}]}));}}catch{res.writeHead(400);res.end('{}');}});server.listen(0,'127.0.0.1');await once(server,'listening');return {url:`http://127.0.0.1:${server.address().port}/`,close:()=>new Promise(resolve=>server.close(resolve))};}
 before(async()=>{
  root=await mkdtemp(path.join(os.tmpdir(),'semantic-corpus-test-'));plan=makePlan();run=path.join(root,'run');let first=true,initial=0;
@@ -133,4 +133,10 @@ test('ledger directory must bind the original capture before scratch normalizati
  const file=path.join(run,'worker.json'),dbfile=path.join(run,'budget.sqlite'),bytes=await readFile(file),dbbytes=await readFile(dbfile),value=JSON.parse(bytes);
  const db=new DatabaseSync(dbfile);db.prepare('UPDATE runs SET directory=?').run('<capture-root>');db.close();value.snapshot.runs[0].directory='<capture-root>';await writeFile(file,JSON.stringify(value));
  try{assert.equal((await inspectSemanticCorpusOffline(run,{plan})).infrastructurePassed,false);}finally{await writeFile(file,bytes);await writeFile(dbfile,dbbytes);}
+});
+
+test('source-visible output is rejected before creating artifacts',async()=>{
+ const dir=path.resolve('semantic-unignored-evidence-test');
+ await assert.rejects(collectSemanticCorpusOffline(dir,{plan,providerEndpoint:'http://127.0.0.1:1/'}),/CORPUS_OUTPUT_MUST_BE_OUTSIDE_SOURCE_OR_GIT_IGNORED/);
+ await assert.rejects(readFile(path.join(dir,'freeze.json')),/ENOENT/);
 });

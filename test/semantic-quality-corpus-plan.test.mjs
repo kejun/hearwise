@@ -52,10 +52,10 @@ test('corpus limits include 24 segments, 6000 characters each and 60000 total ch
   // Large corpora remain supported with a response cap that fits the combined
   // evidence bound; corpus size does not implicitly grant unbounded output.
   const many = planFor(Array(24).fill('x'.repeat(2500)));
-  many.limits.maxResponseBytes = 16384;
+  many.limits.maxRequestBytes = 16384; many.limits.maxResponseBytes = 4096;
   assert.equal(validateSemanticCorpusPlan(many).sample.segments.length, 24);
   const long = planFor(Array(10).fill('x'.repeat(6000)));
-  long.limits.maxResponseBytes = 16384;
+  long.limits.maxRequestBytes = 16384; long.limits.maxResponseBytes = 4096;
   assert.equal(validateSemanticCorpusPlan(long).sample.segments[0].length, 6000);
   assert.throws(() => validateSemanticCorpusPlan(planFor(Array(25).fill('x'))), /CORPUS_SEGMENTS_INVALID/);
   assert.throws(() => validateSemanticCorpusPlan(planFor(['x'.repeat(6001)])), /CORPUS_SEGMENT_INVALID/);
@@ -178,7 +178,7 @@ test('bounded integer limits reject zero, floats, unsafe numbers, excess time an
   rejects(p => { p.limits.requestTimeoutMs = 60001; }, 'CORPUS_LIMITS_INVALID');
   rejects(p => { p.limits.totalTimeoutMs = 4999; }, 'CORPUS_LIMITS_INVALID');
   const maximum = planFor(); maximum.limits = { maxRequestBytes: 1024 * 1024, maxResponseBytes: 1024 * 1024, requestTimeoutMs: 60000, totalTimeoutMs: 60000 };
-  assert.deepEqual(validateSemanticCorpusPlan(maximum).limits, maximum.limits);
+  assert.throws(() => validateSemanticCorpusPlan(maximum), /CORPUS_EVIDENCE_BYTE_BUDGET/);
 });
 
 test('synthetic budget rejects multiplication and sum overflow, including otherwise safe integer rates', () => {
@@ -233,4 +233,12 @@ test('combined request and response evidence budget is bounded before collection
   plan.limits.maxRequestBytes = 1024 * 1024;
   plan.limits.maxResponseBytes = 1024 * 1024;
   assert.throws(() => validateSemanticCorpusPlan(plan), /CORPUS_EVIDENCE_BYTE_BUDGET/);
+});
+
+test('evidence bounds include worst-case JSON control-byte expansion', () => {
+ const p=planFor(Array(24).fill('A source segment.'),1);p.limits.maxRequestBytes=16384;p.limits.maxResponseBytes=65536;
+ const attempts=semanticCorpusAttemptBounds(p.sample),raw=(attempts.knowledge+attempts.relation)*(p.limits.maxRequestBytes+3*p.limits.maxResponseBytes);
+ assert.ok(raw<=32*1024*1024);assert.ok(raw*6>32*1024*1024);
+ assert.equal(JSON.stringify('\0'.repeat(100)).length-2,600);
+ assert.throws(()=>validateSemanticCorpusPlan(p),/CORPUS_EVIDENCE_BYTE_BUDGET/);
 });
