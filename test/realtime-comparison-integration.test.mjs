@@ -2,12 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { realtimeMetrics, freezeRealtimePolicy, compareRealtime, auditRealtimeComparison, evaluateLimits } from '../scripts/lib/realtime-comparison.mjs';
+import { realtimeMetrics, freezeRealtimePolicy, compareRealtime, auditRealtimeComparison, evaluateLimits, hash } from '../scripts/lib/realtime-comparison.mjs';
 import { runProcess } from '../scripts/lib/process.mjs';
 import { profileEvidenceDirectory } from '../test-support/profile-test-evidence.mjs';
 
 test('unknown or failed per-metric budgets never become a pass', () => {
   assert.equal(evaluateLimits({ a: 1 }, { a: 2 }, { a: null })[0].status, 'not_run');
+  const fallback = 'latency.finalToTranslationHttpObservedMs.p95';
+  assert.equal(evaluateLimits({ [fallback]: null }, { [fallback]: 50 }, { [fallback]: { maxAbsolute: 100, maxIncrease: 100 } })[0].status, 'not_applicable');
+  assert.equal(evaluateLimits({ [fallback]: null }, { [fallback]: null }, { [fallback]: null })[0].status, 'not_applicable');
   assert.equal(evaluateLimits({ a: 1 }, { a: null }, { a: { maxAbsolute: 3, maxIncrease: 3 } })[0].status, 'incomplete');
   assert.equal(evaluateLimits({ a: 1 }, { a: 2 }, { a: { maxAbsolute: 3, maxIncrease: 0 } })[0].status, 'failed');
   assert.equal(evaluateLimits({ a: 1 }, { a: 2 }, { a: { maxAbsolute: 1, maxIncrease: 3 } })[0].status, 'failed');
@@ -54,6 +57,15 @@ test('real bounded captures bind frozen policy and comparison independently read
   const stopped = await runProcess(process.execPath, ['scripts/verify-realtime-baseline.mjs', '--profile=smoke', `--policy=${policyPath}`], { env: { ...process.env, REALTIME_EVIDENCE_DIR: interrupted }, timeoutMs: 1, logFile: path.join(interrupted, 'timeout.log') });
   assert.equal(stopped.timedOut, true);
   assert.equal((await compareRealtime(baseline, interrupted, policy)).status, 'incomplete');
+  // Rewriting an un-hashed summary and backdating a policy cannot invent a
+  // pre-capture freeze: the original hashed runtime event keeps the old digest.
+  try {
+    const postHoc = structuredClone(policy); postHoc.limits['latency.audioToCaptionMs.p95'].maxAbsolute = 1e16;
+    const changed = structuredClone(report); changed.comparisonPolicyDigest = hash(postHoc);
+    await writeFile(file, JSON.stringify(changed));
+    const rejected = await compareRealtime(baseline, candidate, postHoc);
+    assert.equal(rejected.status, 'incomplete'); assert.match(rejected.reasons.join(' '), /policy digest reconstructed/);
+  } finally { await writeFile(file, bytes); }
   const raw = path.join(candidate, 'repeat-1/resources.jsonl'), rawBytes = await readFile(raw);
   try { await writeFile(raw, ''); assert.equal((await compareRealtime(baseline, candidate, policy)).status, 'incomplete'); }
   finally { await writeFile(raw, rawBytes); }

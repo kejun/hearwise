@@ -67,7 +67,7 @@ export async function compareRealtime(directory, candidateDirectory, policy) {
     result.comparable = true;
     result.results = evaluateLimits(before, after, policy.limits);
     result.status = result.results.some(row => row.status === 'incomplete') ? 'incomplete' : result.results.some(row => row.status === 'not_run') ? 'not_run' : result.results.some(row => row.status === 'failed') ? 'failed' : 'passed';
-    result.evaluated = result.results.every(row => ['passed', 'failed'].includes(row.status));
+    result.evaluated = result.results.every(row => ['passed', 'failed', 'not_applicable'].includes(row.status));
     result.passed = result.status === 'passed';
   } catch (error) { result.reasons.push(error.message); }
   return result;
@@ -78,8 +78,9 @@ export function evaluateLimits(before, after, limits) {
   for (const [metric, value] of Object.entries(after)) {
       const limit = limits[metric], base = before[metric];
       if (limit !== null) assert.ok(limit && Object.keys(limit).sort().join(',') === 'maxAbsolute,maxIncrease' && finite(limit.maxAbsolute) && finite(limit.maxIncrease), 'invalid metric limit');
-      const status = !finite(value) || !finite(base) ? 'incomplete' : limit === null ? 'not_run' : value <= limit.maxAbsolute && value - base <= limit.maxIncrease ? 'passed' : 'failed';
-      results.push({ metric, baseline: base, candidate: value, limit, status });
+      const optionalFallback = /^latency\.finalTo(Translation|Knowledge)HttpObservedMs\.p95$/.test(metric);
+      const status = optionalFallback && (value === null || base === null) ? 'not_applicable' : !finite(value) || !finite(base) ? 'incomplete' : limit === null ? 'not_run' : value <= limit.maxAbsolute && value - base <= limit.maxIncrease ? 'passed' : 'failed';
+      results.push({ metric, baseline: base, candidate: value, limit, status, ...(status === 'not_applicable' ? { reason: 'HTTP fallback not exercised on both sides; raw readback verifies delivery via WebSocket or HTTP for each input' } : {}) });
     }
   return results;
 }

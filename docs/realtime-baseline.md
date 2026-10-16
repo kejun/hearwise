@@ -182,3 +182,11 @@ broad synthetic test limits and a zero-ASR-connections limit solely to exercise
 comparison plumbing. These values must not be adopted as release policy. Two
 smoke captures plus the existing retained-socket test are bounded, run serially,
 and fit within the 10-minute daily performance budget; no long CI matrix is added.
+
+HTTP fallback is conditional: if WebSocket delivered every result, there is no
+HTTP latency sample. Its separate diagnostic percentile is `not_applicable`
+when either side did not exercise that channel, never fabricated as zero. Raw
+readback still requires delivery evidence for every input. Other missing metrics
+remain incomplete. Candidate policy binding is also written as the very first
+hashed raw runtime event before any workload, and reconstructed by readback;
+backdating a policy and editing only report summaries cannot change that binding.

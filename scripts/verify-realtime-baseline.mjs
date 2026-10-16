@@ -26,7 +26,7 @@ await writeJson(path.join(directory, 'report.json'), report);
 console.log(`Realtime baseline evidence: ${directory}`);
 for (let repeat = 0; repeat < (negative === 'none' ? config.repeats : 1); repeat++) {
   const runDirectory = path.join(directory, `repeat-${repeat + 1}`); await mkdir(runDirectory); await mkdir(path.join(runDirectory, 'temporary-database'));
-  const execution = await runProcess(process.execPath, ['test-support/realtime-baseline-worker.mjs', runDirectory, profile, negative], {
+  const execution = await runProcess(process.execPath, ['test-support/realtime-baseline-worker.mjs', runDirectory, profile, negative, report.comparisonPolicyDigest ?? 'none'], {
     logFile: path.join(runDirectory, 'worker.log'), timeoutMs: config.workerTimeoutMs });
   await rm(path.join(runDirectory, 'temporary-database'), { recursive: true, force: true });
   let result; try { result = JSON.parse(await readFile(path.join(runDirectory, 'result.json'), 'utf8')); } catch { /* Incomplete evidence remains a failure. */ }

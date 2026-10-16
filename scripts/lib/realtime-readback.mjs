@@ -241,7 +241,9 @@ export async function readbackBaseline(directory, { frozenIdentity = null } = {}
     const traces = log.split('\n').filter(line => line.startsWith('execution_trace ')).map(line => JSON.parse(line.slice(16)));
     assert.ok(traces.length); assert.ok(traces.every(row => row.build.git_sha === source.sha && row.build.build_dirty === source.dirty), 'real runtime trace build matches source');
     const events = jsonl(await readFile(path.join(directory, base, 'events.jsonl'), 'utf8')), runtime = events.filter(event => event.type === 'runtime');
-    assert.equal(runtime.length, 1); assert.deepEqual(runtime[0].tools, { node: report.tools.node, sqlite: report.tools.sqlite });
+    assert.equal(runtime.length, 1); assert.equal(events[0], runtime[0], 'capture policy binding precedes all observations');
+    assert.equal(runtime[0].comparisonPolicyDigest ?? null, report.comparisonPolicyDigest ?? null, 'policy digest reconstructed from hashed capture startup');
+    assert.deepEqual(runtime[0].tools, { node: report.tools.node, sqlite: report.tools.sqlite });
     const { loadAtStart, ...identity } = report.environment; assert.deepEqual(identity, runtime[0].environment);
     assert.equal(row.execution.tail, (await readFile(path.join(directory, base, 'worker.log'), 'utf8')).slice(-12000));
     auditRawRun(result, events, jsonl(await readFile(path.join(directory, base, 'resources.jsonl'), 'utf8')), plan.profiles[report.profile], { negative });
