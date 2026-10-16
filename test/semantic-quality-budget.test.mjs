@@ -116,3 +116,60 @@ test('semantic forced run claim has one binding regardless of omitted or explici
     try { assert.deepEqual(reopened.snapshot(), snapshot); } finally { reopened.close(); }
   }
 });
+
+test('batch trial roster shares one ceiling but each exact trial keeps its own derived limits', async t => {
+  const trialLimits = {
+    'baseline:small:0': { knowledge: 1, relation: 1 }, 'baseline:large:0': { knowledge: 3, relation: 2 },
+    'candidate:small:0': { knowledge: 1, relation: 1 }, 'candidate:large:0': { knowledge: 3, relation: 2 }
+  };
+  const { directory, filename, settings } = await setup(t, { ceilingMicros: 100,
+    maxAttempts: { knowledge: 8, relation: 6 }, trialLimits });
+  let budget = openSemanticQualityBudget(filename, settings, freeze); t.after(() => budget.close());
+  claim(budget, directory);
+  assert.throws(() => budget.reserve({ kind: 'knowledge', trialId: 'baseline:unknown:0' }), /INVALID_ATTEMPT/);
+  assert.throws(() => budget.reserve({ kind: 'knowledge', trialId: 'baseline:small:1' }), /INVALID_ATTEMPT/);
+  assert.throws(() => budget.reserve({ kind: 'knowledge', trialId: 'candidate:small:0' }), /RUN_CLAIM_MISSING/);
+  const id = budget.reserve({ kind: 'knowledge', trialId: 'baseline:small:0' }); budget.observe(id, { status: 'cancelled' });
+  trialLimits['baseline:small:0'].knowledge = 3; // caller mutation cannot expand the bound
+  assert.throws(() => budget.reserve({ kind: 'knowledge', trialId: 'baseline:small:0' }), /TRIAL_ATTEMPT_LIMIT/);
+  for (let i = 0; i < 3; i++) budget.reserve({ kind: 'knowledge', trialId: 'baseline:large:0' });
+  assert.throws(() => budget.reserve({ kind: 'knowledge', trialId: 'baseline:large:0' }), /TRIAL_ATTEMPT_LIMIT/);
+  assert.equal(budget.snapshot().reservedMicros, 40);
+  trialLimits['baseline:small:0'].knowledge = 1;
+  const snapshot = budget.snapshot(); budget.close(); budget = openSemanticQualityBudget(filename, settings, freeze);
+  assert.deepEqual(budget.snapshot(), snapshot);
+  assert.throws(() => budget.reserve({ kind: 'knowledge', trialId: 'baseline:small:0' }), /TRIAL_ATTEMPT_LIMIT/);
+  budget.finishRun('baseline', true); claim(budget, directory, 'candidate');
+  budget.reserve({ kind: 'knowledge', trialId: 'candidate:small:0' });
+  assert.equal(budget.snapshot().reservedMicros, 50); assert.equal(budget.snapshot().runs.length, 2);
+  assert.throws(() => claim(budget, directory, 'candidate'), /RUN_ORDER/);
+  const changed = structuredClone(settings); changed.trialLimits['baseline:small:0'].knowledge = 2;
+  assert.throws(() => openSemanticQualityBudget(filename, changed, freeze), /BUDGET_BINDING_CHANGED/);
+});
+
+test('batch roster descriptors, exact kinds, canonical IDs and finite bounds fail before opening a ledger', () => {
+  const limits = () => ({ 'baseline:sample:0': { knowledge: 1, relation: 1 } });
+  let reads = 0;
+  const accessor = Object.defineProperty({}, 'baseline:sample:0', { enumerable: true, get() { reads++; return { knowledge: 1, relation: 1 }; } });
+  const nestedAccessor = { 'baseline:sample:0': Object.defineProperty({ relation: 1 }, 'knowledge', { enumerable: true, get() { reads++; return 1; } }) };
+  const hidden = Object.defineProperty(limits(), 'hidden', { value: { knowledge: 1, relation: 1 } });
+  const symbol = { ...limits(), [Symbol('hidden')]: { knowledge: 1, relation: 1 } };
+  for (const trialLimits of [undefined, null, {}, [], accessor, nestedAccessor, hidden, symbol,
+    Object.create(limits()), { 'other:sample:0': { knowledge: 1, relation: 1 } },
+    { 'baseline:sample:01': { knowledge: 1, relation: 1 } }, { 'baseline:sample:9007199254740992': { knowledge: 1, relation: 1 } },
+    { 'baseline:sample:0': { knowledge: 0, relation: 1 } }, { 'baseline:sample:0': { knowledge: 4, relation: 1 } },
+    { 'baseline:sample:0': { knowledge: 1, relation: 1, asr: 1 } },
+    Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`baseline:sample:${index}`, { knowledge: 1, relation: 1 }]))]) {
+    assert.throws(() => openSemanticQualityBudget(':memory:', { ...config(), trialLimits }, freeze), /INVALID_BUDGET/);
+  }
+  const settings = Object.defineProperty(config(), 'trialLimits', { enumerable: true, get() { reads++; return limits(); } });
+  assert.throws(() => openSemanticQualityBudget(':memory:', settings, freeze), /INVALID_BUDGET/);
+  assert.equal(reads, 0);
+});
+
+test('v1 semantic binding remains byte-for-byte unchanged without a batch roster', () => {
+  const settings = config(), budget = openSemanticQualityBudget(':memory:', settings, freeze);
+  try { assert.equal(budget.snapshot().binding, createHash('sha256').update(JSON.stringify({
+    config: { ...settings, requireRunClaim: true }, freezeDigest: freeze, domain: 'semantic-v1'
+  })).digest('hex')); } finally { budget.close(); }
+});

@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { qualitySources } from './quality-collector.mjs';
 import { contractDigest } from './quality-contract.mjs';
 import { validateSemanticCorpusPair } from './semantic-quality-corpus.mjs';
+import { semanticBatchTrials } from './semantic-quality-batch-plan.mjs';
 const root=await realpath(process.cwd());
 const local=async name=>{const file=await realpath(path.join(root,name));assert.ok(file.startsWith(root+path.sep),'ESCAPING_CORPUS_SOURCE');return import(pathToFileURL(file).href);};
 const input=JSON.parse(await readFile(process.argv[2]));
@@ -27,7 +28,8 @@ assert.ok(url.protocol==='http:' && url.hostname==='127.0.0.1' && url.port && ur
 const {validateSemanticCorpusPlan,semanticCorpusBudget}=await import('./semantic-quality-corpus-plan.mjs');
 const plan=validateSemanticCorpusPlan(input.plan),source=await qualitySources();
 const pair=input.pair===undefined?undefined:validateSemanticCorpusPair(input.pair,plan,{directory:input.claimedDirectory,source});
-const budget=pair?.budget||semanticCorpusBudget(plan);
+const singleBudget=semanticCorpusBudget(plan),budget=pair?.budget||singleBudget;
+const trialId=pair?.batch?semanticBatchTrials(pair.batch.plan)[pair.batch.trialIndex].trialId:`${pair?.role||'baseline'}:${plan.sample.id}:0`;
 const originalDate=Date, originalUUID=crypto.randomUUID, replay=input.runtime!==undefined;
 const tape=replay?input.runtime:[], identifiers=new Set();let cursor=0,lastTime=0;
 assert.ok(Array.isArray(tape)&&tape.length<=50000);
@@ -83,7 +85,7 @@ try {
   if(pair)assert.equal(contractDigest(ledger.snapshot()),contractDigest(pair.before),'CORPUS_PAIR_SNAPSHOT_CHANGED');
   else ledger.claimRun({role:'baseline',sourceSha:source.sha,directory:input.directory,expectedSnapshot:ledger.snapshot()});
   report=await captureSemanticOffline({directory:path.join(input.directory,'capture'),sample:plan.sample,corpusPlan:plan,...(scheduler?{scheduler}:{}),
-    pairedBudget:{ledger,trialId:`${pair?.role||'baseline'}:${plan.sample.id}:0`,expiresAt:budget.expiresAt,maxCalls:budget.maxTrialAttempts.knowledge+budget.maxTrialAttempts.relation},
+    pairedBudget:{ledger,trialId,expiresAt:budget.expiresAt,maxCalls:singleBudget.maxTrialAttempts.knowledge+singleBudget.maxTrialAttempts.relation},
     response:async ({requestWire,signal})=>{
       const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json',...(providerCapability?{authorization:`Bearer ${providerCapability}`}:{})},body:requestWire,redirect:'manual',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(plan.limits.requestTimeoutMs)]):AbortSignal.timeout(plan.limits.requestTimeoutMs)});
       assert.ok(response.status<300||response.status>=400,'REDIRECT_DENIED');

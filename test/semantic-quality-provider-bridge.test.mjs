@@ -88,3 +88,21 @@ test('numeric credential echoed as retry hint is omitted from response and evide
   const bridge=await createSemanticProviderBridge(options);
   try{const response=await post(bridge);assert.equal(response.status,429);assert.equal(response.headers.get('retry-after'),null);assert.deepEqual(bridge.rows[0].http,{status:429,body:'{}'});assert.ok(!JSON.stringify(bridge.rows).includes(options.key));}finally{await bridge.close();}
 });
+
+test('an explicit batch trial admits only its current reservation, never a different repetition',async()=>{
+  const calls=[],options=fixture(async wire=>{calls.push(wire);return new Response('{}');});
+  const base=options.snapshot();let trial='baseline:sample:0';options.trialId='baseline:sample:2';
+  options.snapshot=()=>({...base,attempts:[{...base.attempts[0],trial_id:trial}]});
+  const bridge=await createSemanticProviderBridge(options);
+  try{
+    assert.equal((await post(bridge)).status,502);assert.equal(calls.length,0);
+    trial='baseline:sample:2';assert.equal((await post(bridge)).status,200);assert.equal(calls.length,1);
+    assert.equal(bridge.rows[0].trialId,trial);assert.equal((await post(bridge)).status,502);assert.equal(calls.length,1);
+  }finally{await bridge.close();}
+});
+
+test('explicit trial IDs must match the approved role, sample and canonical repetition',async()=>{
+  for(const trialId of ['candidate:sample:0','baseline:another:0','baseline:sample:01','baseline:sample:-1','baseline:sample:9007199254740992','baseline:sample:1:0',null]){
+    await assert.rejects(createSemanticProviderBridge({...fixture(async()=>{throw new Error('must not send');}),trialId}),/PROVIDER_TRIAL_INVALID/);
+  }
+});
