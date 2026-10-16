@@ -11,7 +11,7 @@ import { deadline } from './lifecycle.mjs';
 import { resourceSummary } from '../scripts/lib/realtime-readback.mjs';
 import { summarizeLatencies, validateBaselineRun } from '../scripts/lib/realtime-baseline.mjs';
 
-const [directory, profile, negative = 'none'] = process.argv.slice(2);
+const [directory, profile, negative = 'none', policyDigest = 'none'] = process.argv.slice(2);
 const plan = JSON.parse(await readFile('verification/realtime-baseline.json', 'utf8'));
 const config = plan.profiles[profile];
 assert.ok(config && ['none', 'retain-asr-socket'].includes(negative));
@@ -39,7 +39,8 @@ function holdSwitchingResponse(runId) {
   switchingHolds.set(runId, hold); raw('switch-hold', { runId, action: 'create' });
   return hold;
 }
-raw('runtime', { tools: { node: process.version, sqlite: process.versions.sqlite }, environment: { platform: process.platform, arch: process.arch, release: os.release(), cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() } });
+assert.ok(policyDigest === 'none' || /^[a-f0-9]{64}$/.test(policyDigest));
+raw('runtime', { comparisonPolicyDigest: policyDigest === 'none' ? null : policyDigest, tools: { node: process.version, sqlite: process.versions.sqlite }, environment: { platform: process.platform, arch: process.arch, release: os.release(), cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem() } });
 try {
   fixture = await speechFixture({ directoryRoot: path.join(directory, 'temporary-database'), translationDelay: plan.input.translationDelayMs,
     translationText: text => `探针${text.match(/Probe(\d+)/)?.[1] || 0}。`,

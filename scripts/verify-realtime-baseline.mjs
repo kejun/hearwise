@@ -8,21 +8,25 @@ import { runProcess } from './lib/process.mjs';
 import { validateBaselineRun } from './lib/realtime-baseline.mjs';
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0].startsWith('--report=')) { console.log(await readbackBaseline(path.resolve(args[0].slice(9)))); process.exit(0); }
-if (args.some(arg => !/^--profile=(smoke|baseline)$/.test(arg) && arg !== '--negative=retain-asr-socket')) throw new Error('Usage: npm run verify:realtime-baseline -- [--profile=smoke|baseline] [--negative=retain-asr-socket]');
+if (args.some(arg => !/^--profile=(smoke|baseline)$/.test(arg) && arg !== '--negative=retain-asr-socket' && !/^--policy=.+$/.test(arg))) throw new Error('Usage: npm run verify:realtime-baseline -- [--profile=smoke|baseline] [--negative=retain-asr-socket] [--policy=/absolute/POLICY.json]');
 const profile = args.find(arg => arg.startsWith('--profile='))?.split('=')[1] || 'baseline';
 const negative = args.includes('--negative=retain-asr-socket') ? 'retain-asr-socket' : 'none';
 const planBytes = await readFile('verification/realtime-baseline.json'), plan = JSON.parse(planBytes), config = plan.profiles[profile];
 const root = path.resolve(process.env.REALTIME_EVIDENCE_DIR || 'verification-evidence/realtime');
 await mkdir(root, { recursive: true }); const directory = await mkdtemp(path.join(root, `${profile}-`));
 const context = await metadata();
+const policyPath = args.find(arg => arg.startsWith('--policy='))?.slice(9);
+const frozenPolicy = policyPath ? JSON.parse(await readFile(policyPath, 'utf8')) : null;
+if (frozenPolicy && (frozenPolicy.kind !== 'realtime-comparison-policy' || Date.parse(frozenPolicy.frozenAt) > Date.now())) throw new Error('Invalid frozen policy');
 const report = { ...context, buildDigest: digest(await readFile('dist/server/index.js')), plan, planDigest: digest(planBytes), profile, negative, startedAt: new Date().toISOString(),
+  comparisonPolicyDigest: frozenPolicy ? digest(JSON.stringify(frozenPolicy)) : null,
   complete: false, ok: false, acceptanceStatus: 'not_run', fullProjectAcceptance: false, runs: [],
   environment: { ...context.environment, cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, availableParallelism: os.availableParallelism(), totalMemoryBytes: os.totalmem(), loadAtStart: os.loadavg() } };
 await writeJson(path.join(directory, 'report.json'), report);
 console.log(`Realtime baseline evidence: ${directory}`);
 for (let repeat = 0; repeat < (negative === 'none' ? config.repeats : 1); repeat++) {
   const runDirectory = path.join(directory, `repeat-${repeat + 1}`); await mkdir(runDirectory); await mkdir(path.join(runDirectory, 'temporary-database'));
-  const execution = await runProcess(process.execPath, ['test-support/realtime-baseline-worker.mjs', runDirectory, profile, negative], {
+  const execution = await runProcess(process.execPath, ['test-support/realtime-baseline-worker.mjs', runDirectory, profile, negative, report.comparisonPolicyDigest ?? 'none'], {
     logFile: path.join(runDirectory, 'worker.log'), timeoutMs: config.workerTimeoutMs });
   await rm(path.join(runDirectory, 'temporary-database'), { recursive: true, force: true });
   let result; try { result = JSON.parse(await readFile(path.join(runDirectory, 'result.json'), 'utf8')); } catch { /* Incomplete evidence remains a failure. */ }

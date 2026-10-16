@@ -208,18 +208,18 @@ export function auditRawRun(result, events, resources, config, { negative = fals
   return { ok: true, events: events.length, resources: resources.length, acceptanceStatus: 'not_run' };
 }
 
-export async function readbackBaseline(directory) {
+export async function readbackBaseline(directory, { frozenIdentity = null } = {}) {
   const report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8'));
   const current = await metadata();
   assert.equal(report.schemaVersion, current.schemaVersion); assert.equal(report.mode, current.mode); assert.deepEqual(report.specification, current.specification);
   assert.ok(['none', 'retain-asr-socket'].includes(report.negative) && ['smoke', 'baseline'].includes(report.profile));
-  const source = sourceVersion(), planBytes = await readFile('verification/realtime-baseline.json'), plan = JSON.parse(planBytes);
+  const source = frozenIdentity?.source ?? sourceVersion(), planBytes = await readFile('verification/realtime-baseline.json'), plan = JSON.parse(planBytes);
   assert.deepEqual(report.source, source, 'evidence source must match current checkout');
   assert.deepEqual(report.target, source); assert.deepEqual(report.plan, plan); assert.equal(report.planDigest, digest(planBytes));
   assert.equal(report.tools.node, process.version); assert.equal(report.tools.sqlite, process.versions.sqlite);
   assert.ok(Array.isArray(report.environment.loadAtStart) && report.environment.loadAtStart.length === 3 && report.environment.loadAtStart.every(finite));
   assert.equal(report.tools.lockDigest, digest(await readFile('package-lock.json')));
-  assert.equal(report.buildDigest, digest(await readFile('dist/server/index.js')), 'actual built runtime identity');
+  assert.equal(report.buildDigest, frozenIdentity?.buildDigest ?? digest(await readFile('dist/server/index.js')), 'actual built runtime identity');
   assert.equal(report.acceptanceStatus, 'not_run'); assert.equal(report.fullProjectAcceptance, false);
   assert.equal(report.complete, true);
   const negative = report.negative === 'retain-asr-socket', expected = negative ? 1 : plan.profiles[report.profile].repeats;
@@ -241,7 +241,9 @@ export async function readbackBaseline(directory) {
     const traces = log.split('\n').filter(line => line.startsWith('execution_trace ')).map(line => JSON.parse(line.slice(16)));
     assert.ok(traces.length); assert.ok(traces.every(row => row.build.git_sha === source.sha && row.build.build_dirty === source.dirty), 'real runtime trace build matches source');
     const events = jsonl(await readFile(path.join(directory, base, 'events.jsonl'), 'utf8')), runtime = events.filter(event => event.type === 'runtime');
-    assert.equal(runtime.length, 1); assert.deepEqual(runtime[0].tools, { node: report.tools.node, sqlite: report.tools.sqlite });
+    assert.equal(runtime.length, 1); assert.equal(events[0], runtime[0], 'capture policy binding precedes all observations');
+    assert.equal(runtime[0].comparisonPolicyDigest ?? null, report.comparisonPolicyDigest ?? null, 'policy digest reconstructed from hashed capture startup');
+    assert.deepEqual(runtime[0].tools, { node: report.tools.node, sqlite: report.tools.sqlite });
     const { loadAtStart, ...identity } = report.environment; assert.deepEqual(identity, runtime[0].environment);
     assert.equal(row.execution.tail, (await readFile(path.join(directory, base, 'worker.log'), 'utf8')).slice(-12000));
     auditRawRun(result, events, jsonl(await readFile(path.join(directory, base, 'resources.jsonl'), 'utf8')), plan.profiles[report.profile], { negative });
