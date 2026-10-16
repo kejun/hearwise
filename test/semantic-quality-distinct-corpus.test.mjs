@@ -155,7 +155,10 @@ test('arbitrary corpus executes distinct actual prompts, retry, repair and multi
   assert.notEqual(prompts[0], prompts[1]); assert.ok(!prompts[0].includes(marker)); assert.ok(prompts[1].includes(marker));
   for (const role of roles) {
     const capture = captures[role]; assert.deepEqual(capture.sample, plan.sample);
-    assert.equal(capture.after.tables.extraction_jobs.length, 2);
+    // Each four-segment ingestion batch is drained through the production
+    // three-segment extraction range, yielding two jobs per batch.
+    assert.deepEqual(capture.after.tables.extraction_jobs.map(row => [row.from_sequence, row.to_sequence]).sort((a,b)=>a[0]-b[0]),
+      [[1,3],[4,4],[5,7],[8,8]]);
     assert.ok(capture.after.tables.relation_windows.length >= 2);
     assert.ok(capture.calls.some(call => call.kind === 'repair'));
     assert.ok(capture.after.tables.knowledge_aliases.some(row => row.alias === 'AtlasCo'));
