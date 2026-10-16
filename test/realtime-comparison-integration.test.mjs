@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { realtimeMetrics, freezeRealtimePolicy, compareRealtime, auditRealtimeComparison, evaluateLimits } from '../scripts/lib/realtime-comparison.mjs';
 import { runProcess } from '../scripts/lib/process.mjs';
@@ -50,6 +50,10 @@ test('real bounded captures bind frozen policy and comparison independently read
     try { const changed = structuredClone(report); mutate(changed); await writeFile(file, JSON.stringify(changed)); assert.equal((await compareRealtime(baseline, candidate, policy)).status, 'incomplete'); }
     finally { await writeFile(file, bytes); }
   }
+  const interrupted = path.join(root, 'interrupted'); await mkdir(interrupted);
+  const stopped = await runProcess(process.execPath, ['scripts/verify-realtime-baseline.mjs', '--profile=smoke', `--policy=${policyPath}`], { env: { ...process.env, REALTIME_EVIDENCE_DIR: interrupted }, timeoutMs: 1, logFile: path.join(interrupted, 'timeout.log') });
+  assert.equal(stopped.timedOut, true);
+  assert.equal((await compareRealtime(baseline, interrupted, policy)).status, 'incomplete');
   const raw = path.join(candidate, 'repeat-1/resources.jsonl'), rawBytes = await readFile(raw);
   try { await writeFile(raw, ''); assert.equal((await compareRealtime(baseline, candidate, policy)).status, 'incomplete'); }
   finally { await writeFile(raw, rawBytes); }

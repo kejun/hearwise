@@ -116,3 +116,69 @@ Those fields remain null and acceptanceStatus is always not_run. Real vendor
 end-to-end latency, caption rendering, audible output, real desktop/mobile and
 lockscreen behavior, multi-hour growth and approved candidate comparison remain
 not_run. This harness cannot mark KEJ-81 Done or fullProjectAcceptance true.
+
+## Bounded candidate comparison (current KEJ-81 technical scope)
+
+The following is a finite loopback scheduling/resource regression comparison.
+Real vendor quality, actual audible output, physical-device/background behavior
+and final release thresholds are consolidated in KEJ-87. Multi-hour stability is
+deferred. Neither a comparison pass nor process teardown proves those properties.
+The earlier acceptance-gap paragraph records the original product scope, not a
+requirement to add more helper PRs.
+
+1. On a clean baseline checkout, build and collect the existing `baseline` profile
+   (3 independent 30-second continuous phases) or `smoke` for a tooling check.
+   Run the existing report reader before freezing. Keep all raw files.
+2. Prepare a JSON object with every key returned by `realtimeMetrics(report)` from
+   `scripts/lib/realtime-comparison.mjs`. Each value is either
+   `{"maxAbsolute": number, "maxIncrease": number}` or `null` (unknown).
+   Both limits use the metric's own units. The increase is candidate minus
+   baseline, not a percentage. Do not infer product limits from a candidate.
+3. Freeze once, before collecting the candidate:
+
+   ```sh
+   node scripts/compare-realtime.mjs freeze BASELINE LIMITS.json POLICY.json
+   ```
+
+   The new policy file is exclusive-create, contains the clean baseline report
+   hash/source/build identity, fixed load/profile/plan/runtime/environment, and a
+   timestamp. It cannot overwrite an old freeze. Copy the policy and untouched
+   baseline evidence to the candidate checkout when comparing different commits.
+4. Build the clean candidate, then bind that policy at collection start:
+
+   ```sh
+   npm run verify:realtime-baseline -- --profile=baseline --policy=/absolute/POLICY.json
+   node scripts/compare-realtime.mjs compare BASELINE CANDIDATE POLICY.json COMPARISON.json
+   node scripts/compare-realtime.mjs audit BASELINE CANDIDATE POLICY.json COMPARISON.json
+   ```
+
+   Use `--profile=smoke` only if the frozen baseline also uses smoke. Historical
+   baseline source/build are validated against the already-frozen report identity;
+   the candidate must match the actual current checkout/build. Runtime, lock,
+   measurement plan and environment must match. Source commits may differ.
+   A same-source comparison is a harness calibration, not evidence of a code change.
+
+The reader replays raw event/resource sequences and checks attachment hashes for
+both sides before evaluating any metric. The comparison report's audit re-runs
+those readers and reconstructs every comparison; edited summaries fail audit.
+Missing evidence, timeout, source changes or incompatible environments are
+`incomplete`. An unknown budget is `not_run`. Complete known budgets yield
+`passed` or `failed`. CLI compare exits 0/1/3 respectively for passed/failed/not
+fully evaluated, and always retains `fullProjectAcceptance: false`.
+
+Measurements include pooled nearest-rank p95 for the separately labelled event,
+HTTP observation and transport-first-PCM latencies (excluding warmup), maximum
+elapsed time per measured phase (including drain), maximum post-stop RSS/heap/
+external/array-buffer bytes, descriptors and active resource counts, upstream ASR
+connections and per-run cumulative CPU microseconds. Raw sequences and counts
+remain in the original packages. Missing platform descriptor values are not zero.
+Absolute post-stop memory/descriptor limits are workload-specific; they do not
+prove zero ownership leaks or long-term stability. Transport first PCM is never
+labelled audible first sound. Genuine retained-ASR transport detection remains in
+the existing negative-control integration test; forced server exit is cleanup.
+
+No product limit ships by default. The integration regression freezes deliberately
+broad synthetic test limits and a zero-ASR-connections limit solely to exercise
+comparison plumbing. These values must not be adopted as release policy. Two
+smoke captures plus the existing retained-socket test are bounded, run serially,
+and fit within the 10-minute daily performance budget; no long CI matrix is added.
