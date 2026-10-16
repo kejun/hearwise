@@ -4,11 +4,11 @@
 
 ## 日常只做必要检查
 
-**普通提交不跑完整基线。** PR 和 main push 只运行 `performance-smoke`：small 数据、正常网络、无预热、2 次采样。保留现有历史读取、详情、图谱交互、导入后读取和受控负例；small 没有下一页时仍明确标记 `not_applicable`。这能验证采集通路和基本交互，不能凭两个样本宣称 p95 性能达标。
+**普通提交不跑完整基线。** PR 和 main push 的 `performance-smoke` job 现在运行 `bounded` 两轮比较：small 数据、loopback、无预热、每轮每阶段 3 次采样。同一份冻结 SQLite 先采基线，再冻结 policy，再采候选，独立读回原始证据。CI 默认同源校准，明确 `sameSourceCalibration=true`；未批准目标不会产生性能通过。
 
-性能 smoke 的 CI job **总上限为 10 分钟**，包括依赖/浏览器准备、构建、采集、报告检查及上传。内部夹具准备最多 1 分钟、采集最多 5 分钟；单个后端最多 1 分钟、浏览器最多 4 分钟。其余时间留给环境准备和清理。超时保留失败，不自动延长或重试完整基线。该上限针对性能 job，不代表整个 CI 的其他验证也已压到 10 分钟。
+性能 job **总上限仍为 10 分钟**，包括依赖/浏览器准备、构建、两轮采集、报告检查及上传。pair 内部总期限为 450 秒，各步骤共享剩余期限；超时保留不完整结果，不自动延长或补跑完整基线。该上限针对性能 job，不代表整个 CI 的其他验证也已压到 10 分钟。详细范围、跨版本命令和批准目标格式见下方“日常有界比较”。
 
-`performance:prepare` 和 `performance:collect` 省略 profile 时均默认 `smoke`。不需要为了日常改动补齐三档/慢网基线。只有排查性能问题、调整数据库/图谱实现或明确要求冻结性能目标时，才考虑手动运行完整 baseline；它仍须显式选 `baseline` 或勾选 CI 的 `performance_baseline`，不受日常 10 分钟承诺覆盖。
+低层 `performance:prepare` 和 `performance:collect` 省略 profile 仍默认旧 `smoke`（2 次采样），仅用于单轮采集器诊断，**不再等同于日常 CI 必需检查**。完整 baseline 仅显式手动运行，本轮中大数据及慢网矩阵延后，不需要为日常改动补齐。
 
 ## 负载与可复现性
 
@@ -28,7 +28,7 @@ UUID 和布局顺序有关系。`semanticDigest` 只检查规范化业务内容�
 
 最初开发探针中 small/medium 准备约 1.1/11.4 秒，包含 large 的总 180 秒探针未完成，记录保留。独立 large 准备探针在明确的 600 秒准备预算内耗时约 347 秒，生成约 139 MiB SQLite。它们是未冻结开发源的准备成本，**不是页面性能基线**。正式准备单库 600 秒、整体 1800 秒；超时会保留失败及原始文件，不能继续当作有效输入。
 
-## 日常运行（默认 smoke）
+## 日常运行（bounded 两轮校准）
 
 使用仓库 Node 24、锁文件、真实构建与已预检的 Playwright Chromium。浏览器不可启动时会写 `not_run`、零样本、原始错误并退出 3，不使用其他数据代填。
 
@@ -37,13 +37,15 @@ npm ci --ignore-scripts
 npm run preflight
 npm run setup:browser
 npm run preflight:browser
-npm run performance:prepare -- verification-evidence/performance
-# 上一步打印唯一 fixtures-*/prepared.json；保留整个目录。
-npm run performance:collect -- verification-evidence/performance/fixtures-XXXX/prepared.json
-npm run performance:report -- verification-evidence/performance/run-XXXX --clean
+npm run performance:bounded -- . . verification-evidence/performance
+# 上一步打印唯一 pair-*/pair.json；保留整个目录。
+npm run performance:bounded:report -- verification-evidence/performance/pair-XXXX
+node scripts/check-performance-bounded-negative.mjs verification-evidence/performance/pair-XXXX
 ```
 
-常规 smoke 的准备/采集预算分别为 60/300 秒，均有子进程/资源清理。浏览器自己的预算比外层少 10 秒以留清理空间。超时记录未完成，不视作性能通过；这些是执行看门狗，不是用户体验目标。`--skip-browser` 允许收集后端开发证据，但整体 `collectionComplete=false`，退出 3。
+这是与日常 CI 相同的入口。两次测量各自保留全部原始附件，用实际最大观测值比较，不将三次采样推广为总体 p95。无批准目标时退出 0 仅表示证据完整且可读回。
+
+若只调试单轮采集器，可显式执行 `performance:prepare -- DIRECTORY smoke`、`performance:collect -- PREPARED.json smoke` 及 `performance:report -- RUN --clean`。旧 smoke 的准备/采集预算为 60/300 秒，仍不是性能验收。`--skip-browser` 仅提供后端开发证据，整体 `collectionComplete=false`、退出 3。
 
 ## 手动完整基线（长任务，日常不运行）
 
@@ -83,7 +85,7 @@ npm run performance:report -- verification-evidence/performance/run-XXXX --relea
 
 门禁重算原始 CPU/内存/时间/响应/就绪字段和分位数，校验具体冻结 SQLite 的规模、内容、ID、拓扑、每阶段 roster、重复数、完整退出、前后源码及构建 SHA、附件 SHA256。功能和门禁回归由同源码的 Node CI 单独执行。缺浏览器、丢结果、环境或负载观测来自旧时段、timeout/interrupt、dirty/stale build 均不得得出发布通过。`--inspect-incomplete` 允许检查真实部分报告结构：已处理 SIGINT/SIGTERM 或 watchdog 的终态必须有互斥的停止原因、`complete=false`、code 3，且只允许配置顺序的 dataset/result 前缀。已保存附件、数据库、命令、时间和源身份仍逐项验证；被停止且没有输出的子进程必须保留输入、日志、非成功 execution 与 `missing_observations`。返回的 `collectionComplete` 和 `performanceEvaluated` 仍为 false；同时指定 `--release-collection` 仍强制完整验收。测试用 preload 在真实子进程启动点触发实际 SIGINT 或调用已注册 watchdog（继而实际 SIGTERM），不更改正式时限或伪造报告字段。
 
-## 冻结目标与候选比较
+## 完整基线的冻结目标与候选比较（延后范围）
 
 只有完整、干净源码 baseline 的 gate 通过后，发布负责人才能冻结 policy。需要明确批准：基线报告 canonical SHA256 和源码、测量代码 digest、环境、精确数据/导入库 SHA256、配置及采样、nearest-rank、支持 case 范围；每个指标的 p95 绝对上限、相对基线 p95 上限、允许的 max/p50 波动；主机 load 上限和空闲内存下限。不得在看见候选数据后更改目标。
 
@@ -94,7 +96,7 @@ npm run performance:collect -- SAME_FROZEN_FIXTURES/prepared.json baseline --pol
 npm run performance:compare -- BASELINE_RUN CANDIDATE_RUN frozen-policy.json comparison.json
 ```
 
-对比 CLI 先验证两个完整数据包。历史 baseline 由预冻结 policy 的精确报告 hash 绑定，candidate 必须匹配当前干净 checkout。纯 collection report 从不写性能通过；只有比较报告 `performanceEvaluated=true && passed=true` 才表示声明环境/规模内达标。没有批准的目标文件时，本工单保持待基线/冻结/比较，不自动完成。
+对比 CLI 先验证两个完整数据包。历史 baseline 由预冻结 policy 的精确报告 hash 绑定，candidate 必须匹配当前干净 checkout。纯 collection report 从不写性能通过；只有比较报告 `performanceEvaluated=true && passed=true` 才表示声明环境/规模内达标。没有批准的目标文件时，不得宣称该范围的性能验收通过；人工目标和支持范围统一在 KEJ-87 验收。
 
 ## 日常有界比较（KEJ-80，2026-10-16 收敛范围）
 
