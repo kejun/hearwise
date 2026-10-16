@@ -22,9 +22,10 @@ function timestamp(value) {
   check(result === (value.includes('.') ? value : value.replace('Z', '.000Z')), 'PROVIDER_EXPIRY_INVALID');
   return result;
 }
-// Rates are integer micro-CNY per million tokens, with a single upward rounding.
-const numerator = 991808n * 800000n + (131072n + 10n) * 2700000n;
-const attemptBound = (numerator + 999999n) / 1000000n;
+// Rates are integer micro-CNY per million tokens. Round each billed component
+// upward before adding; combining the fractions would reserve one micro less.
+const ceilMillion = numerator => (numerator + 999999n) / 1000000n;
+const attemptBound = ceilMillion(991808n * 800000n) + ceilMillion((131072n + 10n) * 2700000n);
 check(attemptBound > 0n && attemptBound <= BigInt(Number.MAX_SAFE_INTEGER), 'PROVIDER_BUDGET_OVERFLOW');
 const attemptMicros = Number(attemptBound);
 // Dated published assumptions require fresh caller approval of this complete

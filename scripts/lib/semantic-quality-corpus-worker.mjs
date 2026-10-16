@@ -40,7 +40,21 @@ const tick=(kind,read)=>{
   else {assert.ok(Number.isSafeInteger(value)&&value>=lastTime&&value<=originalDate.now());lastTime=value;}
   return value;
 };
-globalThis.Date=class extends originalDate {constructor(...args){super(...(args.length?args:[tick('date',()=>originalDate.now())]));}static now(){return tick('now',()=>originalDate.now());}};
+// Realtime replay skips elapsed waits. Node/Undici completion callbacks can run
+// on either side of those waits, so their clocks must not consume business ticks.
+// Bind direct callers to source modules in the execution root or trusted harness;
+// never skip, reorder or synthesize recorded production/validation clock reads.
+const harnessRoot=new URL('../../',import.meta.url);
+const clockSources=new Set(Object.keys(source.files).filter(name=>/^(?:[^/]+|scripts\/lib\/[^/]+)\.mjs$/.test(name))
+  .flatMap(name=>[pathToFileURL(path.join(root,name)).href,new URL(name,harnessRoot).href]));
+const readTime=kind=>{
+  if(realtime){
+    const caller=new Error().stack?.split('\n')[3]||'',location=caller.match(/(file:\/\/.*):\d+:\d+\)?$/)?.[1];
+    if(!clockSources.has(location))return originalDate.now();
+  }
+  return tick(kind,()=>originalDate.now());
+};
+globalThis.Date=class extends originalDate {constructor(...args){super(...(args.length?args:[readTime('date')]));}static now(){return readTime('now');}};
 // Only persisted production IDs are recorded. Transport capabilities stay random
 // and are never written into the runtime tape.
 crypto.randomUUID=(...args)=>{

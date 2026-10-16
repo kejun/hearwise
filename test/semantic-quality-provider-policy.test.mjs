@@ -11,7 +11,7 @@ function plan() {
     sample: { id: 'corpus', kind: 'offline-text-corpus', segments: ['Atlas supports Nova.'], ingestionBatchSize: 1,
       gold: { approved: false, variants: [{ id: 'empty', units: [] }] } }, reviewers: ['offline label'],
     budget: { id: 'caller-budget', currency: 'CNY', ceilingMicros: 20000000,
-      attemptMicros: { knowledge: 1147368, relation: 1147368 }, expiresAt: expiry },
+      attemptMicros: { knowledge: 1147369, relation: 1147369 }, expiresAt: expiry },
     limits: { maxRequestBytes: 128000, maxResponseBytes: 128000, requestTimeoutMs: 5000, totalTimeoutMs: 30000 } };
 }
 function request(kind = 'knowledge') {
@@ -22,8 +22,8 @@ function request(kind = 'knowledge') {
 const approval = () => ({ approval: { planDigest: digest, approved: true, expiresAt: expiry }, requestDigest: digest, expiresAt: expiry, now: 1792116000000 });
 
 test('official versioned conservative profile uses integer ceil and is deeply immutable', () => {
-  assert.equal(profile.attemptMicros, 1147368);
-  assert.equal(BigInt(profile.attemptMicros), (991808n * 800000n + 131082n * 2700000n + 999999n) / 1000000n);
+  assert.equal(profile.attemptMicros, 1147369);
+  assert.equal(BigInt(profile.attemptMicros), (991808n * 800000n + 999999n) / 1000000n + (131082n * 2700000n + 999999n) / 1000000n);
   assert.equal(profile.currency, 'CNY'); assert.equal(profile.invoiceGuarantee, false);
   assert.ok(Object.isFrozen(profile)); assert.ok(Object.isFrozen(profile.evidence));
   assert.equal(validateSemanticProviderProfile(structuredClone(profile)), profile);

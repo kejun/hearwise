@@ -488,8 +488,9 @@ request bodies; relations retain their existing 6000-token parameter.
   documents default n=1 and up to 10 tokens of output-limit tolerance. This
   policy conservatively includes the tolerance even at model capacity.
 
-Each HTTP attempt reserves ceil((991808 × 800000 + 131082 × 2700000) /
-1000000) = **1147368 micro-CNY**, or CNY 1.147368. Both domains use that same
+Each HTTP attempt separately rounds input and output charges upward:
+ceil(991808 × 800000 / 1000000) + ceil(131082 × 2700000 / 1000000)
+= 793447 + 353922 = **1147369 micro-CNY**, or CNY 1.147369. Both domains use that same
 full-capacity reservation, including relations with their smaller output limit.
 Integer arithmetic and overflow checks avoid floating-point under-reservation.
 This is a deliberately conservative reservation based on dated published
@@ -501,7 +502,7 @@ refunded; each repair/retry requires a new reservation before forwarding.
 
 ### Operator sequence
 
-1. Supply a corpus plan with CNY currency, both attemptMicros set to 1147368,
+1. Supply a corpus plan with CNY currency, both attemptMicros set to 1147369,
    an explicitly chosen ceiling and expiry, reviewer labels, two trusted clean
    checkouts/builds/independent dependencies, and a fresh output directory.
 2. Run existing `plan` with --plan, --reviewers, --baseline, --candidate and

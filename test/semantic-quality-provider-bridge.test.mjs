@@ -53,3 +53,20 @@ test('redirect and credential-bearing provider bodies never escape',async()=>{
     try{const result=await post(bridge);assert.equal(result.status,502);assert.equal(await result.text(),'{}');assert.equal(bridge.rows[0].status,'failed');assert.ok(!JSON.stringify(bridge.rows).includes(key));}finally{await bridge.close();}
   }
 });
+
+test('noncooperative transport and response streams remain abortable and close within bounds',async()=>{
+  for(const mode of ['send','body']){
+    const options=fixture(async()=>mode==='send'?new Promise(()=>{}):new Response(new ReadableStream({pull(){return new Promise(()=>{});},cancel(){return new Promise(()=>{});}})));
+    options.plan.limits.requestTimeoutMs=40;
+    const bridge=await createSemanticProviderBridge(options);
+    try{
+      const response=await post(bridge);assert.equal(response.status,502);assert.equal(await response.text(),'{}');assert.equal(bridge.rows[0].status,'failed');
+    }finally{await bridge.close();}
+  }
+},{timeout:5000});
+test('close aborts a noncooperative active transport without waiting for its promise',async()=>{
+  let started;const ready=new Promise(resolve=>{started=resolve;});
+  const options=fixture(()=>{started();return new Promise(()=>{});});options.plan.limits.requestTimeoutMs=10000;
+  const bridge=await createSemanticProviderBridge(options),request=post(bridge).then(()=>{},()=>{});
+  await ready;await bridge.close();await request;assert.equal(bridge.rows[0].status,'failed');
+},{timeout:5000});

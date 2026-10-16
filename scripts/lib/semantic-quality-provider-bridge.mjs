@@ -6,7 +6,35 @@ import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { hashBytes } from './quality-contract.mjs';
 import { SEMANTIC_PROVIDER_PROFILE, assertSemanticProviderApproval, assertSemanticProviderRequest, validateSemanticProviderEndpoint } from './semantic-quality-provider-policy.mjs';
-import { closeServer } from '../../test-support/lifecycle.mjs';
+import { closeServer, deadline } from '../../test-support/lifecycle.mjs';
+
+function abortable(operation,signal) {
+  return new Promise((resolve,reject)=>{
+    const cleanup=()=>signal.removeEventListener('abort',stop);
+    const stop=()=>{cleanup();reject(new Error('PROVIDER_CANCELLED'));};
+    Promise.resolve(operation).then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
+    if(signal.aborted)stop();else signal.addEventListener('abort',stop,{once:true});
+  });
+}
+function cancelBody(body) {
+  try{Promise.resolve(body?.cancel()).catch(()=>{});}catch{}
+}
+async function boundedBody(body,maximum,signal) {
+  if(!body)return Buffer.alloc(0);
+  const reader=body.getReader(),chunks=[];let size=0,finished=false;
+  try{
+    for(;;){
+      signal.throwIfAborted();const {done,value}=await abortable(reader.read(),signal);
+      if(done){finished=true;break;}
+      size+=value.length;assert.ok(size<=maximum,'PROVIDER_RESPONSE_LIMIT');chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks);
+  }finally{
+    // A hostile test stream may also ignore cancellation; never await it.
+    if(!finished)try{Promise.resolve(reader.cancel()).catch(()=>{});}catch{}
+    try{reader.releaseLock();}catch{}
+  }
+}
 
 function secretScanner(key,capability) {
   const secret=(value,depth=0)=>{
@@ -40,7 +68,7 @@ export async function createSemanticProviderBridge({ approval, requestDigest, ex
   async function handle(request,reply){
     const controller=new AbortController();controllers.add(controller);
     const combined=signal?AbortSignal.any([signal,controller.signal]):controller.signal;
-    const timer=setTimeout(()=>{controller.abort();request.destroy();},plan.limits.requestTimeoutMs);
+    const timer=setTimeout(()=>{controller.abort();if(!request.complete)request.destroy();},plan.limits.requestTimeoutMs);
     const disconnected=()=>{if(!reply.writableEnded)controller.abort();};reply.once('close',disconnected);
     let row;
     const send=(status,body,retryAfter)=>{if(!reply.destroyed&&!reply.writableEnded){reply.writeHead(status,{'content-type':'application/json',...(retryAfter?{'retry-after':retryAfter}:{})});reply.end(body);}};
@@ -59,11 +87,15 @@ export async function createSemanticProviderBridge({ approval, requestDigest, ex
       assert.ok(last&&last.kind===kind&&last.trial_id===`${role}:${plan.sample.id}:0`&&!used.has(last.id));
       assert.equal(last.reserved_micros,SEMANTIC_PROVIDER_PROFILE.attemptMicros);assert.ok(state.reservedMicros<=state.ceilingMicros);
       check();combined.throwIfAborted();used.add(last.id);
-      row={role,kind,attemptId:String(last.id),trialId:last.trial_id,requestWire:wire,requestSha256:hashBytes(wire),startedAt:new Date().toISOString(),forwarded:true};rows.push(row);
-      const response=testTransport?await testTransport.send(wire,{signal:combined}):await fetch(SEMANTIC_PROVIDER_PROFILE.endpoint,{method:'POST',headers:{authorization:`Bearer ${key}`,'content-type':'application/json'},body:wire,redirect:'manual',signal:combined});
-      assert.ok(response.status<300||response.status>=400,'PROVIDER_REDIRECT_DENIED');
-      const output=[];let length=0;for await(const chunk of response.body||[]){length+=chunk.length;assert.ok(length<=plan.limits.maxResponseBytes);output.push(Buffer.from(chunk));}
-      combined.throwIfAborted();const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Buffer.concat(output));assert.ok(!secret(text),'PROVIDER_SECRET_RESPONSE');
+      row={role,kind,attemptId:String(last.id),trialId:last.trial_id,requestWire:wire,requestSha256:hashBytes(wire),startedAt:new Date().toISOString(),forwarded:false};rows.push(row);
+      const operation=Promise.resolve().then(()=>{
+        check();combined.throwIfAborted();row.forwarded=true;
+        return testTransport?testTransport.send(wire,{signal:combined}):fetch(SEMANTIC_PROVIDER_PROFILE.endpoint,{method:'POST',headers:{authorization:`Bearer ${key}`,'content-type':'application/json'},body:wire,redirect:'manual',signal:combined});
+      }).then(response=>{if(combined.aborted){cancelBody(response.body);combined.throwIfAborted();}return response;});
+      const response=await abortable(operation,combined);
+      if(response.status>=300&&response.status<400){cancelBody(response.body);throw new Error('PROVIDER_REDIRECT_DENIED');}
+      const output=await boundedBody(response.body,plan.limits.maxResponseBytes,combined);
+      combined.throwIfAborted();const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(output);assert.ok(!secret(text),'PROVIDER_SECRET_RESPONSE');
       const retry=response.headers.get('retry-after'),retryAfter=typeof retry==='string'&&/^\d+(?:\.\d+)?$/.test(retry)&&retry.length<=10?retry:undefined;
       row.http={status:response.status,body:text,...(retryAfter?{retryAfter}:{})};row.responseSha256=hashBytes(text);row.status='delivered';send(response.status,text,retryAfter);
     }catch{
@@ -74,5 +106,5 @@ export async function createSemanticProviderBridge({ approval, requestDigest, ex
   const server=http.createServer((request,reply)=>{const operation=handle(request,reply);operations.add(operation);operation.finally(()=>operations.delete(operation));});
   check();server.listen(0,'127.0.0.1');await once(server,'listening');
   return {endpoint:`http://127.0.0.1:${server.address().port}/`,capability,rows,
-    async close(){closed=true;for(const controller of controllers)controller.abort();await closeServer(server,'semantic provider bridge');await Promise.all(operations);}};
+    async close(){closed=true;for(const controller of controllers)controller.abort();await closeServer(server,'semantic provider bridge');await deadline(()=>Promise.all(operations),1500,'semantic provider operations shutdown');}};
 }
