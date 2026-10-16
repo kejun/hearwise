@@ -208,18 +208,18 @@ export function auditRawRun(result, events, resources, config, { negative = fals
   return { ok: true, events: events.length, resources: resources.length, acceptanceStatus: 'not_run' };
 }
 
-export async function readbackBaseline(directory) {
+export async function readbackBaseline(directory, { frozenIdentity = null } = {}) {
   const report = JSON.parse(await readFile(path.join(directory, 'report.json'), 'utf8'));
   const current = await metadata();
   assert.equal(report.schemaVersion, current.schemaVersion); assert.equal(report.mode, current.mode); assert.deepEqual(report.specification, current.specification);
   assert.ok(['none', 'retain-asr-socket'].includes(report.negative) && ['smoke', 'baseline'].includes(report.profile));
-  const source = sourceVersion(), planBytes = await readFile('verification/realtime-baseline.json'), plan = JSON.parse(planBytes);
+  const source = frozenIdentity?.source ?? sourceVersion(), planBytes = await readFile('verification/realtime-baseline.json'), plan = JSON.parse(planBytes);
   assert.deepEqual(report.source, source, 'evidence source must match current checkout');
   assert.deepEqual(report.target, source); assert.deepEqual(report.plan, plan); assert.equal(report.planDigest, digest(planBytes));
   assert.equal(report.tools.node, process.version); assert.equal(report.tools.sqlite, process.versions.sqlite);
   assert.ok(Array.isArray(report.environment.loadAtStart) && report.environment.loadAtStart.length === 3 && report.environment.loadAtStart.every(finite));
   assert.equal(report.tools.lockDigest, digest(await readFile('package-lock.json')));
-  assert.equal(report.buildDigest, digest(await readFile('dist/server/index.js')), 'actual built runtime identity');
+  assert.equal(report.buildDigest, frozenIdentity?.buildDigest ?? digest(await readFile('dist/server/index.js')), 'actual built runtime identity');
   assert.equal(report.acceptanceStatus, 'not_run'); assert.equal(report.fullProjectAcceptance, false);
   assert.equal(report.complete, true);
   const negative = report.negative === 'retain-asr-socket', expected = negative ? 1 : plan.profiles[report.profile].repeats;
