@@ -13,6 +13,7 @@ export const performanceBrowser = Object.freeze({ viewport: { width: 1440, heigh
   locale: 'zh-CN', timezoneId: 'UTC', reducedMotion: 'reduce', headless: true });
 export const performanceProfiles = Object.freeze({
   baseline: { sampling: { warmups: 2, repetitions: 20 }, tiers: ['small', 'medium', 'large'], networks: ['loopback', 'constrained'], releaseCollection: true },
+  bounded: { sampling: { warmups: 0, repetitions: 3 }, tiers: ['small'], networks: ['loopback'], releaseCollection: false },
   smoke: { sampling: { warmups: 0, repetitions: 2 }, tiers: ['small'], networks: ['loopback'], releaseCollection: false }
 });
 // Routine checks must not silently opt into the expensive full baseline.
@@ -23,5 +24,5 @@ export const performanceTimeouts = Object.freeze({ preparationMs: 600000, prepar
 const smokeTimeouts = Object.freeze({ preparationMs: 30000, preparationRunMs: 60000, backendMs: 60000, browserMs: 240000, actionMs: 15000, runMs: 300000 });
 export function performanceTimeoutsFor(profile) {
   if (!Object.hasOwn(performanceProfiles, profile)) throw new Error(`Unknown performance profile: ${profile}`);
-  return profile === 'smoke' ? smokeTimeouts : performanceTimeouts;
+  return profile === 'bounded' ? { ...smokeTimeouts, browserMs: 150000, runMs: 180000 } : profile === 'smoke' ? smokeTimeouts : performanceTimeouts;
 }

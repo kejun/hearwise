@@ -42,6 +42,15 @@ export function comparePerformance({ baseline, candidate, policy }) {
   if (!policy || policy.status !== 'frozen') return blocked('thresholds_not_frozen');
   try {
     assert.equal(policy.schemaVersion, 1);
+    const bounded = policy.statistic === 'max';
+    assert.ok(policy.statistic === undefined || bounded, 'Unsupported comparison statistic');
+    if (bounded) {
+      for (const report of [baseline, candidate]) {
+        assert.equal(report.profile, 'bounded');
+        assert.deepEqual(report.sampling, { warmups: 0, repetitions: 3 });
+        assert.ok(same(policy.supportedScope, report.cases.filter(row => row.status === 'collected').map(row => row.id)), 'Bounded comparison must cover every collected case');
+      }
+    }
     assert.ok(typeof policy.releaseLead === 'string' && policy.releaseLead.trim());
     assert.ok(date(policy.frozenAt)); assert.equal(policy.quantile, 'nearest-rank');
     assert.ok(Array.isArray(policy.supportedScope) && policy.supportedScope.length > 0 && new Set(policy.supportedScope).size === policy.supportedScope.length);
@@ -84,13 +93,15 @@ export function comparePerformance({ baseline, candidate, policy }) {
       const before = samplesFor(baseline, id, metrics), after = samplesFor(candidate, id, metrics);
       for (const metric of metrics) {
         const budget = budgets[metric];
-        assert.ok(same(Object.keys(budget).sort(), ['maxToP50Ratio', 'p95Max', 'p95RatioMax']));
-        assert.ok(finite(budget.p95Max) && finite(budget.p95RatioMax) && budget.p95RatioMax >= 1 && finite(budget.maxToP50Ratio) && budget.maxToP50Ratio >= 1);
+        const absoluteKey = bounded ? 'maxObserved' : 'p95Max', ratioKey = bounded ? 'maxRatioMax' : 'p95RatioMax';
+        assert.ok(same(Object.keys(budget).sort(), [absoluteKey, ratioKey, 'maxToP50Ratio'].sort()));
+        assert.ok(finite(budget[absoluteKey]) && finite(budget[ratioKey]) && budget[ratioKey] >= 1 && finite(budget.maxToP50Ratio) && budget.maxToP50Ratio >= 1);
         if (ratio(before[metric].max, before[metric].p50) > budget.maxToP50Ratio || ratio(after[metric].max, after[metric].p50) > budget.maxToP50Ratio)
           return blocked('measurement_variability_exceeds_policy');
-        const relative = ratio(after[metric].p95, before[metric].p95);
-        results.push({ id, metric, baseline: before[metric], candidate: after[metric], budget, p95Ratio: Number.isFinite(relative) ? relative : null,
-          passed: after[metric].p95 <= budget.p95Max && relative <= budget.p95RatioMax });
+        const statistic = bounded ? 'max' : 'p95';
+        const relative = ratio(after[metric][statistic], before[metric][statistic]);
+        results.push({ id, metric, baseline: before[metric], candidate: after[metric], budget, ...(bounded ? { statistic, sampleCount: 3, maxRatio: Number.isFinite(relative) ? relative : null } : { p95Ratio: Number.isFinite(relative) ? relative : null }),
+          passed: after[metric][statistic] <= budget[absoluteKey] && relative <= budget[ratioKey] });
       }
     }
     return { comparable: true, performanceEvaluated: true, passed: results.every(result => result.passed),

@@ -95,3 +95,50 @@ npm run performance:compare -- BASELINE_RUN CANDIDATE_RUN frozen-policy.json com
 ```
 
 对比 CLI 先验证两个完整数据包。历史 baseline 由预冻结 policy 的精确报告 hash 绑定，candidate 必须匹配当前干净 checkout。纯 collection report 从不写性能通过；只有比较报告 `performanceEvaluated=true && passed=true` 才表示声明环境/规模内达标。没有批准的目标文件时，本工单保持待基线/冻结/比较，不自动完成。
+
+## 日常有界比较（KEJ-80，2026-10-16 收敛范围）
+
+日常 CI 的性能 job 仍以 10 分钟为硬上限。使用 `bounded`：small 合成库、loopback、无预热、每个适用阶段 3 次独立观测；复用原有全部 7 个后端阶段及 21 个浏览器阶段，含历史、详情、图谱操作和实际导入后的读取。阶段不适用仍由原 reader 验证，不静默删项。报告保留所有原始样本、浏览器就绪/HTTP 响应及数据库证据。
+
+短测比较的是 **3 个观测的最大值**，不是可靠的总体 p95/p99，也不是支持设备或产品性能承诺。原采集文件为向后兼容仍保存描述性 nearest-rank 分位数；短测决策完全不使用它们。中大数据、慢网、长尾可靠性和真实设备全部未覆盖；旧完整基线 `38687211421` 仍为 attempted/incomplete，不能被本入口改写为通过。
+
+### 同源 CI 校准与跨版本运行
+
+安装各 checkout 自己的锁文件依赖并完成浏览器预检后，在候选 checkout 执行：
+
+```bash
+npm run performance:bounded -- /absolute/baseline-checkout /absolute/candidate-checkout verification-evidence/performance
+npm run performance:bounded:report -- verification-evidence/performance/pair-XXXXXX
+```
+
+两个 checkout 都必须干净，包含完全相同的性能测量工具代码、运行器和配置。需要把本次测量工具提交先合入或回移到基线，保留真实提交身份；禁止把旧报告的源码 SHA 或数字改成候选结果。产品源码可以不同。分别构建两个版本后只准备一次真实 SQLite 与导入库；先采基线、独立读回、冻结 policy，再采候选。数据库、环境、Node/浏览器/字体、配置、采样及测量代码身份任何变化都会拒绝比较。运行期间源码改变也拒绝。
+
+内部端到端上限为 450 秒，含构建、准备、两轮测量、独立读回；各步骤使用剩余总预算，超时保存已有日志和不完整状态，绝不自动延长或转跑完整基线。依赖/浏览器安装在此期限之外；CI 整个 job（含安装上传）仍由 10 分钟约束。输出必须放在 Git 忽略的证据目录，避免污染被测源码。
+
+CI 默认参数是 `. .`，故明确报告 `sameSourceCalibration=true`。这是同一源码两次实际运行，用于证明管线/证据可重复读取，**不声称已经比较过两个产品版本**。跨版本必须检查 `baselineSourceSha` 和 `candidateSourceSha`。在两个 checkout 不具备相同测量工具时，应先准备它们，不能忽略测量摘要不一致。
+
+### 目标批准与结果语义
+
+默认没有体验目标：生成 `status=draft` 的 policy，提供逐指标观测最大值及比值，`performanceEvaluated=false`、`passed=false`、`thresholds_not_frozen`。执行退出 0 仅代表完整采集及独立证据检查成功，不能解释为性能达标。人工目标批准集中在 KEJ-87。
+
+只有负责人在候选采集前批准目标，才追加第四个参数 `APPROVED_TARGETS.json`。目标文件格式如下（省略的完整 case/metric roster 必须全部填写；本例不是可用预算）：
+
+```json
+{
+  "status": "approved",
+  "releaseLead": "实际审批人",
+  "approvedAt": "候选采集前的 ISO 时间",
+  "conditionLimits": { "maxHostLoadAverage1m": 0, "minHostFreeMemoryBytes": 0 },
+  "budgets": {
+    "完整 case ID": {
+      "指标名": { "maxObserved": 0, "maxRatioMax": 1, "maxToP50Ratio": 1 }
+    }
+  }
+}
+```
+
+数值由负责人确认，程序不根据候选数据推导目标。policy 绑定基线原文摘要、批准目标原文摘要、冻结时间、源码、环境、测量代码和输入库；候选在启动时记录该 policy 摘要。绝对最大值、相对基线最大值和离散度三项同时满足才可在这个有限范围内通过；主机负载或可用内存越过批准条件则不可比较。候选开始后的目标修改、缺样本、超时、改库、改环境、改摘要均拒绝。
+
+`pair.json` 给出阶段退出情况、完整性、源码及比较结果。默认独立 reader 重新检查阶段顺序和全套底层附件，并重算比较，不相信 pair 的 passed 字段。内部 `--collecting` 只供编排器在最终写出 pair 前使用，不提供整个 pair 完成的证明。已批准的性能退化退出 1，不完整/无效证据退出 3。
+
+CI 在原始真实采集之后执行 `check-performance-bounded-negative.mjs`：先验证正例，再复制真实候选证据，分别注入超时、缺项、环境改变、导入库改变、policy 改写、仅摘要改数、伪造通过，要求全部被独立 reader 拒绝，保存 `negative-controls.json`。绝对/相对退化判据另有确定性测试；这些故障注入用于验证检查器，不冒充真实产品退化或人工验收。
