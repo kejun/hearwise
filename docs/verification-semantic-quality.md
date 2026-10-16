@@ -412,9 +412,54 @@ model quality, or release acceptance: `qualityStatus=not_run`,
 
 Remaining live work includes official billing upper-bound verification, explicit
 provider/corpus authorization, real-time collection semantics and live evidence
-integration. This configurable corpus path is not yet joined to the earlier
-distinct-source paired CLI; that command still uses its fixed synthetic corpus.
+integration. The configurable corpus path is also available through the existing
+distinct-source paired commands with an explicit corpus plan, as described below;
+omitting that plan preserves the earlier fixed synthetic corpus mode.
 Real quality additionally needs lawful split corpus, human adjudicated gold,
 calibrated frozen rules and an approved finite provider budget.
 
 Corpus output must be outside the checkout or covered by Git ignore rules, checked before any artifacts are created (including parent symlink resolution). The aggregate plan budget includes sixfold worst-case JSON string expansion, with a final 64 MiB serialized capture guard. Exceeding that guard leaves the run incomplete and retains durable charges; it never reports a completed collection whose evidence cannot be reopened.
+
+### Configurable corpus through the existing distinct-source commands
+
+The existing `distinct-offline`, `check-distinct-offline`, and
+`assess-distinct-offline` commands accept `--plan FILE` to select configurable
+corpus mode instead of the fixed rehearsal fixtures. Keep the existing explicit
+`--baseline`, `--candidate`, `--reviewers`, and `--out` arguments. Collection also
+requires the existing loopback-only `--provider URL`; readback does not contact
+that provider. The reviewers file must match the reviewers frozen in the plan.
+
+One plan sample is collected once under each source. The plan's monetary ceiling
+is one shared ceiling for both roles, not an allowance granted twice. Global
+request-count bounds cover two runs; per-trial bounds stay unchanged. The
+coordinator owns baseline/candidate claims and completion, and each actual
+production request reserves in that same durable SQLite ledger before forwarding.
+A failed baseline prevents candidate execution; failure or cancellation never
+refunds a prior attempt. This boundary requires matching target corpus planning
+contracts and request bounds, rejecting incompatible source revisions rather than
+silently reusing the harness's estimates.
+
+Each explicit trusted checkout keeps its own clean Git identity, exact build,
+installed dependency bytes and production prompt. The trusted source worker loads
+that checkout's actual capture/production modules. Evidence never chooses a code
+path. Independent inspection runs the trusted replay coordinator against the
+selected source, seeds only the verified accounting prefix into a new scratch
+ledger, and reconstructs semantic SQLite from empty state using the recorded HTTP
+responses. The original shared ledger is read-only during inspection. Prefixes,
+role-specific suffixes, request/response bytes, source identities and full final
+semantic tables must all agree before review metrics are compared.
+
+To retain the existing 25-second source-worker watchdog with manifest and cleanup
+headroom, corpus plans used by distinct commands must set `totalTimeoutMs` to at
+most 15000. The standalone corpus command retains its existing larger bound.
+The pair's outer watchdog and the test-file watchdog are unchanged. A successful
+check with empty review templates still has `reviewComplete:false`; assessment
+requires valid paired annotations of the same gold variant. These declared
+annotations do not authenticate a human or grant a release decision.
+
+This joins configurable corpus collection to actual distinct-source comparison.
+It still uses an explicitly selected local fixture provider and logical offline
+scheduling. External provider endpoint/credential admission, official worst-case
+price policy, approved corpus transmission, and finite paid execution are not
+implemented by this mode. Real quality acceptance remains `not_run`; `collect`
+and `--live` remain disabled.

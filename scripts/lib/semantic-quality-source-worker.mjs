@@ -11,6 +11,8 @@ import { contractDigest, hashBytes } from './quality-contract.mjs';
 import { openSemanticQualityBudget } from './quality-budget.mjs';
 import { readSemanticCapture as trustedRead } from './semantic-quality-evidence.mjs';
 import { verifySyntheticPersistence } from './semantic-quality-paired.mjs';
+import { semanticCorpusBudget } from './semantic-quality-corpus-plan.mjs';
+import { collectSemanticCorpusOffline, inspectSemanticCorpusOffline } from './semantic-quality-corpus.mjs';
 import { semanticFixtureResponse } from '../../test-support/semantic-quality-fixture.mjs';
 const same = (a,b) => assert.equal(contractDigest(a), contractDigest(b));
 const root = await realpath(process.cwd());
@@ -67,6 +69,16 @@ process.once('message', async input => {
     const before = await manifest();
     if (input.mode === 'probe') { await send({ ok: true, value: before }); return; }
     same(before, input.manifest);
+    if (['corpus-capture','corpus-read'].includes(input.mode)) {
+      const targetPlan = await local('scripts/lib/semantic-quality-corpus-plan.mjs');
+      same(targetPlan.semanticCorpusBudget(input.corpusPlan), semanticCorpusBudget(input.corpusPlan));
+      const options = { plan: input.corpusPlan, pair: input.pair, executionRoot: root, signal: abort.signal, release: true };
+      const result = input.mode === 'corpus-capture'
+        ? await collectSemanticCorpusOffline(input.directory, { ...options, providerEndpoint: input.providerEndpoint })
+        : await inspectSemanticCorpusOffline(input.directory, options);
+      assert.equal(result.complete, true, 'CORPUS_INCOMPLETE');
+      same(await manifest(), before); await send({ ok: true, value: result }); return;
+    }
     const { readSemanticCapture } = await local('scripts/lib/semantic-quality-evidence.mjs');
     assert.ok(Array.isArray(input.entries) && input.entries.length === 4);
     const results = []; let ledger;
