@@ -31,7 +31,9 @@ async function run(id, root, script, args, cap) {
   const { tail, ...outcome } = execution;
   report.stages.push({ id, startedAt, finishedAt: new Date().toISOString(), cwd: root, argv, timeoutMs, execution: outcome }); await save();
   assert.equal(execution.ok, true, `${id} failed: ${tail.slice(-2000)}`);
-  return tail;
+  // The comparator's complete metric roster can exceed runProcess's 12KB tail.
+  // Parse the persisted full log, never a truncated diagnostic tail.
+  return readFile(path.join(directory, `${id}.log`), 'utf8');
 }
 try {
   await save();
